@@ -14,10 +14,16 @@ training:
   dropout_decoder: 0.0
   normalize_and_log: false
   use_cm: false
+sc_embedding:
+  method: pca   # pca | scvi
+  d: 32
+  standardize: true
 loss_weights:
   lambda_rec_spot: 1.0
   lambda_rec_gene: 1.0
-  lambda_rec_state: 1.0
-  lambda_clust: 1.0
+  lambda_clust_intra: 1.0
+  lambda_clust_inter: 1.0
   lambda_state_entropy: 1.0
   lambda_spot_entropy: 1.0
+  lambda_soft_modularity: 0.0
+  lambda_soft_contingency: 0.0

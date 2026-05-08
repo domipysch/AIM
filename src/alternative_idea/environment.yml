@@ -14,6 +14,8 @@ dependencies:
   - pytorch_geometric==2.7.0
   - matplotlib==3.9.2
   - scanpy==1.11.5
+  - pip:
+    - scvi-tools
   # dev
   - mypy==1.19.1
   - black==26.1.0

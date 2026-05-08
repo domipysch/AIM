@@ -299,8 +299,8 @@ def main(
                             "",
                             losses_after_last_epoch["rec_spot"],
                             losses_after_last_epoch["rec_gene"],
-                            losses_after_last_epoch["rec_state"],
-                            losses_after_last_epoch["clust"],
+                            losses_after_last_epoch["clust_intra"],
+                            losses_after_last_epoch["clust_inter"],
                             losses_after_last_epoch["state_entropy"],
                             losses_after_last_epoch["spot_entropy"],
                         ]

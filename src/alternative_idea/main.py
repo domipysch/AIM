@@ -20,12 +20,13 @@ from .src.utils import (
     dump_loss_logs,
     build_sc_knn_graph,
 )
-from .src.model import AlternativeIdeaModelNoLocality
-from .src.loss import AlternativeIdeaLossNoLocality
+from .src.model import AlternativeIdeaModel
+from .src.loss import AlternativeIdeaLoss
 from .src.spatial_graph import build_spatial_graph, SpatialGraphType
 from .src.dataset import prepare_tensors_from_input
 from .src.utils import graph_type_from_config
 from .src.evaluate_k.clustering import run_leiden_clustering
+from .src.sc_embedding import compute_sc_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,6 @@ def estimate_gpu_memory_gb(
     g_st: int,
     num_genes_shared: int,
     K: int,
-    d: int,
-    enc_hidden_dim: int,
-    dec_hidden_dim: int,
-    use_slim_model: bool,
 ) -> float:
     """Rough upper-bound estimate of GPU memory required (in GB)."""
     B32 = 4  # bytes per float32
@@ -59,15 +56,8 @@ def estimate_gpu_memory_gb(
     A_bytes = num_spots * num_cells * B32 * 4
     B_bytes = num_cells * K * B32 * 4
 
-    if use_slim_model:
-        model_params = 0
-    else:
-        enc = g_sc * enc_hidden_dim + enc_hidden_dim + enc_hidden_dim * d + d
-        dec = d * dec_hidden_dim + dec_hidden_dim + dec_hidden_dim * g_st + g_st
-        model_params = (enc + dec) * B32 * 4
-
     # 50 % overhead for activations, edge index, misc buffers
-    total = (data + A_bytes + B_bytes + model_params) * 1.5
+    total = (data + A_bytes + B_bytes) * 1.5
     return total / (1024**3)
 
 
@@ -86,7 +76,7 @@ def _arr_to_h5ad(
     adata.write_h5ad(path)
 
 
-def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
+def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
     if not os.path.exists(config_path):
         raise Exception(f"Config file not found at {config_path}")
 
@@ -98,7 +88,14 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
             raise ValueError("Top-level config must be a mapping (dict).")
 
         # Ensure required sections exist
-        required_sections = ["mapping", "graph", "model", "training", "loss_weights"]
+        required_sections = [
+            "mapping",
+            "graph",
+            "model",
+            "training",
+            "loss_weights",
+            "sc_embedding",
+        ]
         missing_sections = [s for s in required_sections if s not in cfg]
         if missing_sections:
             raise ValueError(
@@ -113,6 +110,9 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
         )
         loss_weights_cfg = (
             cfg.get("loss_weights") if isinstance(cfg.get("loss_weights"), dict) else {}
+        )
+        sc_embedding_cfg = (
+            cfg.get("sc_embedding") if isinstance(cfg.get("sc_embedding"), dict) else {}
         )
 
         # Validate mapping config
@@ -176,7 +176,24 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
         if not isinstance(loss_weights_cfg, dict):
             raise ValueError("`loss_weights` must be a mapping in the config.")
 
-    return mapping_cfg, graph_cfg, model_cfg, training_cfg, loss_weights_cfg
+        # Validate sc_embedding config
+        if not isinstance(sc_embedding_cfg, dict):
+            raise ValueError("`sc_embedding` must be a mapping in the config.")
+        sc_emb_method = sc_embedding_cfg.get("method")
+        if not isinstance(sc_emb_method, str) or sc_emb_method not in ("pca", "scvi"):
+            raise ValueError("`sc_embedding.method` must be 'pca' or 'scvi'.")
+        sc_emb_d = sc_embedding_cfg.get("d")
+        if not isinstance(sc_emb_d, int) or sc_emb_d <= 0:
+            raise ValueError("`sc_embedding.d` must be a positive integer.")
+
+    return (
+        mapping_cfg,
+        graph_cfg,
+        model_cfg,
+        training_cfg,
+        loss_weights_cfg,
+        sc_embedding_cfg,
+    )
 
 
 def alternative_idea_compute_mapping(
@@ -187,13 +204,19 @@ def alternative_idea_compute_mapping(
     device: torch.device,
     save_intermediate: bool = False,
     no_gpu_limit: bool = False,
+    sc_data_dir: Optional[Path] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
 
     # 1. Load Config
     logger.debug(f"Load config: {path_to_config}")
-    mapping_config, graph_config, model_config, training_config, loss_weights = (
-        load_config(path_to_config)
-    )
+    (
+        mapping_config,
+        graph_config,
+        model_config,
+        training_config,
+        loss_weights,
+        sc_embedding_config,
+    ) = load_config(path_to_config)
     logger.info(f"Loaded config: {path_to_config}")
     logger.debug(f"Loaded training config: {training_config}")
     logger.debug(f"Loaded model config: {model_config}")
@@ -227,7 +250,23 @@ def alternative_idea_compute_mapping(
             "Skipping normalize_and_log as per config (training.normalize_and_log=false)"
         )
 
-    # 4. Convert input anndata to tensors
+    # 4. Compute a priori sc embedding Y (C x d)
+    logger.info(
+        f"Computing sc embedding Y (method={sc_embedding_config['method']}, d={sc_embedding_config['d']})"
+    )
+    Y = compute_sc_embedding(
+        adata_sc,
+        method=sc_embedding_config["method"],
+        d=sc_embedding_config["d"],
+        device=device,
+        cache_dir=sc_data_dir,
+    )
+    logger.info(f"Y shape: {Y.shape}")
+    if sc_embedding_config.get("standardize", False):
+        Y = (Y - Y.mean(dim=0)) / (Y.std(dim=0) + 1e-8)
+        logger.info("Standardized Y (zero mean, unit variance per dimension)")
+
+    # 5. Convert input anndata to tensors
     logger.debug("Prepare input tensors for model...")
     X, Z, X_shared, Z_shared = prepare_tensors_from_input(adata_sc, adata_st, device)
     logger.info("Prepared input tensors for model.")
@@ -259,13 +298,6 @@ def alternative_idea_compute_mapping(
     logger.debug(f"scRNA dimensions: num_cells={num_cells}, g_sc={g_sc}")
     logger.debug(f"Number of genes shared: {num_genes_shared}")
 
-    if loss_weights["lambda_rec_state"] == 0 and loss_weights["lambda_clust"] == 0:
-        logging.info("Using slim model (no locality metrics included)")
-        use_slim_model = True
-    else:
-        logging.info("Using full model (locality metrics included)")
-        use_slim_model = False
-
     # GPU memory guard
     estimated_gb = estimate_gpu_memory_gb(
         num_cells=num_cells,
@@ -274,10 +306,6 @@ def alternative_idea_compute_mapping(
         g_st=g_st,
         num_genes_shared=num_genes_shared,
         K=model_config["K"],
-        d=model_config["d"],
-        enc_hidden_dim=model_config["enc_hidden_dim"],
-        dec_hidden_dim=model_config["dec_hidden_dim"],
-        use_slim_model=use_slim_model,
     )
     logger.info(f"Estimated GPU memory requirement: {estimated_gb:.2f} GB")
     if not no_gpu_limit and estimated_gb > GPU_LIMIT_GB:
@@ -287,17 +315,11 @@ def alternative_idea_compute_mapping(
         )
         sys.exit(1)
 
-    model: AlternativeIdeaModelNoLocality
-    if use_slim_model:
-        # No spatial neighborhood information taken into account
-        model = AlternativeIdeaModelNoLocality(
-            num_spots_st=num_spots,
-            num_cells_sc=num_cells,
-            k=model_config["K"],
-        ).to(device)
-    else:
-        # Use full model
-        raise Exception("not available")
+    model = AlternativeIdeaModel(
+        num_spots_st=num_spots,
+        num_cells_sc=num_cells,
+        k=model_config["K"],
+    ).to(device)
 
     # 7. Initialize Loss and Optimizer
 
@@ -309,25 +331,23 @@ def alternative_idea_compute_mapping(
             X, n_pca_components=50, n_neighbors=15, device=device
         )
 
-    loss: AlternativeIdeaLossNoLocality
-    if use_slim_model:
-        loss = AlternativeIdeaLossNoLocality(
-            lambda_rec_spot=loss_weights["lambda_rec_spot"],
-            lambda_rec_gene=loss_weights["lambda_rec_gene"],
-            lambda_state_entropy=loss_weights["lambda_state_entropy"],
-            lambda_spot_entropy=loss_weights["lambda_spot_entropy"],
-            lambda_soft_modularity=loss_weights.get("lambda_soft_modularity", 0.0),
-            lambda_soft_contingency=loss_weights.get("lambda_soft_contingency", 0.0),
-            k=model_config["K"],
-            use_cm=bool(training_config["use_cm"]),
-            knn_W=knn_W,
-            knn_k=knn_k,
-            knn_two_m=knn_two_m,
-            leiden_labels=leiden_labels,
-            leiden_n_clusters=leiden_n_clusters,
-        )
-    else:
-        raise Exception("not available")
+    loss = AlternativeIdeaLoss(
+        lambda_rec_spot=loss_weights["lambda_rec_spot"],
+        lambda_rec_gene=loss_weights["lambda_rec_gene"],
+        lambda_clust_intra=loss_weights.get("lambda_clust_intra", 0.0),
+        lambda_clust_inter=loss_weights.get("lambda_clust_inter", 0.0),
+        lambda_state_entropy=loss_weights["lambda_state_entropy"],
+        lambda_spot_entropy=loss_weights["lambda_spot_entropy"],
+        lambda_soft_modularity=loss_weights.get("lambda_soft_modularity", 0.0),
+        lambda_soft_contingency=loss_weights.get("lambda_soft_contingency", 0.0),
+        k=model_config["K"],
+        use_cm=bool(training_config["use_cm"]),
+        knn_W=knn_W,
+        knn_k=knn_k,
+        knn_two_m=knn_two_m,
+        leiden_labels=leiden_labels,
+        leiden_n_clusters=leiden_n_clusters,
+    )
 
     optimizer = optim.Adam(model.parameters(), lr=training_config["lr"])
 
@@ -340,17 +360,14 @@ def alternative_idea_compute_mapping(
         "total-weighted": list(),
         "rec_spot": {"weight": loss_weights["lambda_rec_spot"], "values": list()},
         "rec_gene": {"weight": loss_weights["lambda_rec_gene"], "values": list()},
-        **(
-            {
-                "rec_state": {
-                    "weight": loss_weights["lambda_rec_state"],
-                    "values": list(),
-                },
-                "clust": {"weight": loss_weights["lambda_clust"], "values": list()},
-            }
-            if not use_slim_model
-            else {}
-        ),
+        "clust_intra": {
+            "weight": loss_weights.get("lambda_clust_intra", 0.0),
+            "values": list(),
+        },
+        "clust_inter": {
+            "weight": loss_weights.get("lambda_clust_inter", 0.0),
+            "values": list(),
+        },
         "state_entropy": {
             "weight": loss_weights["lambda_state_entropy"],
             "values": list(),
@@ -401,20 +418,7 @@ def alternative_idea_compute_mapping(
         A, B, h, M_rec, F = model(Z, edge_index)
 
         # Calculate segmented losses
-        if use_slim_model:
-            loss_dict = loss(A=A, B=B, X_shared=X_shared, Z_shared=Z_shared)
-        else:
-            loss_dict = loss(
-                A=A,
-                B=B,
-                h=h,
-                M_rec=M_rec,
-                F=F,
-                X=X,
-                X_shared=X_shared,
-                Z_shared=Z_shared,
-            )
-
+        loss_dict = loss(A=A, B=B, X_shared=X_shared, Z_shared=Z_shared, Y=Y)
         total_loss = loss_dict["loss"]
 
         # 3. Optionaler Gradient-Check (Nur zur Diagnose)
@@ -447,9 +451,8 @@ def alternative_idea_compute_mapping(
         losses["total-weighted"].append(to_scalar(total_loss))
         losses["rec_spot"]["values"].append(to_scalar(loss_dict.get("rec_spot")))
         losses["rec_gene"]["values"].append(to_scalar(loss_dict.get("rec_gene")))
-        if not use_slim_model:
-            losses["rec_state"]["values"].append(to_scalar(loss_dict.get("rec_state")))
-            losses["clust"]["values"].append(to_scalar(loss_dict.get("clust")))
+        losses["clust_intra"]["values"].append(to_scalar(loss_dict.get("clust_intra")))
+        losses["clust_inter"]["values"].append(to_scalar(loss_dict.get("clust_inter")))
         losses["state_entropy"]["values"].append(
             to_scalar(loss_dict.get("state_entropy"))
         )
@@ -737,7 +740,7 @@ def main(
     no_gpu_limit: bool = False,
 ) -> tuple[AnnData, Optional[AnnData], AnnData, dict]:
 
-    mapping_config, _, _, training_config, _ = load_config(config_path)
+    mapping_config, _, _, training_config, _, _ = load_config(config_path)
 
     # Setup Device
     # Use 'mps' for Apple Silicon, 'cuda' for NVIDIA, or 'cpu'
@@ -764,6 +767,7 @@ def main(
         device=device,
         save_intermediate=store_intermediate,
         no_gpu_limit=no_gpu_limit,
+        sc_data_dir=sc_path.parent,
     )  # S x C, plus loss history
     logger.info("Obtained spot-to-cell mapping AnnData.")
     assert spot_to_cell_map.shape == (

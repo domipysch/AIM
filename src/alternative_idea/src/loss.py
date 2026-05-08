@@ -6,7 +6,26 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AlternativeIdeaLossNoLocality(nn.Module):
+def compute_state_centroids(B: Tensor, Y: Tensor, eps: float = 1e-8) -> Tensor:
+    """
+    Compute soft cell-state centroids in embedding space.
+
+    S[k] = weighted mean of Y over cells assigned to state k,
+    i.e. S = (B / colsum(B))^T @ Y.
+
+    Args:
+        B: (C x K) cell-to-state soft assignment matrix.
+        Y: (C x d) cell embeddings (precomputed, fixed).
+        eps: Stability term to avoid division by zero for empty states.
+
+    Returns:
+        S: (K x d) state centroids in embedding space.
+    """
+    B_norm = B / (B.sum(dim=0, keepdim=True) + eps)  # (C x K), columns sum to 1
+    return B_norm.T @ Y  # (K x d)
+
+
+class AlternativeIdeaLoss(nn.Module):
     def __init__(
         self,
         lambda_rec_spot: float = 1.0,
@@ -14,6 +33,8 @@ class AlternativeIdeaLossNoLocality(nn.Module):
         lambda_state_entropy: float = 1.0,
         lambda_spot_entropy: float = 1.0,
         lambda_soft_modularity: float = 0.0,
+        lambda_clust_intra: float = 0.0,
+        lambda_clust_inter: float = 0.0,
         eps: float = 1e-8,
         k: int = 20,
         use_cm: bool = False,
@@ -24,10 +45,12 @@ class AlternativeIdeaLossNoLocality(nn.Module):
         leiden_labels: Tensor | None = None,
         leiden_n_clusters: int = 0,
     ):
-        super(AlternativeIdeaLossNoLocality, self).__init__()
+        super(AlternativeIdeaLoss, self).__init__()
         self.lambda_rec_spot = lambda_rec_spot
         self.lambda_rec_gene = lambda_rec_gene
         self.lambda_state_entropy = lambda_state_entropy
+        self.lambda_clust_intra = lambda_clust_intra
+        self.lambda_clust_inter = lambda_clust_inter
         self.lambda_spot_entropy = lambda_spot_entropy
         self.lambda_soft_modularity = lambda_soft_modularity
         self.eps = eps
@@ -41,7 +64,7 @@ class AlternativeIdeaLossNoLocality(nn.Module):
         self.lambda_soft_contingency = lambda_soft_contingency
         self.leiden_labels = leiden_labels  # integer (C,) or None
         self.leiden_n_clusters = leiden_n_clusters  # scalar int
-        logger.debug("AlternativeIdeaLossNoLocality initialized")
+        logger.debug("AlternativeIdeaLoss initialized")
 
     def get_rec_spot_loss(
         self, A: Tensor, B: Tensor, X_shared: Tensor, Z_shared: Tensor
@@ -183,6 +206,41 @@ class AlternativeIdeaLossNoLocality(nn.Module):
         # 3. Return the mean across all spots multiplied by lambda
         return torch.mean(spot_entropies)
 
+    def get_clust_intra_loss(self, B: Tensor, Y: Tensor) -> Tensor:
+        """
+        Soft within-cluster variance in embedding space.
+
+        L = |C|^{-1} sum_c sum_k B[c,k] * ||Y[c] - S[k]||^2
+
+        Args:
+            B: (C x K) cell-to-state soft assignment matrix.
+            Y: (C x d) precomputed cell embeddings.
+        """
+        S = compute_state_centroids(B, Y, self.eps)  # (K x d)
+        diff = Y.unsqueeze(1) - S.unsqueeze(0)  # (C x K x d)
+        sq_dist = (diff**2).sum(dim=2)  # (C x K)
+        # return (B * sq_dist).sum() / B.shape[0]
+        return (B * sq_dist).sum() / (B.shape[0] * Y.shape[1])
+
+    def get_clust_inter_loss(self, B: Tensor, Y: Tensor) -> Tensor:
+        """
+        Mean pairwise squared distance between cell-state centroids, negated.
+
+        L = -1/(K*(K-1)) * sum_{k != k'} ||S_k - S_k'||^2
+
+        Args:
+            B: (C x K) cell-to-state soft assignment matrix.
+            Y: (C x d) precomputed cell embeddings.
+        """
+        S = compute_state_centroids(B, Y, self.eps)  # (K x d)
+        K = S.shape[0]
+        if K < 2:
+            return torch.tensor(0.0, device=S.device)
+        diff = S.unsqueeze(1) - S.unsqueeze(0)  # (K x K x d)
+        sq_dist = (diff**2).sum(dim=2)  # (K x K)
+        mask = 1.0 - torch.eye(K, device=S.device, dtype=S.dtype)
+        return -(sq_dist * mask).sum() / (K * (K - 1))
+
     def get_soft_modularity_loss(self, B: Tensor) -> Tensor:
         """
         Differentiable soft modularity on the precomputed sc KNN graph.
@@ -250,6 +308,7 @@ class AlternativeIdeaLossNoLocality(nn.Module):
         B: Tensor,
         X_shared: Tensor,
         Z_shared: Tensor,
+        Y: Tensor,
     ) -> dict[str, Tensor]:
         """
         Args:
@@ -257,12 +316,15 @@ class AlternativeIdeaLossNoLocality(nn.Module):
             B: Cell to cell state mapping (C x K)
             X_shared: scRNA-seq ref on shared genes (C x g_shared)
             Z_shared: Spatial data on shared genes (S x g_shared)
+            Y: Precomputed cell embeddings (C x d)
         """
         # 1. Individual terms (unweighted)
         l_rec_spot = self.get_rec_spot_loss(A, B, X_shared, Z_shared)
         l_rec_gene = self.get_rec_gene_loss(A, B, X_shared, Z_shared)
         l_state_entropy = self.get_state_entropy_loss(B)
         l_spot_entropy = self.get_spot_entropy_loss(A, B)
+        l_clust_intra = self.get_clust_intra_loss(B, Y)
+        l_clust_inter = self.get_clust_inter_loss(B, Y)
         l_soft_modularity = (
             self.get_soft_modularity_loss(B)
             if self.lambda_soft_modularity > 0.0 and self.knn_W is not None
@@ -286,6 +348,8 @@ class AlternativeIdeaLossNoLocality(nn.Module):
             + self.lambda_rec_gene * l_rec_gene
             + self.lambda_state_entropy * l_state_entropy
             + self.lambda_spot_entropy * l_spot_entropy
+            + self.lambda_clust_intra * l_clust_intra
+            + self.lambda_clust_inter * l_clust_inter
             + self.lambda_soft_modularity * l_soft_modularity
             + self.lambda_soft_contingency * l_soft_contingency
         )
@@ -296,6 +360,8 @@ class AlternativeIdeaLossNoLocality(nn.Module):
             "rec_gene": l_rec_gene,
             "state_entropy": l_state_entropy,
             "spot_entropy": l_spot_entropy,
+            "clust_intra": l_clust_intra,
+            "clust_inter": l_clust_inter,
             "soft_modularity": l_soft_modularity,
             "soft_contingency": l_soft_contingency,
         }

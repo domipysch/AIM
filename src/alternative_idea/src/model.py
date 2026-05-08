@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AlternativeIdeaModelNoLocality(nn.Module):
+class AlternativeIdeaModel(nn.Module):
     """
     Same as AlternativeIdeaModel, but leave out encoder and decoder on the spatial data.
     Used when L3,4 = 0, decreasing the number of parameters drastically.
@@ -26,7 +26,7 @@ class AlternativeIdeaModelNoLocality(nn.Module):
             d: Dimension of the embedding space
             k: Upper bound on number of cell states
         """
-        super(AlternativeIdeaModelNoLocality, self).__init__()
+        super(AlternativeIdeaModel, self).__init__()
         self.num_cells_sc = num_cells_sc
 
         # U: Spot to cell mapping (S x C)

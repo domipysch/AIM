@@ -168,6 +168,8 @@ def dump_loss_logs(losses, config_path) -> dict:
         "rec_gene",
         "rec_state",
         "clust",
+        "clust_intra",
+        "clust_inter",
         "state_entropy",
         "spot_entropy",
         "soft_modularity",
@@ -243,6 +245,24 @@ def create_loss_plots(losses, loss_dir):
             list(v * losses["clust"]["weight"] for v in losses["clust"]["values"]),
             label="clust-weighted",
         )
+    if "clust_intra" in losses:
+        plt.plot(
+            epochs,
+            list(
+                v * losses["clust_intra"]["weight"]
+                for v in losses["clust_intra"]["values"]
+            ),
+            label="clust_intra-weighted",
+        )
+    if "clust_inter" in losses:
+        plt.plot(
+            epochs,
+            list(
+                v * losses["clust_inter"]["weight"]
+                for v in losses["clust_inter"]["values"]
+            ),
+            label="clust_inter-weighted",
+        )
     plt.plot(
         epochs,
         list(
@@ -297,6 +317,8 @@ def create_loss_plots(losses, loss_dir):
         *(("clust",) if "clust" in losses else ()),
         "state_entropy",
         "spot_entropy",
+        *(("clust_intra",) if "clust_intra" in losses else ()),
+        *(("clust_inter",) if "clust_inter" in losses else ()),
         *(("soft_modularity",) if "soft_modularity" in losses else ()),
         *(("soft_contingency",) if "soft_contingency" in losses else ()),
     )
