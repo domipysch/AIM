@@ -44,6 +44,7 @@ class AlternativeIdeaLoss(nn.Module):
         lambda_soft_contingency: float = 0.0,
         leiden_labels: Tensor | None = None,
         leiden_n_clusters: int = 0,
+        Y_scale: float = 1.0,
     ):
         super(AlternativeIdeaLoss, self).__init__()
         self.lambda_rec_spot = lambda_rec_spot
@@ -64,6 +65,7 @@ class AlternativeIdeaLoss(nn.Module):
         self.lambda_soft_contingency = lambda_soft_contingency
         self.leiden_labels = leiden_labels  # integer (C,) or None
         self.leiden_n_clusters = leiden_n_clusters  # scalar int
+        self.Y_scale = max(Y_scale, 1e-8)
         logger.debug("AlternativeIdeaLoss initialized")
 
     def get_rec_spot_loss(
@@ -206,21 +208,25 @@ class AlternativeIdeaLoss(nn.Module):
         # 3. Return the mean across all spots multiplied by lambda
         return torch.mean(spot_entropies)
 
-    def get_clust_intra_loss(self, B: Tensor, Y: Tensor) -> Tensor:
+    def get_clust_intra_loss(self, A: Tensor, B: Tensor, Y: Tensor) -> Tensor:
         """
-        Soft within-cluster variance in embedding space.
+        Soft within-cluster variance in embedding space, weighted by cell usage.
 
-        L = |C|^{-1} sum_c sum_k B[c,k] * ||Y[c] - S[k]||^2
+        L = (sum_c w_c)^{-1} sum_c w_c * sum_k B[c,k] * ||Y[c] - S[k]||^2
+        where w_c = sum_s A[s,c]  (how much cell c is used across all spots).
 
         Args:
+            A: (S x C) spot-to-cell alignment matrix.
             B: (C x K) cell-to-state soft assignment matrix.
             Y: (C x d) precomputed cell embeddings.
         """
+        w = A.sum(dim=0)  # (C,) — 1^T A, total assignment weight per cell
         S = compute_state_centroids(B, Y, self.eps)  # (K x d)
         diff = Y.unsqueeze(1) - S.unsqueeze(0)  # (C x K x d)
         sq_dist = (diff**2).sum(dim=2)  # (C x K)
-        # return (B * sq_dist).sum() / B.shape[0]
-        return (B * sq_dist).sum() / (B.shape[0] * Y.shape[1])
+        return (w.unsqueeze(1) * B * sq_dist).sum() / (
+            w.sum() * Y.shape[1] * self.Y_scale
+        )
 
     def get_clust_inter_loss(self, B: Tensor, Y: Tensor) -> Tensor:
         """
@@ -323,7 +329,7 @@ class AlternativeIdeaLoss(nn.Module):
         l_rec_gene = self.get_rec_gene_loss(A, B, X_shared, Z_shared)
         l_state_entropy = self.get_state_entropy_loss(B)
         l_spot_entropy = self.get_spot_entropy_loss(A, B)
-        l_clust_intra = self.get_clust_intra_loss(B, Y)
+        l_clust_intra = self.get_clust_intra_loss(A, B, Y)
         l_clust_inter = self.get_clust_inter_loss(B, Y)
         l_soft_modularity = (
             self.get_soft_modularity_loss(B)

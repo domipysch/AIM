@@ -65,6 +65,7 @@ from .plots import (
     plot_state_fractions,
     plot_gep_distance_comparison,
 )
+from .substate_analysis import compute_substate_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +155,17 @@ def run_analysis(
 
     # ── Computed clustering metrics ───────────────────────────────────────────
     logger.info("Computing metrics for the computed clustering…")
-    metrics_computed = compute_all_metrics(adata_processed, cell_states)
+    metrics_computed = compute_all_metrics(
+        adata_processed, cell_states, adata_st=adata_st, shared_genes=shared_genes
+    )
     logger.info("Computed:  %s", metrics_computed)
     adata_processed.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
 
     # ── Leiden reference – all genes ─────────────────────────────────────────
     leiden_labels, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
-    metrics_leiden = compute_all_metrics(adata_processed, leiden_labels)
+    metrics_leiden = compute_all_metrics(
+        adata_processed, leiden_labels, adata_st=adata_st, shared_genes=shared_genes
+    )
     logger.info("Leiden (all genes): %s", metrics_leiden)
     adata_processed.obs["leiden_state"] = pd.Categorical(leiden_labels.astype(str))
 
@@ -173,11 +178,74 @@ def run_analysis(
         shared_genes=shared_genes,
         resolution=leiden_resolution,
     )
-    metrics_leiden_shared = compute_all_metrics(adata_processed, leiden_shared_labels)
+    metrics_leiden_shared = compute_all_metrics(
+        adata_processed,
+        leiden_shared_labels,
+        adata_st=adata_st,
+        shared_genes=shared_genes,
+    )
     logger.info("Leiden (shared genes): %s", metrics_leiden_shared)
 
     adata_processed.obs["leiden_shared_state"] = pd.Categorical(
         leiden_shared_labels.astype(str)
+    )
+
+    # ── Per-state sub-cluster analysis ───────────────────────────────────────
+    logger.info("Computing per-state sub-cluster metrics…")
+    substate = compute_substate_metrics(
+        adata_sc,
+        adata_st,
+        cell_states,
+        spot_states,
+        leiden_labels,
+        shared_genes,
+        n_top_genes=8,
+        n_perm=100,
+        n_top_discriminable=100,
+    )
+
+    # substate_metrics.csv — one row per computed state
+    _n_top = 8  # must match n_top_genes passed to compute_substate_metrics
+
+    def _fmt_row(cs: int, metrics: dict) -> dict:
+        def _f(v):
+            """Return v unchanged, or '—' if it is NaN."""
+            try:
+                return v if v == v else "—"  # NaN != NaN
+            except TypeError:
+                return v
+
+        cnt = metrics.get("marker_in_top100_count", float("nan"))
+        mk_str = f"{int(cnt)}/{_n_top}" if cnt == cnt else "—"
+        return {
+            "CS": int(cs),
+            "cells": int(metrics["n_cells"]),
+            "spots": int(metrics["n_spots"]),
+            "n_LS": int(metrics["n_leiden_sub"]),
+            "cosim": _f(metrics["cossim_centroid"]),
+            "perm_p": _f(metrics["perm_p_value"]),
+            "mk/top100": mk_str,
+            "var_act": _f(metrics["indisting_actual_mean"]),
+            "var_null": _f(metrics["indisting_null_mean"]),
+        }
+
+    pd.DataFrame(
+        [_fmt_row(cs, m) for cs, m in sorted(substate["per_state"].items())]
+    ).to_csv(output_dir / "substate_metrics.csv", index=False)
+
+    # mapping_clarity.csv — global margin comparison
+    pd.DataFrame(
+        {
+            "metric": ["margin_computed_mean", "margin_leiden_mean"],
+            "value": [substate["margin_computed_mean"], substate["margin_leiden_mean"]],
+        }
+    ).to_csv(output_dir / "mapping_clarity.csv", index=False)
+    logger.info(
+        "Sub-cluster metrics → %s/substate_metrics.csv  "
+        "(margin computed=%.4f | leiden=%.4f)",
+        output_dir,
+        substate["margin_computed_mean"],
+        substate["margin_leiden_mean"],
     )
 
     # ── GEP centroid distance comparison ─────────────────────────────────────
@@ -295,10 +363,15 @@ def run_analysis(
     metrics_df.to_csv(output_dir / "unsupervised_metrics.csv", index=False)
     logger.info("Unsupervised metrics → %s", output_dir / "unsupervised_metrics.csv")
 
+    n_computed_states_above_1pct = int(
+        sum(1 for f in cell_fractions.values() if f > 0.01)
+    )
+
     return {
         "cell_states": cell_states,
         "spot_states": spot_states,
         "n_computed_states": n_computed_states,
+        "n_computed_states_above_1pct": n_computed_states_above_1pct,
         "n_mapped_states": n_mapped_states,
         "cell_fractions": cell_fractions,
         "spot_fractions": spot_fractions,
@@ -308,6 +381,7 @@ def run_analysis(
         "metrics_leiden_shared": metrics_leiden_shared,
         "centroid_matching": centroid_matching,
         "contingency_matching": contingency_matching,
+        "substate_metrics": substate,
         "adata_processed": adata_processed,
         "adata_shared": adata_shared,
     }

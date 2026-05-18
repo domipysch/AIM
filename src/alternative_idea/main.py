@@ -262,9 +262,10 @@ def alternative_idea_compute_mapping(
         cache_dir=sc_data_dir,
     )
     logger.info(f"Y shape: {Y.shape}")
-    if sc_embedding_config.get("standardize", False):
-        Y = (Y - Y.mean(dim=0)) / (Y.std(dim=0) + 1e-8)
-        logger.info("Standardized Y (zero mean, unit variance per dimension)")
+    Y_scale = Y.var(dim=0, unbiased=False).mean().item()
+    logger.info(
+        f"Y_scale (mean per-dim variance, used to normalise clust_intra loss): {Y_scale:.4f}"
+    )
 
     # 5. Convert input anndata to tensors
     logger.debug("Prepare input tensors for model...")
@@ -347,6 +348,7 @@ def alternative_idea_compute_mapping(
         knn_two_m=knn_two_m,
         leiden_labels=leiden_labels,
         leiden_n_clusters=leiden_n_clusters,
+        Y_scale=Y_scale,
     )
 
     optimizer = optim.Adam(model.parameters(), lr=training_config["lr"])
@@ -467,7 +469,6 @@ def alternative_idea_compute_mapping(
             losses["soft_contingency"]["values"].append(
                 to_scalar(loss_dict.get("soft_contingency"))
             )
-
         # Logging: verbose -> log every epoch at DEBUG, normal -> log every 10 epochs at INFO
         if verbose_logging:
             logger.debug(f"Epoch {epoch:03d} | Total Loss: {total_loss.item():.4f}")

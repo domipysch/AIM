@@ -200,7 +200,9 @@ def main(
 
         row: dict = {"run": run_dir.name, "K": K}
         row["Computed states"] = results["n_computed_states"]
+        row["Computed states > 1%"] = results["n_computed_states_above_1pct"]
         row["Mapped states"] = results["n_mapped_states"]
+        row["per_state_perm_p"] = results["substate_metrics"]["weighted_perm_p"]
         for metric, value in results["metrics_computed"].items():
             row[f"{metric}__computed"] = value
         row["hungarian_cosim"] = results["centroid_matching"]["hungarian_score"]

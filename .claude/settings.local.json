@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(Out-File -Encoding utf8 -FilePath C:\\\\Temp\\\\cell_src.txt)",
+      "Bash(Get-Content C:\\\\Temp\\\\cell_src.txt)"
+    ]
+  }
+}

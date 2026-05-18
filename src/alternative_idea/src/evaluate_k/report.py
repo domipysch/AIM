@@ -39,9 +39,12 @@ def _esc(s: str) -> str:
 
 
 def _fmt(v: str) -> str:
-    """Format numeric strings to 4 d.p.; pass strings through _esc."""
+    """Format numeric strings: integers without decimals, floats to 4 d.p.; pass strings through _esc."""
     try:
-        return f"{float(v):.4f}"
+        f = float(v)
+        if f == int(f) and "." not in v:
+            return str(int(f))
+        return f"{f:.4f}"
     except ValueError:
         return _esc(v)
 
@@ -124,6 +127,127 @@ def _csv_table_with_extra(
                 continue
             label, value = item
             lines.append(f"  [{_esc(label)}], [{_esc(value)}],")
+
+    lines.append(")")
+    return "\n".join(lines)
+
+
+_GREEN = 'rgb("#d4f5d4")'
+_RED = 'rgb("#f5d4d4")'
+
+
+def _substate_metrics_table(csv_path: Path) -> str:
+    """
+    Typst table for substate_metrics.csv with conditional cell colouring:
+      - perm_p  : green < 0.33, red >= 0.33
+      - var_act / var_null : green when var_act < var_null, red otherwise (both cells)
+    """
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    if not rows:
+        return "#text[_(no data)_]"
+
+    header = rows[0]
+    n = len(header)
+
+    def _col(name: str) -> int:
+        return header.index(name) if name in header else -1
+
+    perm_p_col = _col("perm_p")
+    var_act_col = _col("var_act")
+    var_null_col = _col("var_null")
+
+    lines = [
+        "#table(",
+        f"  columns: {n},",
+        "  stroke: 0.5pt,",
+        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
+        "  align: (col, _) => if col == 0 { left } else { right },",
+    ]
+
+    # Header row
+    lines.append("  " + ", ".join(f"[*{_esc(h)}*]" for h in header) + ",")
+
+    # Data rows
+    for row in rows[1:]:
+        col_fill: dict[int, str] = {}
+
+        if perm_p_col >= 0 and perm_p_col < len(row):
+            try:
+                col_fill[perm_p_col] = _GREEN if float(row[perm_p_col]) < 0.33 else _RED
+            except ValueError:
+                pass
+
+        if (
+            var_act_col >= 0
+            and var_null_col >= 0
+            and var_act_col < len(row)
+            and var_null_col < len(row)
+        ):
+            try:
+                fill = (
+                    _GREEN
+                    if float(row[var_act_col]) < float(row[var_null_col])
+                    else _RED
+                )
+                col_fill[var_act_col] = fill
+                col_fill[var_null_col] = fill
+            except ValueError:
+                pass
+
+        cells = []
+        for ci, v in enumerate(row):
+            text = _esc(v) if ci == 0 else _fmt(v)
+            if ci in col_fill:
+                cells.append(f"table.cell(fill: {col_fill[ci]})[{text}]")
+            else:
+                cells.append(f"[{text}]")
+        lines.append("  " + ", ".join(cells) + ",")
+
+    lines.append(")")
+    return "\n".join(lines)
+
+
+def _mapping_clarity_table(csv_path: Path) -> str:
+    """
+    Typst table for mapping_clarity.csv.
+    Both value cells are coloured green when margin_computed_mean > margin_leiden_mean.
+    """
+    with open(csv_path, newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    if not rows:
+        return "#text[_(no data)_]"
+
+    # Locate the two metric rows by name
+    data = {r[0]: r[1] for r in rows[1:] if len(r) >= 2}
+    try:
+        computed_margin = float(data.get("margin_computed_mean", "nan"))
+        leiden_margin = float(data.get("margin_leiden_mean", "nan"))
+        value_fill = _GREEN if computed_margin > leiden_margin else ""
+    except ValueError:
+        value_fill = ""
+
+    header = rows[0]
+    n = len(header)
+
+    lines = [
+        "#table(",
+        f"  columns: {n},",
+        "  stroke: 0.5pt,",
+        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
+        "  align: (col, _) => if col == 0 { left } else { right },",
+        "  " + ", ".join(f"[*{_esc(h)}*]" for h in header) + ",",
+    ]
+
+    for row in rows[1:]:
+        cells = []
+        for ci, v in enumerate(row):
+            text = _esc(v) if ci == 0 else _fmt(v)
+            if ci > 0 and value_fill:
+                cells.append(f"table.cell(fill: {value_fill})[{text}]")
+            else:
+                cells.append(f"[{text}]")
+        lines.append("  " + ", ".join(cells) + ",")
 
     lines.append(")")
     return "\n".join(lines)
@@ -218,9 +342,6 @@ def generate_per_k_report(
         parts.append(f"""
 = Unsupervised Metrics
 
-Silhouette, Dunn index, modularity, and centroid cosine similarity for the
-computed assignment and both Leiden references (all genes / shared genes).
-
 {_csv_table(unsup)}
 """)
 
@@ -230,10 +351,27 @@ computed assignment and both Leiden references (all genes / shared genes).
         parts.append(f"""
 = Supervised Metrics
 
-Matching quality (Hungarian / greedy centroid cosine similarity, contingency
-score) between the computed assignment and the Leiden reference.
-
 {_csv_table(sup)}
+""")
+
+    # Per-state sub-cluster analysis
+    substate_csv = analysis_dir / "substate_metrics.csv"
+    if substate_csv.exists():
+        parts.append(f"""
+= Per-State Sub-cluster Analysis
+
+#set text(size: 7pt)
+{_substate_metrics_table(substate_csv)}
+#set text(size: 11pt)
+""")
+
+    # Spot-level mapping clarity
+    clarity_csv = analysis_dir / "mapping_clarity.csv"
+    if clarity_csv.exists():
+        parts.append(f"""
+= Spot-level Mapping Clarity
+
+{_mapping_clarity_table(clarity_csv)}
 """)
 
     # O2 cosine similarity
@@ -245,9 +383,6 @@ score) between the computed assignment and the Leiden reference.
             o2_rows.append(("Spotwise median cosine sim", f"{median_cossim_spot:.4f}"))
         parts.append(f"""
 = O2 Cosine Similarity
-
-Median cosine similarity between predicted and ground-truth gene expression
-profiles, evaluated genewise and spotwise (from the O2 objective metrics).
 
 {_two_col_table(o2_rows)}
 """)
@@ -328,6 +463,68 @@ profiles, evaluated genewise and spotwise (from the O2 objective metrics).
 
 # ─── Summary report ───────────────────────────────────────────────────────────
 
+_SUMMARY_INT_ROWS = {"K", "Computed states", "Computed states > 1%", "Mapped states"}
+_SUMMARY_EXCLUDE_ROWS = {"modularity_spatial_hvg__computed", "centroid_cosim__computed"}
+_SUMMARY_MIN_BOLD_ROWS = {"per_state_perm_p"}
+
+
+def _overview_table(overview_csv: Path) -> str:
+    """
+    Typst table for analysis_overview.csv with:
+      - Integer rows (K, Computed States, …) printed without decimals
+      - modularity_spatial_hvg__computed and centroid_cosim__computed rows omitted
+      - All metric rows: maximum value per row printed bold
+    """
+    with open(overview_csv, newline="", encoding="utf-8") as fh:
+        rows = list(csv.reader(fh))
+    if not rows:
+        return "#text[_(no data)_]"
+
+    header = rows[0]
+    n = len(header)
+    data_rows = [r for r in rows[1:] if r and r[0] not in _SUMMARY_EXCLUDE_ROWS]
+
+    lines = [
+        "#table(",
+        f"  columns: {n},",
+        "  stroke: 0.5pt,",
+        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
+        "  align: (col, _) => if col == 0 { left } else { right },",
+        "  " + ", ".join(f"[*{_esc(h)}*]" for h in header) + ",",
+    ]
+
+    for row in data_rows:
+        metric = row[0] if row else ""
+        values = row[1:] if len(row) > 1 else []
+        is_int_row = metric in _SUMMARY_INT_ROWS
+
+        bold_idx = -1
+        if not is_int_row and values:
+            try:
+                fvals = [float(v) if v else float("nan") for v in values]
+                valid = [(i, v) for i, v in enumerate(fvals) if v == v]
+                if valid:
+                    pick = min if metric in _SUMMARY_MIN_BOLD_ROWS else max
+                    bold_idx = pick(valid, key=lambda t: t[1])[0]
+            except ValueError:
+                pass
+
+        cells = [f"[{_esc(metric)}]"]
+        for i, v in enumerate(values):
+            if is_int_row:
+                try:
+                    text = str(int(float(v)))
+                except (ValueError, TypeError):
+                    text = _esc(v)
+            else:
+                text = _fmt(v)
+            cells.append(f"[*{text}*]" if i == bold_idx else f"[{text}]")
+
+        lines.append("  " + ", ".join(cells) + ",")
+
+    lines.append(")")
+    return "\n".join(lines)
+
 
 def _best_k_table(overview_csv: Path) -> str:
     """Build a Typst table showing the best run/K for each metric (all higher-is-better)."""
@@ -340,11 +537,15 @@ def _best_k_table(overview_csv: Path) -> str:
     run_ids = rows[0][1:]
     k_row = next((r for r in rows[1:] if r and r[0] == "K"), None)
     k_vals = k_row[1:] if k_row else run_ids
-    data_rows = [r for r in rows[1:] if r and r[0] != "K"]
+    data_rows = [
+        r for r in rows[1:] if r and r[0] != "K" and r[0] not in _SUMMARY_EXCLUDE_ROWS
+    ]
 
     cells = ["  [*Metric*], [*Best run*], [*K*], [*Value*],"]
     for row in data_rows:
         metric = row[0]
+        if metric in _SUMMARY_INT_ROWS:
+            continue
         raw = row[1:]
         try:
             vals = [float(v) if v else float("nan") for v in raw]
@@ -355,10 +556,14 @@ def _best_k_table(overview_csv: Path) -> str:
             continue
         best_i, best_v = max(valid, key=lambda t: t[1])
         best_run = run_ids[best_i] if best_i < len(run_ids) else "?"
-        best_k = k_vals[best_i] if best_i < len(k_vals) else "?"
+        raw_k = k_vals[best_i] if best_i < len(k_vals) else "?"
+        try:
+            best_k = str(int(float(raw_k)))
+        except (ValueError, TypeError):
+            best_k = str(raw_k)
         cells.append(
             f"  [{_esc(metric)}], [{_esc(str(best_run))}], "
-            f"[{_esc(str(best_k))}], [{best_v:.4f}],"
+            f"[{best_k}], [{best_v:.4f}],"
         )
 
     if len(cells) == 1:  # only header row, nothing to show
@@ -414,12 +619,7 @@ def generate_summary_report(pair_dir: Path) -> Path | None:
     out_pdf = pair_dir / "summary_report.pdf"
 
     best_tbl = _best_k_table(overview)
-    best_section = (
-        f"\n= Best Run per Metric\n\nHighest value across all runs for each metric "
-        f"(all metrics are higher-is-better).\n\n{best_tbl}\n"
-        if best_tbl
-        else ""
-    )
+    best_section = f"\n= Best Run per Metric\n\n{best_tbl}\n" if best_tbl else ""
 
     umap_gallery = _umap_gallery(overview, pair_dir)
     umap_section = (
@@ -439,10 +639,8 @@ def generate_summary_report(pair_dir: Path) -> Path | None:
 
 = Overview: All Runs
 
-Rows are metrics; columns are numbered runs.
-
 #set text(size: 8.5pt)
-{_csv_table(overview)}
+{_overview_table(overview)}
 #set text(size: 11pt)
 {best_section}{umap_section}
 """
