@@ -4,14 +4,10 @@ graph:
   type: knn
   k: 4
 model:
-  d: 32
-  enc_hidden_dim: 64
-  dec_hidden_dim: 256
   K: 20
 training:
   lr: 0.001
   epochs: 1
-  dropout_decoder: 0.0
   normalize_and_log: false
   use_cm: false
 sc_embedding:

@@ -13,12 +13,6 @@ graph:
   k:
     - 4
 model:
-  d:
-    - 16
-  enc_hidden_dim:
-    - 64
-  dec_hidden_dim:
-    - 256
   K:
     - 5
     - 10
@@ -29,8 +23,6 @@ training:
     - 0.008
   epochs:
     - 1000
-  dropout_decoder:
-    - 0.0
   normalize_and_log:
     - false
   use_cm:
@@ -44,7 +36,31 @@ loss_weights:
     lambda_rec_gene: 0
     lambda_clust_intra: 0
     lambda_clust_inter: 0
-    lambda_state_entropy: 0.01
-    lambda_spot_entropy: 0.008
-    lambda_soft_modularity: 0.0
-    lambda_soft_contingency: 0.0
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_modularity: 0
+    lambda_soft_contingency: 1.0
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
+    lambda_clust_intra: 0
+    lambda_clust_inter: 0
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_modularity: 0
+    lambda_soft_contingency: 1.0
+  - lambda_rec_spot: 0.75
+    lambda_rec_gene: 0.75
+    lambda_clust_intra: 0
+    lambda_clust_inter: 0
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_modularity: 0
+    lambda_soft_contingency: 1.0
+  - lambda_rec_spot: 1.0
+    lambda_rec_gene: 1.0
+    lambda_clust_intra: 0
+    lambda_clust_inter: 0
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_modularity: 0
+    lambda_soft_contingency: 1.0

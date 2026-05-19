@@ -153,14 +153,14 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
         # Validate model config
         if not model_cfg:
             raise ValueError("`model` must be a mapping in the config.")
-        for key in ("d", "K", "enc_hidden_dim", "dec_hidden_dim"):
+        for key in ("K",):
             if key not in model_cfg:
                 raise ValueError(f"`model.{key}` is required in the config.")
 
         # Validate training config
         if not training_cfg:
             raise ValueError("`training` must be a mapping in the config.")
-        for key in ("lr", "epochs", "dropout_decoder", "use_cm"):
+        for key in ("lr", "epochs", "use_cm"):
             if key not in training_cfg:
                 raise ValueError(f"`training.{key}` is required in the config.")
         # Optional normalize_and_log flag: default True (preserve previous behavior)
