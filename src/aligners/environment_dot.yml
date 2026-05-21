@@ -4,7 +4,7 @@ channels:
   - defaults
 
 # After creating the environment, install DOTr from GitHub:
-#   Rscript -e "devtools::install_github('saezlab/DOT')"
+#   Rscript -e "remotes::install_github('saezlab/DOT')"
 
 dependencies:
   - python=3.13
@@ -16,5 +16,5 @@ dependencies:
   - networkx
   - r-base=4.5
   - r-matrix
-  - r-devtools
+  - r-remotes
   - r-hdf5r

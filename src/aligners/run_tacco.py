@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 import tacco as tc
 import pandas as pd
@@ -13,29 +12,29 @@ from ..utils.io import load_sc_adata, load_st_adata
 def tacco_align_data(
     sc_path: Path,
     st_path: Path,
-    deterministic_mapping: bool,
     map_cell_types: bool,
     cell_type_key: str,
-    output_path: Path,
-) -> AnnData:
+    output_folder: Path,
+) -> tuple[AnnData, AnnData]:
     """
     Run TACCO alignment on a prepared dataset.
-    Saves predicted gene expression per spot (GEP) as h5ad to output_path.
+    Saves both probabilistic and deterministic GEPs to output_folder.
 
     Args:
         sc_path: Full path to sc.h5ad.
         st_path: Full path to st.h5ad.
-        deterministic_mapping: Convert the probabilistic mapping to one-hot (one cell/type per spot).
         map_cell_types: If True, aggregate cells by cell_type_key before mapping.
                         If False, map individual cells directly.
         cell_type_key: obs column to use as annotation when map_cell_types=True.
-        output_path: Full path where to save the resulting GEP h5ad.
+        output_folder: Folder where to store gep_prob.h5ad and gep_det.h5ad.
 
     Returns:
-        AnnData with obs=genes, var=spots (G x S layout).
+        Tuple (gep_prob, gep_det), each AnnData with obs=genes, var=spots (G x S layout).
     """
     assert Path(sc_path).exists(), f"sc.h5ad not found: {sc_path}"
     assert Path(st_path).exists(), f"st.h5ad not found: {st_path}"
+
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     logging.info("Load data")
     adata_sc = load_sc_adata(Path(sc_path))  # C x G
@@ -86,53 +85,64 @@ def tacco_align_data(
     logging.info("Shape p_tg: %s", p_tg.shape)
 
     # Fractions from TACCO (ensure row sums ~1), S x T
-    fractions = pd.DataFrame(
+    fractions_prob = pd.DataFrame(
         adata_st.obsm["align_result"], index=adata_st.obs_names, columns=mean_expr.index
     )
-    logging.info("Shape fractions: %s", fractions)
+    logging.info("Shape fractions: %s", fractions_prob.shape)
 
-    if deterministic_mapping:
-        # For each row (spot) in fractions, set the max value to 1 and all others to 0 (map each spot to exactly one cell type)
-        idxmax_series = fractions.idxmax(axis=1)
-        # Map column labels to integer indices
-        col_idx = fractions.columns.get_indexer(idxmax_series)
-        # build one-hot values and wrap back to DataFrame
-        one_hot_vals = np.zeros_like(fractions.values, dtype=float)
-        one_hot_vals[np.arange(len(fractions)), col_idx] = 1.0
-        one_hot = pd.DataFrame(
-            one_hot_vals, index=fractions.index, columns=fractions.columns, dtype=float
-        )
-        # replace fractions with the deterministic one-hot mapping
-        fractions = one_hot  # S x T
+    # Deterministic fractions: argmax one-hot per spot
+    idxmax_series = fractions_prob.idxmax(axis=1)
+    col_idx = fractions_prob.columns.get_indexer(idxmax_series)
+    one_hot_vals = np.zeros_like(fractions_prob.values, dtype=float)
+    one_hot_vals[np.arange(len(fractions_prob)), col_idx] = 1.0
+    fractions_det = pd.DataFrame(
+        one_hot_vals,
+        index=fractions_prob.index,
+        columns=fractions_prob.columns,
+        dtype=float,
+    )
 
     # Total counts per spot
     if issparse(adata_st.X):
         spot_counts = np.array(adata_st.X.sum(axis=1)).flatten()
     else:
         spot_counts = np.array(adata_st.X.sum(axis=1)).flatten()
-    # shape: (spots,): per spot; sum
-    C_st = fractions.to_numpy() * spot_counts[:, None]  # S x T
 
-    # 6) reconstruct spot x gene
-    recon = C_st @ p_tg  # S x G
-    assert recon.shape == (adata_st.n_obs, adata_sc.n_vars), "dims passen nicht"
+    def _build_gep(fractions: pd.DataFrame) -> AnnData:
+        C_st = fractions.to_numpy() * spot_counts[:, None]  # S x T
+        recon = C_st @ p_tg  # S x G
+        assert recon.shape == (adata_st.n_obs, adata_sc.n_vars), "dims passen nicht"
+        adata_recon = AnnData(
+            X=recon.T.astype(np.float32),
+            obs=pd.DataFrame(index=adata_sc.var_names),
+            var=pd.DataFrame(index=adata_st.obs_names),
+        )
+        adata_recon.obs_names = list(adata_sc.var_names)
+        adata_recon.var_names = list(adata_st.obs_names)
+        return adata_recon
 
-    # Build result AnnData (layout: obs = genes G, var = spots S)
-    adata_recon = AnnData(
-        X=recon.T.astype(np.float32),
-        obs=pd.DataFrame(index=adata_sc.var_names),
-        var=pd.DataFrame(index=adata_st.obs_names),
-    )
-    adata_recon.obs_names = list(adata_sc.var_names)
-    adata_recon.var_names = list(adata_st.obs_names)
+    gep_prob = _build_gep(fractions_prob)
+    gep_det = _build_gep(fractions_det)
 
-    # Write h5ad
-    output_path = Path(output_path).with_suffix(".h5ad")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    adata_recon.write_h5ad(output_path)
-    logging.info("Saved tacco GEP to %s", output_path)
+    for fractions, label in ((fractions_prob, "prob"), (fractions_det, "det")):
+        # Save mapping as AnnData (obs=cell_types, var=spots) — same layout as Tangram
+        ad_map = AnnData(
+            X=fractions.values.T.astype(np.float32),
+            obs=pd.DataFrame(index=fractions.columns),
+            var=pd.DataFrame(index=fractions.index),
+        )
+        ad_map.write_h5ad(output_folder / f"mapping_{label}.h5ad")
+        logging.info(
+            "Saved %s mapping to %s", label, output_folder / f"mapping_{label}.h5ad"
+        )
 
-    return adata_recon
+    gep_prob.write_h5ad(output_folder / "gep_prob.h5ad")
+    logging.info("Saved prob GEP to %s", output_folder / "gep_prob.h5ad")
+
+    gep_det.write_h5ad(output_folder / "gep_det.h5ad")
+    logging.info("Saved det GEP to %s", output_folder / "gep_det.h5ad")
+
+    return gep_prob, gep_det
 
 
 if __name__ == "__main__":
@@ -157,34 +167,25 @@ if __name__ == "__main__":
         "--stdata", type=Path, required=True, help="Full path to st.h5ad"
     )
     parser.add_argument(
-        "-o", "--output_path", type=str, help="Path where to store result"
-    )
-    parser.add_argument(
-        "-det",
-        "--deterministic",
-        action="store_true",
-        help="Whether to apply argmax to mapping",
-    )
-    parser.add_argument(
-        "--map-cell-types",
-        action="store_true",
-        default=False,
-        help="If set, aggregate cells by cell_type_key before mapping. Otherwise map individual cells.",
+        "-o",
+        "--output_folder",
+        type=Path,
+        required=True,
+        help="Folder where to store results",
     )
     parser.add_argument(
         "--cell_type_key",
         type=str,
         required=False,
         default="cellType",
-        help="obs column to use as cell type annotation (only used when --map-cell-types is set).",
+        help="What cell type key to load from sc data as cell type annotation to be mapped. If not provided, no cell type annotation is loaded and mapping is done cell-based.",
     )
     args = parser.parse_args()
 
     tacco_align_data(
         args.scdata,
         args.stdata,
-        deterministic_mapping=args.deterministic,
-        map_cell_types=args.map_cell_types,
+        map_cell_types=args.cell_type_key is not None,
         cell_type_key=args.cell_type_key,
-        output_path=args.output_path,
+        output_folder=args.output_folder,
     )

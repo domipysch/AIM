@@ -1,11 +1,13 @@
 #!/usr/bin/env Rscript
 
 # Run DOT alignment on a prepared dataset.
-# Reads sc.h5ad and st.h5ad; saves predicted GEP (G x S) as CSV to output_path.
-# Python converts the CSV to h5ad after this script exits.
+# Reads sc.h5ad and st.h5ad; saves all four outputs (prob + det GEP and mapping) as CSVs.
+# Python converts the CSVs to h5ad after this script exits.
 #
 # Usage:
-# Rscript run_dot.R <sc_path> <st_path> <LSO|HSO> <deterministic-mapping|probabilistic-mapping> <cellTypeKey|cellID> <output_path.csv>
+# Rscript run_dot.R <sc_path> <st_path> <LSO|HSO> <cellTypeKey|cellID> \
+#                   <gep_prob_path.csv> <gep_det_path.csv> \
+#                   <mapping_prob_path.csv> <mapping_det_path.csv>
 #
 # cellTypeKey:
 #   "cellID"        -> map individual cells (each cell is its own type)
@@ -18,21 +20,20 @@ library(stats)
 library(utils)
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 6) {
-  stop("Need 6 args: sc_path, st_path, mode (LSO|HSO), mapping_mode, cellTypeKey, output_path.")
+if (length(args) < 8) {
+  stop("Need 8 args: sc_path, st_path, mode (LSO|HSO), cellTypeKey, gep_prob_path, gep_det_path, mapping_prob_path, mapping_det_path.")
 }
-sc_path      <- args[1]
-st_path      <- args[2]
-mode         <- toupper(args[3])
-mapping_mode <- args[4]
-cellTypeKey  <- args[5]
-output_path  <- args[6]
+sc_path          <- args[1]
+st_path          <- args[2]
+mode             <- toupper(args[3])
+cellTypeKey      <- args[4]
+gep_prob_path    <- args[5]
+gep_det_path     <- args[6]
+mapping_prob_path <- args[7]
+mapping_det_path  <- args[8]
 
 if (!mode %in% c("LSO", "HSO")) {
   stop(sprintf("Invalid mode '%s'. Use 'LSO' or 'HSO'.", mode))
-}
-if (!mapping_mode %in% c("deterministic-mapping", "probabilistic-mapping")) {
-  stop(sprintf("Invalid mapping_mode '%s'.", mapping_mode))
 }
 
 # ---- Helper functions ----
@@ -158,6 +159,7 @@ rownames(ref_centroids) <- as.character(celltype_levels)
 colnames(ref_centroids) <- sc_gene_ids
 
 # ---- Create DOT object and run decomposition ----
+cat("Create DOT object...\n")
 dot.srt <- setup.srt(srt_data = srt_counts, srt_coords = srt_coords)
 dot.ref <- setup.ref(ref_data = ref_counts, ref_annotations = cell_types, 1)
 dot     <- create.DOT(dot.srt, dot.ref)
@@ -165,44 +167,50 @@ dot     <- create.DOT(dot.srt, dot.ref)
 if (mode == "HSO") {
   cat("Running DOT in high-resolution mode (HSO)...\n")
   dot <- run.DOT.highresolution(dot)  # dot@weights: S x T
-
-  if (identical(mapping_mode, "deterministic-mapping")) {
-    cat("Applying deterministic mapping...\n")
-    weights_mat  <- as.matrix(dot@weights)
-    finite_mask  <- is.finite(weights_mat)
-    weights_repl <- weights_mat
-    weights_repl[!finite_mask] <- -Inf
-    argmax_idx   <- max.col(weights_repl, ties.method = "first")
-    one_hot      <- matrix(0, nrow = nrow(weights_mat), ncol = ncol(weights_mat),
-                           dimnames = dimnames(weights_mat))
-    one_hot[cbind(seq_len(nrow(weights_mat)), argmax_idx)] <- 1
-    rows_no_finite <- rowSums(finite_mask) == 0
-    if (any(rows_no_finite)) one_hot[rows_no_finite, ] <- 0
-    dot@weights <- one_hot
-    cat("Deterministic mapping applied.\n")
-  }
 } else {
   cat("Running DOT in low-resolution mode (LSO)...\n")
   dot <- run.DOT.lowresolution(dot, ratios_weight = 0, max_spot_size = 20, verbose = FALSE)
   # dot@weights: S x T
 }
 
-# ---- Compute GEP (G x S) ----
-# ref_centroids: T x G,  dot@weights: S x T
-expr_genes_by_spots <- t(ref_centroids) %*% t(dot@weights)  # G x S
-expr_genes_by_spots <- as.matrix(expr_genes_by_spots)
-rownames(expr_genes_by_spots) <- sc_gene_ids
-colnames(expr_genes_by_spots) <- spot_ids
+# ---- Derive probabilistic and deterministic weights ----
+weights_prob <- as.matrix(dot@weights)  # S x T
 
-# ---- Write output CSV (G x S) ----
-out_dir <- dirname(output_path)
+# Deterministic: argmax one-hot per spot
+finite_mask  <- is.finite(weights_prob)
+weights_repl <- weights_prob
+weights_repl[!finite_mask] <- -Inf
+argmax_idx   <- max.col(weights_repl, ties.method = "first")
+weights_det  <- matrix(0, nrow(weights_prob), ncol(weights_prob),
+                       dimnames = dimnames(weights_prob))
+weights_det[cbind(seq_len(nrow(weights_prob)), argmax_idx)] <- 1
+rows_no_finite <- rowSums(finite_mask) == 0
+if (any(rows_no_finite)) weights_det[rows_no_finite, ] <- 0
+
+# ---- Helper: compute and write GEP CSV (G x S) ----
+write_gep <- function(weights, path) {
+  gep <- t(ref_centroids) %*% t(weights)  # G x S
+  gep <- as.matrix(gep)
+  rownames(gep) <- sc_gene_ids
+  colnames(gep) <- spot_ids
+  out_df <- data.frame(GEP = rownames(gep), gep, check.names = FALSE, stringsAsFactors = FALSE)
+  numeric_cols <- vapply(out_df, is.numeric, logical(1))
+  out_df[numeric_cols] <- lapply(out_df[numeric_cols], function(x) round(x, 4))
+  write.csv(out_df, file = path, row.names = FALSE, quote = FALSE)
+}
+
+# ---- Write all four outputs ----
+out_dir <- dirname(gep_prob_path)
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
-out_df       <- data.frame(GEP = rownames(expr_genes_by_spots),
-                            expr_genes_by_spots,
-                            check.names = FALSE, stringsAsFactors = FALSE)
-numeric_cols <- vapply(out_df, is.numeric, logical(1))
-out_df[numeric_cols] <- lapply(out_df[numeric_cols], function(x) round(x, 4))
-write.csv(out_df, file = output_path, row.names = FALSE, quote = FALSE)
+write_gep(weights_prob, gep_prob_path)
+cat("Done. GEP (prob) written to:", gep_prob_path, "\n")
 
-cat("Done. Output written to:", output_path, "\n")
+write_gep(weights_det, gep_det_path)
+cat("Done. GEP (det) written to:", gep_det_path, "\n")
+
+write.csv(as.data.frame(weights_prob), file = mapping_prob_path, quote = FALSE)
+cat("Done. Mapping (prob) written to:", mapping_prob_path, "\n")
+
+write.csv(as.data.frame(weights_det), file = mapping_det_path, quote = FALSE)
+cat("Done. Mapping (det) written to:", mapping_det_path, "\n")

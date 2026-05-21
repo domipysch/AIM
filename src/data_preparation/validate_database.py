@@ -7,6 +7,13 @@ import anndata as ad
 from scipy.sparse import issparse
 
 
+def _colored(text: str, status: str) -> str:
+    codes = {"OK": "\033[92m", "WARN": "\033[93m", "ERROR": "\033[91m"}
+    reset = "\033[0m"
+    code = codes.get(status, "")
+    return f"{code}{text}{reset}"
+
+
 def is_intable(x) -> bool:
     try:
         if isinstance(x, (int, np.integer)):
@@ -25,205 +32,315 @@ def to_int_safe(x) -> int:
     raise ValueError("not intable")
 
 
-def validate_dataset(
-    name: str, folder: Path, index_row: pd.Series
-) -> tuple[list[str], list[str]]:
-    """
-    Validate a single dataset folder against the expected h5ad structure.
+def _load_X(adata: ad.AnnData) -> np.ndarray:
+    X = adata.X
+    if issparse(X):
+        return X.toarray()
+    return np.asarray(X)
 
-    Args:
-        name: Dataset name (used in error messages).
-        folder: Path to the dataset folder.
-        index_row: Corresponding row from index.csv with metadata (counts, flags).
 
-    Returns:
-        A tuple (errors, warnings), each a list of message strings.
-    """
+def _raw_count_sanity(X: np.ndarray, label: str) -> list[str]:
+    warns: list[str] = []
+    row_sums = X.sum(axis=1)
+    if row_sums.mean() > 0:
+        cv = row_sums.std() / row_sums.mean()
+        if cv < 0.01:
+            warns.append(
+                f"{label}: X appears library-size normalized (row-sum CV={cv:.4f})"
+            )
+    if X.max() < 20:
+        warns.append(f"{label}: X max={X.max():.3f} — may be log1p-transformed")
+    return warns
+
+
+def _check_gene_names_uppercase(adata: ad.AnnData, label: str) -> list[str]:
+    non_upper = [g for g in adata.var_names if g != g.upper()]
+    if non_upper:
+        return [
+            f"{label}: {len(non_upper)} gene names are not uppercase "
+            f"(e.g. {non_upper[:3]}) — run normalize_gene_names.py"
+        ]
+    return []
+
+
+def _check_gene_names_unique(adata: ad.AnnData, label: str) -> list[str]:
+    import pandas as pd
+
+    counts = pd.Series(adata.var_names.tolist()).value_counts()
+    dups = counts[counts > 1]
+    if not dups.empty:
+        examples = dups.index.tolist()[:3]
+        return [
+            f"{label}: {len(dups)} duplicate gene name(s) "
+            f"(e.g. {examples}) — rename or remove duplicates"
+        ]
+    return []
+
+
+def validate_sc(
+    name: str, sc_dir: Path, index_row: pd.Series
+) -> tuple[list[str], list[str], ad.AnnData | None]:
     errors: list[str] = []
     warns: list[str] = []
 
-    if not folder.exists() or not folder.is_dir():
-        errors.append(f"Folder missing: {folder}")
-        return errors, warns
+    h5ad_path = sc_dir / f"{name}.h5ad"
+    if not h5ad_path.exists():
+        errors.append(f"sc: missing file {h5ad_path}")
+        return errors, warns, None
 
-    sc_path = folder / "sc.h5ad"
-    st_path = folder / "st.h5ad"
-
-    if not sc_path.exists():
-        errors.append("Missing file: sc.h5ad")
-    if not st_path.exists():
-        errors.append("Missing file: st.h5ad")
-
-    if errors:
-        return errors, warns
-
-    # --- Load sc.h5ad ---
     try:
-        adata_sc = ad.read_h5ad(sc_path)
+        adata = ad.read_h5ad(h5ad_path)
     except Exception as e:
-        errors.append(f"sc.h5ad: cannot be read ({e})")
-        return errors, warns
+        errors.append(f"sc: cannot read {h5ad_path} ({e})")
+        return errors, warns, None
 
-    # --- Load st.h5ad ---
-    try:
-        adata_st = ad.read_h5ad(st_path)
-    except Exception as e:
-        errors.append(f"st.h5ad: cannot be read ({e})")
-        return errors, warns
+    errors.extend(_check_gene_names_uppercase(adata, "sc"))
+    errors.extend(_check_gene_names_unique(adata, "sc"))
 
-    # --- Validate sc.h5ad ---
+    X = _load_X(adata)
 
-    # Check for NaN or negative values in scRNA expression
-    X_sc = adata_sc.X
-    if issparse(X_sc):
-        X_sc = X_sc.toarray()
-    else:
-        X_sc = np.asarray(X_sc)
+    if np.isnan(X).any():
+        errors.append("sc: NaN values in X")
+    elif (X < 0).any():
+        errors.append("sc: negative values in X")
 
-    if np.isnan(X_sc).any():
-        errors.append("sc.h5ad: NaN values found in X")
-    elif (X_sc < 0).any():
-        errors.append("sc.h5ad: negative values found in X")
+    warns.extend(_raw_count_sanity(X, "sc"))
 
-    # Check cell type annotation if flag is set
-    ctype_flag = str(index_row.get("CellTypeAnnotationsExist", "")).strip()
-    if ctype_flag not in ("", "0", "False", "false", "None"):
-        if "cellType" not in adata_sc.obs.columns:
-            warns.append(
-                "CellTypeAnnotationsExist is set, but 'cellType' not found in sc.h5ad obs"
-            )
-
-    # --- Validate st.h5ad ---
-
-    # Check obsm["spatial"]
-    if "spatial" not in adata_st.obsm:
-        errors.append("st.h5ad: obsm['spatial'] is missing")
-    else:
-        spatial = adata_st.obsm["spatial"]
-        if spatial.shape != (adata_st.n_obs, 2):
-            errors.append(
-                f"st.h5ad: obsm['spatial'] shape {spatial.shape} != ({adata_st.n_obs}, 2)"
-            )
-
-    # Check for NaN or negative values in ST expression
-    X_st = adata_st.X
-    if issparse(X_st):
-        X_st = X_st.toarray()
-    else:
-        X_st = np.asarray(X_st)
-
-    if np.isnan(X_st).any():
-        errors.append("st.h5ad: NaN values found in X")
-    elif (X_st < 0).any():
-        errors.append("st.h5ad: negative values found in X")
-
-    # --- Cross-check counts from index.csv ---
-    checks = [
-        ("scData_CellCount", "cells", lambda: adata_sc.n_obs),
-        ("scData_GeneCount", "sc genes", lambda: adata_sc.n_vars),
-        ("stData_SpotCount", "spots", lambda: adata_st.n_obs),
-        ("stData_GeneCount", "st genes", lambda: adata_st.n_vars),
-    ]
-    for idx_col, label, getter in checks:
-        val = index_row.get(idx_col, "")
-        if is_intable(val):
-            expected = to_int_safe(val)
-            actual = getter()
-            if expected != actual:
+    # CellTypeKey0/1/2 + NumberCellTypes0/1/2
+    for i in range(3):
+        key_col = f"CellTypeKey{i}"
+        num_col = f"NumberCellTypes{i}"
+        key_val = str(index_row.get(key_col, "")).strip()
+        if not key_val:
+            break
+        if key_val not in adata.obs.columns:
+            errors.append(f"sc: '{key_val}' (from {key_col}) not found in obs columns")
+        else:
+            actual_n = adata.obs[key_val].nunique()
+            num_val = str(index_row.get(num_col, "")).strip()
+            if not num_val:
+                warns.append(f"sc: {num_col} not set (expected count for '{key_val}')")
+            elif is_intable(num_val) and to_int_safe(num_val) != actual_n:
                 warns.append(
-                    f"index.csv {idx_col}={expected} != actual {label}={actual}"
+                    f"sc: {num_col}={num_val} != actual unique values in '{key_val}'={actual_n}"
                 )
+
+    # Count cross-checks
+    for idx_col, label, actual in [
+        ("CellCount", "cells", adata.n_obs),
+        ("GeneCount", "genes", adata.n_vars),
+    ]:
+        val = index_row.get(idx_col, "")
+        if is_intable(val) and to_int_safe(val) != actual:
+            warns.append(f"sc: index.csv {idx_col}={val} != actual {label}={actual}")
+
+    return errors, warns, adata
+
+
+def validate_st(
+    name: str, st_dir: Path, index_row: pd.Series
+) -> tuple[list[str], list[str], ad.AnnData | None]:
+    errors: list[str] = []
+    warns: list[str] = []
+
+    h5ad_path = st_dir / f"{name}.h5ad"
+    if not h5ad_path.exists():
+        errors.append(f"st: missing file {h5ad_path}")
+        return errors, warns, None
+
+    try:
+        adata = ad.read_h5ad(h5ad_path)
+    except Exception as e:
+        errors.append(f"st: cannot read {h5ad_path} ({e})")
+        return errors, warns, None
+
+    if "spatial" not in adata.obsm:
+        errors.append("st: obsm['spatial'] is missing")
+    else:
+        spatial = adata.obsm["spatial"]
+        if spatial.shape != (adata.n_obs, 2):
+            errors.append(
+                f"st: obsm['spatial'] shape {spatial.shape} != ({adata.n_obs}, 2)"
+            )
+
+    errors.extend(_check_gene_names_uppercase(adata, "st"))
+    errors.extend(_check_gene_names_unique(adata, "st"))
+
+    X = _load_X(adata)
+
+    if np.isnan(X).any():
+        errors.append("st: NaN values in X")
+    elif (X < 0).any():
+        errors.append("st: negative values in X")
+
+    warns.extend(_raw_count_sanity(X, "st"))
+
+    # Count cross-checks
+    for idx_col, label, actual in [
+        ("SpotCount", "spots", adata.n_obs),
+        ("GeneCount", "genes", adata.n_vars),
+    ]:
+        val = index_row.get(idx_col, "")
+        if is_intable(val) and to_int_safe(val) != actual:
+            warns.append(f"st: index.csv {idx_col}={val} != actual {label}={actual}")
+
+    return errors, warns, adata
+
+
+def validate_pair(
+    pair_id: str,
+    sc_name: str,
+    st_name: str,
+    adata_sc: ad.AnnData,
+    adata_st: ad.AnnData,
+    index_row: pd.Series,
+) -> tuple[list[str], list[str]]:
+    errors: list[str] = []
+    warns: list[str] = []
+
+    shared = adata_sc.var_names.intersection(adata_st.var_names)
+    n_shared = len(shared)
+
+    if n_shared <= 10:
+        warns.append(
+            f"pair {pair_id} ({sc_name} × {st_name}): "
+            f"only {n_shared} shared genes (expected > 10)"
+        )
+
+    val = index_row.get("NumberSharedGenes", "")
+    if is_intable(val) and to_int_safe(val) != n_shared:
+        warns.append(
+            f"pair {pair_id}: NumberSharedGenes={val} != actual shared genes={n_shared}"
+        )
 
     return errors, warns
 
 
 def main() -> None:
-
     parser = argparse.ArgumentParser(
-        description="Validates datasets listed in index.csv (h5ad format)"
-    )
-    parser.add_argument(
-        "--index",
-        "-i",
-        type=Path,
-        default=Path("/Users/domi/Dev/MPA_Workspace/MPA_DATA/index.csv"),
+        description="Validates scRNA and ST datasets listed in index CSVs (h5ad format)"
     )
     parser.add_argument(
         "--data-root",
         "-d",
         type=Path,
-        default=None,
-        help="Root folder where dataset folders live. Falls back to the index.csv parent directory if not provided.",
+        default=Path(r"C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets"),
+        help="Root folder containing scRNA/, ST/, pairs.csv, scRNA/index.csv, ST/index.csv",
     )
     args = parser.parse_args()
 
-    index_path: Path = args.index
-    if not index_path.exists():
-        print(f"ERROR: index.csv not found: {index_path}", file=sys.stderr)
-        sys.exit(2)
+    root: Path = args.data_root
+    sc_dir = root / "scRNA"
+    st_dir = root / "ST"
+    pairs_path = root / "pairs.csv"
+    sc_index_path = sc_dir / "index.csv"
+    st_index_path = st_dir / "index.csv"
+
+    for p in (pairs_path, sc_index_path, st_index_path):
+        if not p.exists():
+            print(f"ERROR: required file not found: {p}", file=sys.stderr)
+            sys.exit(2)
 
     try:
-        index_df = pd.read_csv(index_path, dtype=str).fillna("")
+        pairs_df = pd.read_csv(pairs_path, dtype=str).fillna("")
+        sc_index = pd.read_csv(sc_index_path, dtype=str).fillna("").set_index("Name")
+        st_index = pd.read_csv(st_index_path, dtype=str).fillna("").set_index("Name")
     except Exception as e:
-        print(f"ERROR: index.csv cannot be read: {e}", file=sys.stderr)
+        print(f"ERROR: cannot read index files: {e}", file=sys.stderr)
         sys.exit(2)
 
-    if args.data_root:
-        root = args.data_root
-    else:
-        root = index_path.parent
+    all_errors: dict[str, list[str]] = {}
+    all_warns: dict[str, list[str]] = {}
 
-    overall_errors: dict[str, list[str]] = {}
-    overall_warns: dict[str, list[str]] = {}
+    adata_sc_cache: dict[str, ad.AnnData | None] = {}
+    adata_st_cache: dict[str, ad.AnnData | None] = {}
 
-    for _, row in index_df.iterrows():
-        name = row.get("Name", "").strip()
-        if not name:
+    # --- Validate scRNA datasets ---
+    print("=== scRNA datasets ===")
+    for name in sc_index.index:
+        row = sc_index.loc[name]
+        errs, warns, adata = validate_sc(name, sc_dir, row)
+        adata_sc_cache[name] = adata
+        if errs:
+            all_errors[f"sc:{name}"] = errs
+        if warns:
+            all_warns[f"sc:{name}"] = warns
+        status = "OK" if (not errs and not warns) else ("WARN" if not errs else "ERROR")
+        print(
+            f"  {name}: {_colored(status, status)} (errors={len(errs)}, warns={len(warns)})"
+        )
+
+    # --- Validate ST datasets ---
+    print("\n=== ST datasets ===")
+    for name in st_index.index:
+        row = st_index.loc[name]
+        errs, warns, adata = validate_st(name, st_dir, row)
+        adata_st_cache[name] = adata
+        if errs:
+            all_errors[f"st:{name}"] = errs
+        if warns:
+            all_warns[f"st:{name}"] = warns
+        status = "OK" if (not errs and not warns) else ("WARN" if not errs else "ERROR")
+        print(
+            f"  {name}: {_colored(status, status)} (errors={len(errs)}, warns={len(warns)})"
+        )
+
+    # --- Validate pairs ---
+    print("\n=== Pairs ===")
+    for _, row in pairs_df.iterrows():
+        pair_id = row.get("PairID", "?").strip()
+        sc_name = row.get("scName", "").strip()
+        st_name = row.get("stName", "").strip()
+
+        adata_sc = adata_sc_cache.get(sc_name)
+        adata_st = adata_st_cache.get(st_name)
+
+        if adata_sc is None:
+            errs = [
+                f"pair: scRNA '{sc_name}' could not be loaded (see sc errors above)"
+            ]
+            all_errors[f"pair:{pair_id}"] = errs
+            print(
+                f"  pair {pair_id} ({sc_name} × {st_name}): {_colored('ERROR', 'ERROR')} (errors=1, warns=0)"
+            )
+            continue
+        if adata_st is None:
+            errs = [f"pair: ST '{st_name}' could not be loaded (see st errors above)"]
+            all_errors[f"pair:{pair_id}"] = errs
+            print(
+                f"  pair {pair_id} ({sc_name} × {st_name}): {_colored('ERROR', 'ERROR')} (errors=1, warns=0)"
+            )
             continue
 
-        folder = root / name
-        errors, warns = validate_dataset(name, folder, row)
-        if errors:
-            overall_errors[name] = errors
+        errs, warns = validate_pair(pair_id, sc_name, st_name, adata_sc, adata_st, row)
+        if errs:
+            all_errors[f"pair:{pair_id}"] = errs
         if warns:
-            overall_warns[name] = warns
-
-        status = (
-            "OK"
-            if (not errors and not warns)
-            else ("WARN" if (not errors and warns) else "ERROR")
+            all_warns[f"pair:{pair_id}"] = warns
+        status = "OK" if (not errs and not warns) else ("WARN" if not errs else "ERROR")
+        print(
+            f"  pair {pair_id} ({sc_name} × {st_name}): {_colored(status, status)} (errors={len(errs)}, warns={len(warns)})"
         )
-        print(f"{name}: {status} (errors={len(errors)}, warns={len(warns)})")
 
-    if overall_warns:
+    # --- Summary ---
+    if all_warns:
         print("\nWARNINGS:")
-        for name, w in overall_warns.items():
-            print(f"- {name}:")
-            for msg in w:
+        for key, msgs in all_warns.items():
+            print(f"  {key}:")
+            for msg in msgs:
                 print(f"    - {msg}")
 
-    if overall_errors:
+    if all_errors:
         print("\nERRORS:", file=sys.stderr)
-        for name, err in overall_errors.items():
-            print(f"- {name}:", file=sys.stderr)
-            for msg in err:
+        for key, msgs in all_errors.items():
+            print(f"  {key}:", file=sys.stderr)
+            for msg in msgs:
                 print(f"    - {msg}", file=sys.stderr)
         sys.exit(1)
     else:
-        print("\nAll datasets validated successfully (no errors).")
+        print("\nAll datasets and pairs validated successfully (no errors).")
         sys.exit(0)
 
 
 if __name__ == "__main__":
-    """
-    Validates datasets listed in index.csv against the h5ad format:
-    - Existence of sc.h5ad and st.h5ad
-    - st.h5ad: obsm['spatial'] shape
-    - Both: X values >= 0, no NaNs
-    - If CellTypeAnnotationsExist is set: verifies 'cellType' column in sc.h5ad obs
-    - Count cross-checks against index.csv
-
-    Usage: python validate_database.py --index /path/to/index.csv --data-root /path/to/data_root
-    Exit code != 0 on errors.
-    """
     main()

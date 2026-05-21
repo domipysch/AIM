@@ -92,7 +92,7 @@ DOTr is not available on conda-forge and must be installed from GitHub after cre
 ```bash
 conda env create -f src/aligners/environment_dot.yml
 conda activate dot_env
-Rscript -e "devtools::install_github('saezlab/DOT')"
+Rscript -e "remotes::install_github('saezlab/DOT')"
 ```
 
 ## Usage

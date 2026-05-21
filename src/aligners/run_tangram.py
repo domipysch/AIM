@@ -17,12 +17,11 @@ def tangram_align_data(
     sc_path: Path,
     st_path: Path,
     normalize_and_log: bool,
-    deterministic_mapping: bool,
     compute_marker_genes: bool,
     map_clusters: bool,
     cell_type_key: str,
-    output_path: Path,
-) -> AnnData:
+    output_folder: Path,
+) -> tuple[AnnData, AnnData]:
     """
     Run Tangram alignment on a prepared dataset.
     Saves prediction GEP CSV to output_path.
@@ -31,12 +30,10 @@ def tangram_align_data(
         sc_path: Full path to sc.h5ad
         st_path: Full path to st.h5ad
         normalize_and_log: Should the sc and st input data be normalized and log-transformed before alignment?
-        deterministic_mapping: Should the cell-to-spot mapping be turned deterministic before multiplication wit sc-data?
-            (one cell type per spot, one hot encoding)
         compute_marker_genes: Whether to compute marker genes (as proposed in Tangram Tutorials) or use all genes.
         map_clusters: Whether to use cluster-based mapping (cell types) or cell-based mapping.
         cell_type_key: What cell type key to load from sc data as cell type annotation.
-        output_path: Full path where to save the resulting GEP CSV.
+        output_folder: Folder where to store results to.
 
     Returns: -
     """
@@ -52,8 +49,7 @@ def tangram_align_data(
     logger.info(f"Spatial Data: {adata_st.n_obs} spots x {adata_st.n_vars} genes")
 
     # Create directory if it does not exist
-    output_dir = os.path.dirname(output_path)
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
 
     # Step 1 (optional): Compute marker genes (optional, speeds up mapping)
     if compute_marker_genes:
@@ -103,7 +99,7 @@ def tangram_align_data(
     # Step 3: Mapping
     logger.info("Map cells to spots with Tangram")
     if map_clusters:
-        ad_map = tg.map_cells_to_space(
+        ad_map_prob = tg.map_cells_to_space(
             adata_sc_map,
             adata_st,
             mode="clusters",
@@ -112,10 +108,10 @@ def tangram_align_data(
             num_epochs=500,
             device="cpu",
         )  # T x S
-        assert ad_map.n_obs == len(adata_sc_map.obs[cell_type_key].unique())
-        assert ad_map.n_vars == adata_st.n_obs
+        assert ad_map_prob.n_obs == len(adata_sc_map.obs[cell_type_key].unique())
+        assert ad_map_prob.n_vars == adata_st.n_obs
     else:
-        ad_map = tg.map_cells_to_space(
+        ad_map_prob = tg.map_cells_to_space(
             adata_sc_map,
             adata_st,
             mode="cells",
@@ -125,69 +121,64 @@ def tangram_align_data(
             lambda_g1=1,
             # lambda_g2=1,
         )  # C x S
-        assert ad_map.n_obs == adata_sc_map.n_obs
-        assert ad_map.n_vars == adata_st.n_obs
+        assert ad_map_prob.n_obs == adata_sc_map.n_obs
+        assert ad_map_prob.n_vars == adata_st.n_obs
 
-    # Step 4 (optional): Apply one-hot encoding to mapping: Only one cell / cell type per spot
-    logger.info(
-        "Apply deterministic mapping"
-        if deterministic_mapping
-        else "Keep probabilistic mapping"
-    )
-    if deterministic_mapping:
-        # For each column (spot) in ad_map, set the max value to 1 and all others to 0 (map spot to exactly one cell)
-        if issparse(ad_map.X):
-            mat = ad_map.X.toarray()
-        else:
-            mat = ad_map.X.copy()
-        argmax_idx = np.argmax(
-            mat, axis=0
-        )  # for each spot (column), index of max cell / cell type
-        one_hot = np.zeros_like(mat, dtype=float)
-        one_hot[argmax_idx, np.arange(mat.shape[1])] = 1.0
-        ad_map.X = one_hot
+    # Step 4: Make coppy of mapping: Apply one-hot encoding to mapping: Only one cell / cell type per spot
+    ad_map_det = ad_map_prob.copy()
 
-    # Store mapping matrix as h5ad
-    output_path = Path(output_path).with_suffix(".h5ad")
-    mapping_path_h5ad = output_path.with_name(
-        output_path.stem.replace("_GEP", "_mapping") + ".h5ad"
-    )
-    ad_map.write_h5ad(mapping_path_h5ad)
-    logger.info("Saved mapping to %s", mapping_path_h5ad)
-
-    # Step 5: Compute Z' out of the mapping (expected gene expression per spot, scRNA data weighted by mapping)
-    logger.info("Project gene expression to spatial spots")
-    ad_ge = tg.project_genes(
-        adata_map=ad_map,
-        adata_sc=adata_sc,
-        cluster_label=cell_type_key if map_clusters else None,
-    )  # S x G
-
-    # Transpose to G x S
-    ad_ge = ad_ge.transpose()  # now G x S
-    assert ad_ge.n_obs == adata_sc.n_vars
-    assert ad_ge.n_vars == adata_st.n_obs
-
-    # Export ad_ge to CSV
-    # - Rows: Genes
-    # - Columns: Spots
-    # - Top left cell = "GEP"
-    if issparse(ad_ge.X):
-        expr = ad_ge.X.A
+    # For each column (spot) in ad_map, set the max value to 1 and all others to 0 (map spot to exactly one cell)
+    if issparse(ad_map_det.X):
+        mat = ad_map_det.X.toarray()
     else:
-        expr = ad_ge.X
+        mat = ad_map_det.X.copy()
+    argmax_idx = np.argmax(
+        mat, axis=0
+    )  # for each spot (column), index of max cell / cell type
+    one_hot = np.zeros_like(mat, dtype=float)
+    one_hot[argmax_idx, np.arange(mat.shape[1])] = 1.0
+    ad_map_det.X = one_hot
 
-    # Check: Rows = Genes, Columns = Spots
-    assert expr.shape == (adata_sc.n_vars, adata_st.n_obs), "dims passen nicht"
+    for ad_map, mapping_type in ((ad_map_prob, "prob"), (ad_map_det, "det")):
 
-    # Make obs_names uppercase (gene names in uppercase in input data, also in output)
-    ad_ge.obs_names = [s.upper() for s in ad_ge.obs_names]
+        # Store mapping matrix as h5ad
+        mapping_path_h5ad = output_folder / f"mapping_{mapping_type}.h5ad"
+        ad_map.write_h5ad(mapping_path_h5ad)
+        logger.info(f"Saved {mapping_type} mapping to %s", mapping_path_h5ad)
 
-    # Step 6: Write h5ad (layout: obs = genes G, var = spots S)
-    logger.info(f"Write result GEP to h5ad.")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    ad_ge.write_h5ad(output_path)
-    logger.info(f"Saved tangram GEP to {output_path}")
+        # Compute Z' out of the mapping (expected gene expression per spot, scRNA data weighted by mapping)
+        logger.info("Project gene expression to spatial spots")
+        ad_ge = tg.project_genes(
+            adata_map=ad_map,
+            adata_sc=adata_sc,
+            cluster_label=cell_type_key if map_clusters else None,
+        )  # S x G
+
+        # Transpose to G x S
+        ad_ge = ad_ge.transpose()  # now G x S
+        assert ad_ge.n_obs == adata_sc.n_vars
+        assert ad_ge.n_vars == adata_st.n_obs
+
+        # Export ad_ge to CSV
+        # - Rows: Genes
+        # - Columns: Spots
+        # - Top left cell = "GEP"
+        if issparse(ad_ge.X):
+            expr = ad_ge.X.A
+        else:
+            expr = ad_ge.X
+
+        # Check: Rows = Genes, Columns = Spots
+        assert expr.shape == (adata_sc.n_vars, adata_st.n_obs), "dims passen nicht"
+
+        # Make obs_names uppercase (gene names in uppercase in input data, also in output)
+        ad_ge.obs_names = [s.upper() for s in ad_ge.obs_names]
+
+        # Write resulting GEP h5ad (layout: obs = genes G, var = spots S)
+        logger.info(f"Write result GEP to h5ad.")
+        gep_path_h5ad = output_folder / f"gep_{mapping_type}.h5ad"
+        ad_ge.write_h5ad(gep_path_h5ad)
+        logger.info(f"Saved {mapping_type} tangram GEP to {gep_path_h5ad}")
 
     return ad_ge
 
@@ -213,19 +204,13 @@ if __name__ == "__main__":
         "--stdata", type=Path, required=True, help="Full path to st.h5ad"
     )
     parser.add_argument(
-        "-o", "--output_path", type=str, help="Path where to store result"
+        "-o", "--output_folder", type=Path, help="Path where to store result"
     )
     parser.add_argument(
         "-nal",
         "--normalize_and_log",
         action="store_true",
         help="Whether to normalize and log input data beforehand",
-    )
-    parser.add_argument(
-        "-det",
-        "--deterministic",
-        action="store_true",
-        help="Whether to apply argmax to mapping",
     )
     parser.add_argument(
         "--compute_marker_genes",
@@ -246,9 +231,8 @@ if __name__ == "__main__":
         args.scdata,
         args.stdata,
         normalize_and_log=args.normalize_and_log,
-        deterministic_mapping=args.deterministic,
         compute_marker_genes=args.compute_marker_genes,
         map_clusters=args.cell_type_key is not None,
         cell_type_key=args.cell_type_key,
-        output_path=args.output_path,
+        output_folder=args.output_folder,
     )

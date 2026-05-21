@@ -5,7 +5,6 @@ import shutil
 import logging
 import numpy as np
 import pandas as pd
-import anndata as ad
 from anndata import AnnData
 from pathlib import Path
 
@@ -29,62 +28,79 @@ def _find_rscript():
 def dot_align_data(
     sc_path: Path,
     st_path: Path,
-    mode: str,
-    mapping_mode: str,
-    map_cell_types: bool,
     cell_type_key: str,
-    output_path: Path,
-) -> AnnData:
+    output_folder: Path,
+) -> tuple[AnnData, AnnData]:
     """
     Run DOT alignment by calling run_dot.R via Rscript.
-    Saves the resulting GEP as h5ad to output_path and returns it.
+    Saves gep_prob.h5ad, gep_det.h5ad, mapping_prob.h5ad, mapping_det.h5ad
+    to output_folder and returns (gep_prob, gep_det).
 
     Args:
         sc_path: Full path to sc.h5ad.
         st_path: Full path to st.h5ad.
-        mode: "LSO" or "HSO"
-        mapping_mode: "deterministic-mapping" or "probabilistic-mapping"
-        map_cell_types: If True, aggregate cells by cell_type_key before mapping.
-                        If False, map individual cells (uses cellID as the annotation key).
-        cell_type_key: obs column to use as annotation when map_cell_types=True.
-        output_path: Output path for the resulting GEP h5ad (suffix forced to .h5ad)
+        cell_type_key: obs column to use as annotation; pass "cellID" to map individual cells.
+        output_folder: Folder where all outputs are written.
 
     Returns:
-        AnnData with obs=genes, var=spots (G x S layout)
+        Tuple (gep_prob, gep_det), each AnnData with obs=genes, var=spots (G x S layout).
     """
-    annotation_key = cell_type_key if map_cell_types else "cellID"
+    annotation_key = cell_type_key if cell_type_key else "cellID"
 
-    output_path = Path(output_path).with_suffix(".h5ad")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_folder = Path(output_folder)
+    output_folder.mkdir(parents=True, exist_ok=True)
 
-    # R can only write CSV reliably; use a sidecar path for the R output
-    csv_path = output_path.with_suffix(".csv")
+    gep_prob_csv = output_folder / "gep_prob.csv"
+    gep_det_csv = output_folder / "gep_det.csv"
+    map_prob_csv = output_folder / "mapping_prob.csv"
+    map_det_csv = output_folder / "mapping_det.csv"
 
     cmd = [
         _find_rscript(),
         R_SCRIPT,
         str(sc_path),
         str(st_path),
-        mode,
-        mapping_mode,
+        "HSO",
         annotation_key,
-        str(csv_path),
+        str(gep_prob_csv),
+        str(gep_det_csv),
+        str(map_prob_csv),
+        str(map_det_csv),
     ]
     logger.info("Running DOT via R: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
-    # Convert R-written CSV (G x S, index col = gene names) to h5ad
-    df = pd.read_csv(csv_path, header=0, index_col=0)
-    X = np.asarray(df.values, dtype=np.float32)
-    adata = AnnData(
-        X=X,
-        obs=pd.DataFrame(index=df.index),
-        var=pd.DataFrame(index=df.columns),
-    )
-    adata.write_h5ad(output_path)
-    logger.info("Saved DOT GEP to %s", output_path)
+    def _csv_to_gep_h5ad(csv_path: Path, h5ad_path: Path) -> AnnData:
+        df = pd.read_csv(csv_path, header=0, index_col=0)
+        adata = AnnData(
+            X=np.asarray(df.values, dtype=np.float32),
+            obs=pd.DataFrame(index=df.index),
+            var=pd.DataFrame(index=df.columns),
+        )
+        adata.write_h5ad(h5ad_path)
+        csv_path.unlink()
+        return adata
 
-    return adata
+    def _csv_to_mapping_h5ad(csv_path: Path, h5ad_path: Path) -> AnnData:
+        # R writes weights as S×T (rows=spots, cols=cell_types)
+        # Transpose to T×S to match Tangram/TACCO layout (obs=cell_types, var=spots)
+        df = pd.read_csv(csv_path, header=0, index_col=0)
+        adata = AnnData(
+            X=np.asarray(df.values.T, dtype=np.float32),
+            obs=pd.DataFrame(index=df.columns),
+            var=pd.DataFrame(index=df.index),
+        )
+        adata.write_h5ad(h5ad_path)
+        csv_path.unlink()
+        return adata
+
+    gep_prob = _csv_to_gep_h5ad(gep_prob_csv, output_folder / "gep_prob.h5ad")
+    gep_det = _csv_to_gep_h5ad(gep_det_csv, output_folder / "gep_det.h5ad")
+    _csv_to_mapping_h5ad(map_prob_csv, output_folder / "mapping_prob.h5ad")
+    _csv_to_mapping_h5ad(map_det_csv, output_folder / "mapping_det.h5ad")
+
+    logger.info("All DOT outputs written to %s", output_folder)
+    return gep_prob, gep_det
 
 
 if __name__ == "__main__":
@@ -100,37 +116,24 @@ if __name__ == "__main__":
         "--stdata", type=Path, required=True, help="Full path to st.h5ad"
     )
     parser.add_argument(
-        "-m", "--mode", default="HSO", choices=["LSO", "HSO"], help="Resolution mode"
-    )
-    parser.add_argument(
-        "--mapping",
-        default="deterministic-mapping",
-        choices=["deterministic-mapping", "probabilistic-mapping"],
-        help="Mapping mode",
-    )
-    parser.add_argument(
-        "--map-cell-types",
-        action="store_true",
-        default=False,
-        help="If set, aggregate cells by cell_type_key before mapping. Otherwise map individual cells.",
-    )
-    parser.add_argument(
-        "-k",
-        "--cell-type-key",
+        "--cell_type_key",
+        type=str,
+        required=False,
         default="cellType",
-        help="obs column to use as annotation when --map-cell-types is set.",
+        help="What cell type key to load from sc data as cell type annotation to be mapped. If not provided, no cell type annotation is loaded and mapping is done cell-based.",
     )
     parser.add_argument(
-        "-o", "--output", type=Path, required=True, help="Output path for GEP h5ad"
+        "-o",
+        "--output_folder",
+        type=Path,
+        required=True,
+        help="Folder where to store results",
     )
     args = parser.parse_args()
 
     dot_align_data(
         args.scdata,
         args.stdata,
-        args.mode,
-        args.mapping,
-        map_cell_types=args.map_cell_types,
         cell_type_key=args.cell_type_key,
-        output_path=args.output,
+        output_folder=args.output_folder,
     )

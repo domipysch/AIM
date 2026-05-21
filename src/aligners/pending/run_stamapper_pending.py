@@ -9,7 +9,7 @@ from scipy.sparse import issparse
 
 from STAMapper import pipeline
 from STAMapper.utils.train import seed_everything
-from ..utils.io import load_sc_adata, load_st_adata
+from utils.io import load_sc_adata, load_st_adata
 
 logger = logging.getLogger(__name__)
 

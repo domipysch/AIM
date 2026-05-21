@@ -14,7 +14,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument("--scdata", required=True, type=Path)
 parser.add_argument("--stdata", required=True, type=Path)
 parser.add_argument("--output_dir", required=True, type=Path)
-parser.add_argument("--leiden_resolution", default=0.5, type=float)
+parser.add_argument("--leiden_resolution", default=1.0, type=float)
 parser.add_argument("--permutation_test", action="store_true")
 parser.add_argument("--n_permutations", default=200, type=int)
 args = parser.parse_args()
