@@ -8,6 +8,7 @@ import logging
 from anndata import AnnData
 import argparse
 from scipy.sparse import issparse
+import torch
 from ..utils.io import load_sc_adata, load_st_adata
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,8 @@ def tangram_align_data(
         tg.pp_adatas(adata_sc_map, adata_st, genes=None)
 
     # Step 3: Mapping
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    logger.info(f"Using device: {device}")
     logger.info("Map cells to spots with Tangram")
     if map_clusters:
         ad_map_prob = tg.map_cells_to_space(
@@ -106,7 +109,7 @@ def tangram_align_data(
             cluster_label=cell_type_key,
             density_prior="rna_count_based",
             num_epochs=500,
-            device="cpu",
+            device=device,
         )  # T x S
         assert ad_map_prob.n_obs == len(adata_sc_map.obs[cell_type_key].unique())
         assert ad_map_prob.n_vars == adata_st.n_obs
@@ -117,7 +120,7 @@ def tangram_align_data(
             mode="cells",
             density_prior="rna_count_based",
             num_epochs=500,
-            device="cpu",
+            device=device,
             lambda_g1=1,
             # lambda_g2=1,
         )  # C x S

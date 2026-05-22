@@ -16,6 +16,7 @@ dependencies:
   - scanpy==1.11.5
   - pip:
     - scvi-tools
+    - igraph
   # dev
   - mypy==1.19.1
   - black==26.1.0
