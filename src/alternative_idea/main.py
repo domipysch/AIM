@@ -24,7 +24,6 @@ from .src.model import AlternativeIdeaModel
 from .src.loss import AlternativeIdeaLoss
 from .src.spatial_graph import build_spatial_graph, SpatialGraphType
 from .src.dataset import prepare_tensors_from_input
-from .src.utils import graph_type_from_config
 from .src.evaluate_k.clustering import run_leiden_clustering
 from .src.sc_embedding import compute_sc_embedding
 
@@ -76,7 +75,7 @@ def _arr_to_h5ad(
     adata.write_h5ad(path)
 
 
-def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
+def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
     if not os.path.exists(config_path):
         raise Exception(f"Config file not found at {config_path}")
 
@@ -90,7 +89,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
         # Ensure required sections exist
         required_sections = [
             "mapping",
-            "graph",
             "model",
             "training",
             "loss_weights",
@@ -103,7 +101,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
             )
 
         mapping_cfg = cfg.get("mapping") if isinstance(cfg.get("mapping"), dict) else {}
-        graph_cfg = cfg.get("graph") if isinstance(cfg.get("graph"), dict) else {}
         model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
         training_cfg = (
             cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
@@ -121,34 +118,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
         for key in ("deterministic",):
             if key not in mapping_cfg:
                 raise ValueError(f"`mapping.{key}` is required in the config.")
-
-        # Validate graph config
-        if not graph_cfg:
-            raise ValueError("`graph` must be a mapping in the config.")
-        graph_type = graph_cfg.get("type")
-        if not isinstance(graph_type, str):
-            raise ValueError(
-                "`graph.type` must be specified as a string (e.g. 'knn', 'mutual_knn', 'radius')."
-            )
-        graph_type_l = graph_type.lower()
-        if graph_type_l in ("knn", "mutual_knn"):
-            if "k" not in graph_cfg:
-                raise ValueError(
-                    f"`graph.k` must be specified for graph.type='{graph_type}'."
-                )
-            if not isinstance(graph_cfg["k"], int) or graph_cfg["k"] <= 0:
-                raise ValueError("`graph.k` must be a positive integer.")
-        elif graph_type_l == "radius":
-            if "radius" not in graph_cfg:
-                raise ValueError(
-                    "`graph.radius` must be specified for graph.type='radius'."
-                )
-            try:
-                radius_val = float(graph_cfg["radius"])
-                if radius_val <= 0:
-                    raise ValueError("`graph.radius` must be a positive number.")
-            except Exception:
-                raise ValueError("`graph.radius` must be a numeric value.")
 
         # Validate model config
         if not model_cfg:
@@ -188,7 +157,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict, dict]:
 
     return (
         mapping_cfg,
-        graph_cfg,
         model_cfg,
         training_cfg,
         loss_weights_cfg,
@@ -211,7 +179,6 @@ def alternative_idea_compute_mapping(
     logger.debug(f"Load config: {path_to_config}")
     (
         mapping_config,
-        graph_config,
         model_config,
         training_config,
         loss_weights,
@@ -220,7 +187,6 @@ def alternative_idea_compute_mapping(
     logger.info(f"Loaded config: {path_to_config}")
     logger.debug(f"Loaded training config: {training_config}")
     logger.debug(f"Loaded model config: {model_config}")
-    logger.debug(f"Loaded graph config: {graph_config}")
     logger.debug(f"Loaded loss weights: {loss_weights}")
     logger.info(f"Using device: {device}")
 
@@ -274,21 +240,14 @@ def alternative_idea_compute_mapping(
     logger.info(f"Shared genes between scRNA and ST: {X_shared.shape[1]}")
 
     # 5. Build the spatial graph out of Z
-    graph_type = graph_type_from_config(graph_config)
-    k = (
-        int(graph_config["k"])
-        if graph_type in (SpatialGraphType.KNN, SpatialGraphType.MUTUAL_KNN)
-        else None
-    )
-    radius = graph_config["radius"] if graph_type == SpatialGraphType.RADIUS else None
     edge_index = build_spatial_graph(
         adata_st,
-        method=graph_type,
-        k=k,
-        radius=radius,
+        method=SpatialGraphType.KNN,
+        k=4,
+        radius=None,
         device=device,
     )
-    logger.info(f"Created spatial graph of type {graph_config['type']}.")
+    logger.info("Created spatial graph (KNN, k=4).")
 
     # 6. Initialize Model
     # Dimensions derived from tensors
@@ -741,7 +700,7 @@ def main(
     no_gpu_limit: bool = False,
 ) -> tuple[AnnData, Optional[AnnData], AnnData, dict]:
 
-    mapping_config, _, _, training_config, _, _ = load_config(config_path)
+    mapping_config, _, training_config, _, _ = load_config(config_path)
 
     # Setup Device
     # Use 'mps' for Apple Silicon, 'cuda' for NVIDIA, or 'cpu'

@@ -4,20 +4,16 @@ data:
   st_paths:
     - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\04_ColorectalCancer\patches_4x4\patch_2_2\st.h5ad
 output:
-  result_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\03_Results_230426\04_ColorectalCancer
-  metric_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\04_Metrics_230426\04_ColorectalCancer
+  output_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\05_Experiments\04_ColorectalCancer
 mapping:
   deterministic: true
-graph:
-  type: knn
-  k:
-    - 4
 model:
   K:
-    - 5
     - 10
-    - 15
-    - 20
+    - 25
+    - 50
+    - 75
+    - 100
 training:
   lr:
     - 0.008
@@ -27,37 +23,13 @@ training:
     - false
   use_cm:
     - true
-  reference_leiden_clustering_resolution: 2.0
+  reference_leiden_clustering_resolution: 3.0
 sc_embedding:
   method: pca
   d: 32
 loss_weights:
-  - lambda_rec_spot: 1.0
-    lambda_rec_gene: 0
-    lambda_clust_intra: 0
-    lambda_clust_inter: 0
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
-    lambda_soft_modularity: 0
-    lambda_soft_contingency: 1.0
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
-    lambda_clust_intra: 0
-    lambda_clust_inter: 0
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
-    lambda_soft_modularity: 0
-    lambda_soft_contingency: 1.0
-  - lambda_rec_spot: 0.75
-    lambda_rec_gene: 0.75
-    lambda_clust_intra: 0
-    lambda_clust_inter: 0
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
-    lambda_soft_modularity: 0
-    lambda_soft_contingency: 1.0
-  - lambda_rec_spot: 1.0
-    lambda_rec_gene: 1.0
     lambda_clust_intra: 0
     lambda_clust_inter: 0
     lambda_state_entropy: 0.1

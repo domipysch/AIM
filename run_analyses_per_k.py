@@ -1,20 +1,18 @@
 """
-Run post-mapping analysis for every K-run inside a result folder.
+Run post-mapping analysis for every K-run inside an experiment output folder.
 
 Usage
 -----
-    python -m run_analyses_per_k -r <result_folder> [--leiden_resolution 0.5] [--no_normalize]
-                                 [--metrics_folder <path>]
+    python -m run_analyses_per_k -r <output_folder> [<output_folder2> ...]
 
 Example
 -------
     python -m run_analyses_per_k \
-        -r C:/Users/zi69hebi/Dev/10_Alignment/Data/03_Results_230426/03_MouseSSP_HVG2000 \
-        --metrics_folder C:/Users/zi69hebi/Dev/10_Alignment/Data/04_Metrics_270426/03_MouseSSP_HVG2000
+        -r C:/Users/zi69hebi/Dev/10_Alignment/Data/05_Experiments/04_ColorectalCancer
 
-Expected result_folder layout (as produced by run_experiment.py)
+Expected output_folder layout (as produced by run_experiment.py)
 ----------------------------------------------------------------
-    <result_folder>/
+    <output_folder>/
       <sc_stem>__<st_stem>/
         experiment_config.yml   ← contains sc_paths / st_paths
         summary.csv
@@ -24,6 +22,9 @@ Expected result_folder layout (as produced by run_experiment.py)
             B_thresh.h5ad       ← soft cell-to-state matrix  (n_cells × K)
             C_thresh.h5ad       ← soft spot-to-state matrix  (n_spots × K)
         1/ ...
+        metrics/
+          0/                    ← per-run metrics (o2/, o4/, ...)
+          1/ ...
 
 Outputs (per run, written next to intermediate/ and loss/)
 ----------------------------------------------------------
@@ -102,12 +103,7 @@ def _read_median_cossim(
     metrics_folder: Path, run_id: str
 ) -> tuple[float | None, float | None]:
     """Return (gene_median, spot_median) from the o2 cossim JSONs, or (None, None)."""
-    pair_dirs = [d for d in metrics_folder.iterdir() if d.is_dir()]
-    if not pair_dirs:
-        return None, None
-    pair_dir = pair_dirs[0]  # single pair subdir like <sc_stem>__<st_stem>
-
-    run_subdir = pair_dir / run_id
+    run_subdir = metrics_folder / run_id
     if not run_subdir.is_dir():
         logger.warning("metrics run dir not found: %s", run_subdir)
         return None, None
@@ -124,14 +120,13 @@ def _read_median_cossim(
     return gene_median, spot_median
 
 
-def main(
-    result_folder: Path,
-    metrics_folder: Path | None = None,
-) -> None:
+def main(result_folder: Path) -> None:
     result_folder = Path(result_folder)
 
     pair_dir = _find_pair_dir(result_folder)
     logger.info("Pair directory: %s", pair_dir)
+
+    metrics_folder = pair_dir / "metrics"
 
     exp_cfg = _load_experiment_config(pair_dir)
     sc_path = Path(exp_cfg["data"]["sc_paths"][0])
@@ -230,24 +225,11 @@ if __name__ == "__main__":
         "-r",
         "--result_folder",
         type=Path,
+        nargs="+",
         required=True,
-        help="Result folder produced by run_experiment.py",
-    )
-    parser.add_argument(
-        "--metrics_folder",
-        type=Path,
-        default=None,
-        help=(
-            "Optional: path to the metrics folder produced by run_all_metrics "
-            "(e.g. Data/04_Metrics_270426/03_MouseSSP_HVG2000). "
-            "When provided, genewise and spotwise median cosine similarity are "
-            "read from o2/boxplots_per_gene/cossim.json and "
-            "o2/boxplots_per_spot/cossim.json and included in per-K PDF reports."
-        ),
+        help="output_folder(s) produced by run_experiment.py. Multiple folders are processed sequentially.",
     )
     args = parser.parse_args()
 
-    main(
-        result_folder=args.result_folder,
-        metrics_folder=args.metrics_folder,
-    )
+    for result_folder in args.result_folder:
+        main(result_folder=result_folder)

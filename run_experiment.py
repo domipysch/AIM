@@ -47,12 +47,11 @@ def create_shared_boxplots(
 def run_config(
     sc_path: Path,
     st_path: Path,
-    metrics_dataset: Path,
     run_config_path: Path,
     save_result_path: Optional[Path],
     save_mapping_path: Optional[Path],
     metrics_folder: Path,
-    metrics_folder_det: Path,
+    metrics_folder_det: Optional[Path],
     run_permutation_tests: bool = False,
 ) -> dict:
     # Determine verbose flag from current logger level
@@ -65,8 +64,7 @@ def run_config(
             st_path,
             run_config_path,
             output_path=save_result_path,
-            # mapping_output_path=save_mapping_path,
-            mapping_output_path=None,
+            mapping_output_path=save_mapping_path,
             verbose_logging=verbose_flag,
             store_intermediate=True,
         )
@@ -75,7 +73,7 @@ def run_config(
     # Run individual metrics (probabilistic)
     run_all_metrics.main(
         sc_path,
-        metrics_dataset / "st.h5ad",
+        st_path,
         metrics_folder,
         result_gep=predicted_gep,
         run_permutation_tests=run_permutation_tests,
@@ -83,9 +81,10 @@ def run_config(
 
     # Run individual metrics (deterministic) if applicable
     if predicted_gep_det is not None:
+        assert metrics_folder_det is not None
         run_all_metrics.main(
             sc_path,
-            metrics_dataset / "st.h5ad",
+            st_path,
             metrics_folder_det,
             result_gep=predicted_gep_det,
             run_permutation_tests=run_permutation_tests,
@@ -119,8 +118,7 @@ def main(
 
     sc_paths = [Path(p) for p in data_cfg["sc_paths"]]
     st_paths = [Path(p) for p in data_cfg["st_paths"]]
-    result_folder = Path(output_cfg["result_folder"])
-    metric_folder = Path(output_cfg["metric_folder"])
+    output_folder = Path(output_cfg["output_folder"])
 
     for sc_path in sc_paths:
         if not sc_path.exists():
@@ -206,48 +204,37 @@ def main(
 
     for sc_path, st_path in itertools.product(sc_paths, st_paths):
         dataset_name = f"{sc_path.parent.name}_{sc_path.stem}__{st_path.parent.name}_{st_path.stem}"
-        metrics_dataset = st_path.parent
-        ds_result_folder = result_folder / dataset_name
-        ds_metric_folder = metric_folder / dataset_name
+        ds_folder = output_folder / dataset_name
+        ds_metric_folder = ds_folder / "metrics"
 
         logger.info(f"=== Dataset: {dataset_name} ===")
 
-        if os.path.exists(ds_result_folder):
-            shutil.rmtree(ds_result_folder)
-        if os.path.exists(ds_metric_folder):
-            shutil.rmtree(ds_metric_folder)
-        ds_result_folder.mkdir(parents=True, exist_ok=False)
+        if os.path.exists(ds_folder):
+            shutil.rmtree(ds_folder)
+        ds_folder.mkdir(parents=True, exist_ok=False)
         ds_metric_folder.mkdir(parents=True, exist_ok=False)
 
-        # Copy experiment config to result folder for reference
-        shutil.copy(experiment_config, ds_result_folder / "experiment_config.yml")
+        # Copy experiment config to output folder for reference
+        shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
 
         # Prepare summary CSV
-        summary_path = ds_result_folder / "summary.csv"
+        summary_path = ds_folder / "summary.csv"
 
         # Iterate over grid
         combo_iter = itertools.product(*lists)
 
         run_id = 0
+        _fixed_cols = [
+            "id",
+            "config_path",
+            "output_path",
+            "status",
+            "duration_seconds",
+            "error_message",
+        ]
         with open(summary_path, "w", newline="") as summary_file:
-
-            writer = csv.writer(summary_file)
-            writer.writerow(
-                [
-                    "id",
-                    "config_path",
-                    "output_path",
-                    "status",
-                    "duration_seconds",
-                    "error_message",
-                    "L1",
-                    "L2",
-                    "L3",
-                    "L4",
-                    "L5",
-                    "L6",
-                ]
-            )
+            # DictWriter is created after the first run, once loss column names are known.
+            writer = None
 
             for combo in combo_iter:
                 # Build run-specific config
@@ -255,7 +242,7 @@ def main(
                 for path, val in zip(paths, combo):
                     set_in_dict(cfg_copy, path, val)
 
-                run_dir = ds_result_folder / str(run_id)
+                run_dir = ds_folder / str(run_id)
                 run_dir.mkdir(parents=True, exist_ok=True)
                 run_config_path = run_dir / "config.yml"
                 with open(run_config_path, "w") as cf:
@@ -273,6 +260,11 @@ def main(
                     metric_dir_det.mkdir(parents=True, exist_ok=False)
 
                 start = time.time()
+                exc = None
+                tb = ""
+                losses_after_last_epoch = {}
+                status = "error"
+                error_msg = ""
                 try:
                     logger.info(
                         f"Starting run {run_id}/{total_runs - 1} -> writing to {run_dir}"
@@ -280,70 +272,60 @@ def main(
                     losses_after_last_epoch = run_config(
                         sc_path,
                         st_path,
-                        metrics_dataset,
                         run_config_path,
                         (run_dir / "gep.h5ad") if save_result else None,
                         (run_dir / "mapping.csv") if save_result else None,
                         metric_dir,
-                        metric_dir_det if metric_dir_det is not None else "",
+                        metric_dir_det,
                         run_permutation_tests=run_permutation_tests,
                     )
-                    duration = time.time() - start
-                    writer.writerow(
-                        [
-                            run_id,
-                            str(run_config_path),
-                            str(result_path),
-                            "ok",
-                            f"{duration:.3f}",
-                            "",
-                            losses_after_last_epoch["rec_spot"],
-                            losses_after_last_epoch["rec_gene"],
-                            losses_after_last_epoch["clust_intra"],
-                            losses_after_last_epoch["clust_inter"],
-                            losses_after_last_epoch["state_entropy"],
-                            losses_after_last_epoch["spot_entropy"],
-                        ]
-                    )
-                    logger.info(f"Run {run_id} completed in {duration:.2f}s")
-
+                    status = "ok"
                 except Exception as e:
-                    duration = time.time() - start
+                    exc = e
+                    error_msg = str(e)
                     tb = traceback.format_exc()
+
+                duration = time.time() - start
+                if exc is None:
+                    logger.info(f"Run {run_id} completed in {duration:.2f}s")
+                else:
                     logger.error(
-                        f"Run {run_id} failed after {duration:.2f}s: {e}\n{tb}"
+                        f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}"
                     )
-                    writer.writerow(
-                        [
-                            run_id,
-                            str(run_config_path),
-                            str(result_path),
-                            "error",
-                            f"{duration:.3f}",
-                            str(e),
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                            "",
-                        ]
+
+                row = {
+                    "id": run_id,
+                    "config_path": str(run_config_path),
+                    "output_path": str(result_path),
+                    "status": status,
+                    "duration_seconds": f"{duration:.3f}",
+                    "error_message": error_msg,
+                    **losses_after_last_epoch,
+                }
+                if writer is None:
+                    fieldnames = _fixed_cols + [k for k in losses_after_last_epoch]
+                    writer = csv.DictWriter(
+                        summary_file, fieldnames=fieldnames, extrasaction="ignore"
                     )
-                    # Stop on first error as requested
-                    raise
+                    writer.writeheader()
+                writer.writerow(row)
+                summary_file.flush()
+
+                if exc is not None:
+                    raise exc
 
                 run_id += 1
 
         # Create shared boxplots for this dataset
-        ds_metric_folder_shared = ds_metric_folder / "shared"
-        ds_metric_folder_shared.mkdir(parents=True, exist_ok=True)
+        shared_dir = ds_folder / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
         run_names = list(map(str, range(run_id)))
         if base_cfg["mapping"]["deterministic"]:
             run_names += list(f"{runid}_det" for runid in range(run_id))
         create_shared_boxplots(
             run_names,
             ds_metric_folder,
-            ds_metric_folder_shared,
+            shared_dir,
             run_permutation_tests=run_permutation_tests,
         )
 
@@ -353,7 +335,7 @@ def main(
         all_labels = []
         for sc_path, st_path in itertools.product(sc_paths, st_paths):
             dataset_name = f"{sc_path.parent.name}_{sc_path.stem}__{st_path.parent.name}_{st_path.stem}"
-            ds_metric_folder = metric_folder / dataset_name
+            ds_metric_folder = output_folder / dataset_name / "metrics"
             for run_id_str in map(str, range(total_runs)):
                 all_metric_folders.append(ds_metric_folder / run_id_str)
                 all_labels.append(f"{dataset_name}/{run_id_str}")
@@ -361,11 +343,11 @@ def main(
                 for run_id_str in map(str, range(total_runs)):
                     all_metric_folders.append(ds_metric_folder / f"{run_id_str}_det")
                     all_labels.append(f"{dataset_name}/{run_id_str}_det")
-        cross_dataset_shared = metric_folder / "shared"
+        cross_dataset_shared = output_folder / "shared"
         cross_dataset_shared.mkdir(parents=True, exist_ok=True)
         create_shared_boxplots(
             all_labels,
-            metric_folder,
+            output_folder,
             cross_dataset_shared,
             run_permutation_tests=run_permutation_tests,
         )
@@ -381,8 +363,9 @@ if __name__ == "__main__":
         "-c",
         "--experiment_config",
         type=Path,
+        nargs="+",
         required=True,
-        help="Path to experiment config YAML",
+        help="Path(s) to experiment config YAML. Multiple configs are run sequentially.",
     )
     parser.add_argument(
         "-s",
@@ -391,17 +374,17 @@ if __name__ == "__main__":
         help="Whether to save the predicted GEP to disk",
     )
     parser.add_argument(
+        "--run_permutation_tests",
+        dest="run_permutation_tests",
+        action="store_true",
+        help="Whether to run permutation tests or not.",
+    )
+    parser.add_argument(
         "--logging",
         dest="logging",
         choices=["normal", "verbose"],
         default="normal",
         help="Logging verbosity. Use 'verbose' for more logs.",
-    )
-    parser.add_argument(
-        "--run_permutation_tests",
-        dest="run_permutation_tests",
-        action="store_true",
-        help="Whether to run permutation tests or not.",
     )
     args = parser.parse_args()
 
@@ -415,8 +398,9 @@ if __name__ == "__main__":
     logger.setLevel(level)
 
     # 3. Run
-    main(
-        args.experiment_config,
-        save_result=args.save_result,
-        run_permutation_tests=args.run_permutation_tests,
-    )
+    for cfg_path in args.experiment_config:
+        main(
+            cfg_path,
+            save_result=args.save_result,
+            run_permutation_tests=args.run_permutation_tests,
+        )
