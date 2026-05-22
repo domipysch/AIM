@@ -580,6 +580,110 @@ def plot_matched_cluster_heatmaps(
 
 
 # ---------------------------------------------------------------------------
+# 11. Per-gene norm boxplots (marker vs non-marker, SC and ST)
+# ---------------------------------------------------------------------------
+
+
+def plot_gene_norm_boxplots(
+    sc_adata: AnnData,
+    st_adata: AnnData,
+    shared: list[str],
+    output_dir: Path,
+) -> None:
+    """
+    Boxplots of per-gene L2 norms split by marker (shared) vs non-marker genes.
+    Each figure has two subplots (marker | non-marker); within each subplot SC
+    and ST are shown side by side on the same scale for direct comparison.
+
+    Output files:
+        gene_norms_boxplot.png, gene_log_norms_boxplot.png
+    """
+    from .metric import to_dense
+
+    shared_set = set(shared)
+
+    def _gene_norms(adata: AnnData) -> tuple[np.ndarray, np.ndarray]:
+        X = to_dense(adata.X)  # (n_obs, n_genes)
+        norms = np.linalg.norm(X, axis=0)  # per-gene L2 norm across obs
+        is_marker = np.array([g in shared_set for g in adata.var_names])
+        return norms[is_marker], norms[~is_marker]
+
+    def _make_fig(
+        sc_marker: np.ndarray,
+        sc_non_marker: np.ndarray,
+        st_marker: np.ndarray,
+        st_non_marker: np.ndarray,
+        ylabel: str,
+        title: str,
+    ) -> plt.Figure:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 5), constrained_layout=True)
+        for ax, sc_data, st_data, subtitle in zip(
+            axes,
+            [sc_marker, sc_non_marker],
+            [st_marker, st_non_marker],
+            ["Marker genes", "Non-marker genes"],
+        ):
+            data = [sc_data, st_data]
+            if any(d.size > 0 for d in data):
+                bp = ax.boxplot(
+                    data,
+                    vert=True,
+                    patch_artist=True,
+                    medianprops=dict(color="black"),
+                )
+                for patch, color in zip(bp["boxes"], ["C0", "C1"]):
+                    patch.set_facecolor(color)
+                ax.set_xticks([1, 2])
+                ax.set_xticklabels(["SC", "ST"])
+                ax.set_ylabel(ylabel)
+            else:
+                ax.text(
+                    0.5,
+                    0.5,
+                    "no data",
+                    ha="center",
+                    va="center",
+                    transform=ax.transAxes,
+                )
+            ax.set_title(subtitle)
+        fig.suptitle(title, fontsize=12)
+        return fig
+
+    sc_marker, sc_non_marker = _gene_norms(sc_adata)
+    st_marker, st_non_marker = _gene_norms(st_adata)
+
+    _save(
+        _make_fig(
+            sc_marker,
+            sc_non_marker,
+            st_marker,
+            st_non_marker,
+            ylabel="Norm",
+            title="Per-gene L2 norms: marker vs non-marker genes",
+        ),
+        output_dir / "gene_norms_boxplot.png",
+    )
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        sc_marker_log = np.where(sc_marker <= 0, 0.0, np.log(sc_marker))
+        sc_non_marker_log = np.where(sc_non_marker <= 0, 0.0, np.log(sc_non_marker))
+        st_marker_log = np.where(st_marker <= 0, 0.0, np.log(st_marker))
+        st_non_marker_log = np.where(st_non_marker <= 0, 0.0, np.log(st_non_marker))
+
+    _save(
+        _make_fig(
+            sc_marker_log,
+            sc_non_marker_log,
+            st_marker_log,
+            st_non_marker_log,
+            ylabel="log(Norm)",
+            title="Per-gene log(L2 norms): marker vs non-marker genes",
+        ),
+        output_dir / "gene_log_norms_boxplot.png",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -645,5 +749,6 @@ def save_all_plots(
     plot_matched_cluster_heatmaps(
         X_sc, labels_sc, X_st, labels_st, shared, sim_matrix, plots_dir
     )
+    plot_gene_norm_boxplots(sc_adata, st_adata, shared, plots_dir)
 
     logger.info(f"All plots saved to {plots_dir}")

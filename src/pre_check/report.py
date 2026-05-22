@@ -379,5 +379,21 @@ def generate_pre_check_report(output_dir: Path) -> Path | None:
         )
     )
 
+    # Gene norm boxplots (marker vs non-marker, SC and ST on shared scale)
+    parts.append(
+        _section_img(
+            plots_dir / "gene_norms_boxplot.png",
+            "Gene Norm Distributions (Marker vs Non-Marker)",
+            base,
+        )
+    )
+    parts.append(
+        _section_img(
+            plots_dir / "gene_log_norms_boxplot.png",
+            "Gene Log-Norm Distributions (Marker vs Non-Marker)",
+            base,
+        )
+    )
+
     source = "\n".join(p for p in parts if p)
     return out_pdf if _compile(source, out_pdf) else None

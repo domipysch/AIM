@@ -1,7 +1,6 @@
 import shutil
 from pathlib import Path
 import os
-import pandas as pd
 import numpy as np
 import logging
 import matplotlib.pyplot as plt
@@ -578,7 +577,6 @@ def generate_spatial_distribution_plots_for_some_genes(
         generate_gene_spatial_distribution_plot(
             adata_z, adata_predicted_z, gene_name=gene, output_path=output_path
         )
-        # plot_delta_map(adata_z, adata_predicted_z, adata_z.var_names[0], show=True, mode="relative")
 
 
 def plot_delta_map(

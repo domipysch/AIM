@@ -4,7 +4,6 @@ import logging
 import sys
 import anndata as ad
 from anndata import AnnData
-from .metrics_o1 import main as main1
 from .metrics_o2 import main as main2
 from .metrics_o4 import main as main4
 from .metrics_o2_permutation_test import main as main2permutation
@@ -33,7 +32,6 @@ def main(
 
     """
     # Run metrics computations
-    main1(sc_path, st_path, result_gep, metrics)
     main2(sc_path, st_path, result_gep, metrics)
     main4(sc_path, st_path, result_gep, metrics)
 
