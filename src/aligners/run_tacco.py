@@ -93,13 +93,13 @@ def tacco_align_data(
     # Deterministic fractions: argmax one-hot per spot
     idxmax_series = fractions_prob.idxmax(axis=1)
     col_idx = fractions_prob.columns.get_indexer(idxmax_series)
-    one_hot_vals = np.zeros_like(fractions_prob.values, dtype=float)
-    one_hot_vals[np.arange(len(fractions_prob)), col_idx] = 1.0
+    one_hot_vals = np.zeros_like(fractions_prob.values, dtype=np.uint8)
+    one_hot_vals[np.arange(len(fractions_prob)), col_idx] = 1
     fractions_det = pd.DataFrame(
         one_hot_vals,
         index=fractions_prob.index,
         columns=fractions_prob.columns,
-        dtype=float,
+        dtype=np.float32,
     )
 
     # Total counts per spot

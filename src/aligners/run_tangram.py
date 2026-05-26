@@ -138,8 +138,8 @@ def tangram_align_data(
     argmax_idx = np.argmax(
         mat, axis=0
     )  # for each spot (column), index of max cell / cell type
-    one_hot = np.zeros_like(mat, dtype=float)
-    one_hot[argmax_idx, np.arange(mat.shape[1])] = 1.0
+    one_hot = np.zeros_like(mat, dtype=np.uint8)
+    one_hot[argmax_idx, np.arange(mat.shape[1])] = 1
     ad_map_det.X = one_hot
 
     for ad_map, mapping_type in ((ad_map_prob, "prob"), (ad_map_det, "det")):

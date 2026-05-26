@@ -81,12 +81,12 @@ def dot_align_data(
         csv_path.unlink()
         return adata
 
-    def _csv_to_mapping_h5ad(csv_path: Path, h5ad_path: Path) -> AnnData:
+    def _csv_to_mapping_h5ad(csv_path: Path, h5ad_path: Path, dtype: type) -> AnnData:
         # R writes weights as S×T (rows=spots, cols=cell_types)
         # Transpose to T×S to match Tangram/TACCO layout (obs=cell_types, var=spots)
         df = pd.read_csv(csv_path, header=0, index_col=0)
         adata = AnnData(
-            X=np.asarray(df.values.T, dtype=np.float32),
+            X=np.asarray(df.values.T, dtype=dtype),
             obs=pd.DataFrame(index=df.columns),
             var=pd.DataFrame(index=df.index),
         )
@@ -96,8 +96,8 @@ def dot_align_data(
 
     gep_prob = _csv_to_gep_h5ad(gep_prob_csv, output_folder / "gep_prob.h5ad")
     gep_det = _csv_to_gep_h5ad(gep_det_csv, output_folder / "gep_det.h5ad")
-    _csv_to_mapping_h5ad(map_prob_csv, output_folder / "mapping_prob.h5ad")
-    _csv_to_mapping_h5ad(map_det_csv, output_folder / "mapping_det.h5ad")
+    _csv_to_mapping_h5ad(map_prob_csv, output_folder / "mapping_prob.h5ad", np.float32)
+    _csv_to_mapping_h5ad(map_det_csv, output_folder / "mapping_det.h5ad", np.uint8)
 
     logger.info("All DOT outputs written to %s", output_folder)
     return gep_prob, gep_det

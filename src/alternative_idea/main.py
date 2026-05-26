@@ -694,7 +694,6 @@ def main(
     st_path: Path,
     config_path: Path,
     output_path: Optional[Path],
-    mapping_output_path: Optional[Path] = None,
     store_intermediate: bool = False,
     verbose_logging: bool = False,
     no_gpu_limit: bool = False,
@@ -748,21 +747,6 @@ def main(
     # Step 3.2: Create plots for loss curves
     create_loss_plots(losses, config_path.parent / "loss")
 
-    # Step 3.3: Save mapping to CSV
-    if mapping_output_path is not None:
-        logger.info(f"Write spot-to-cell mapping to CSV: {mapping_output_path}")
-        mapping_adata = AnnData(X=spot_to_cell_map.detach().cpu().numpy())
-        mapping_adata.obs_names = adata_st.obs_names
-        mapping_adata.var_names = adata_sc.obs_names
-        anndata_to_csv(
-            mapping_adata,
-            mapping_output_path,
-            top_left_label="Mapping",
-            format_func=fmt_nonzero_4,
-            uppercase_var_names=True,
-        )
-        logger.info(f"Saved spot-to-cell mapping to {mapping_output_path}")
-
     # Step 4: Compute Z' out of the mapping (expected gene expression per spot, scRNA data weighted by mapping)
     adata_prediction_prob = compute_gene_expression_prediction(
         spot_to_cell_map,
@@ -774,14 +758,23 @@ def main(
         training_config["use_cm"],
     )
 
-    # Step 5 (optional): Export predicted_spot_expressions to h5ad
+    # Step 5 (optional): Export prob GEP + mapping to h5ad
     # Layout: obs = genes (G), var = spots (S)
     if output_path is not None:
         output_path = Path(output_path).with_suffix(".h5ad")
-        logger.info(f"Write result GEP to h5ad: {output_path}")
         output_path.parent.mkdir(parents=True, exist_ok=True)
+
         adata_prediction_prob.write_h5ad(output_path)
-        logger.info(f"Saved result GEP to {output_path}")
+        logger.info(f"Saved prob GEP to {output_path}")
+
+        mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
+        mapping_prob_path = output_path.parent / "mapping_prob.h5ad"
+        AnnData(
+            X=mapping_np.astype(np.float32),
+            obs=pd.DataFrame(index=adata_sc.obs_names),
+            var=pd.DataFrame(index=adata_st.obs_names),
+        ).write_h5ad(mapping_prob_path)
+        logger.info(f"Saved prob mapping to {mapping_prob_path}")
     else:
         logger.debug("No output path provided, skipping h5ad export.")
 
@@ -803,15 +796,24 @@ def main(
         )
 
         if output_path is not None:
-
-            # Edit output_path: append "_deterministic" before file extension
             output_path_deterministic = output_path.with_name(
                 output_path.stem + "_deterministic" + output_path.suffix
             )
 
-            logger.info(f"Write result GEP to h5ad: {output_path_deterministic}")
             adata_prediction_det.write_h5ad(output_path_deterministic)
-            logger.info(f"Saved result GEP to {output_path_deterministic}")
+            logger.info(f"Saved det GEP to {output_path_deterministic}")
+
+            mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
+            argmax_idx = np.argmax(mapping_np, axis=0)
+            one_hot = np.zeros_like(mapping_np, dtype=np.uint8)
+            one_hot[argmax_idx, np.arange(mapping_np.shape[1])] = 1
+            mapping_det_path = output_path.parent / "mapping_det.h5ad"
+            AnnData(
+                X=one_hot,
+                obs=pd.DataFrame(index=adata_sc.obs_names),
+                var=pd.DataFrame(index=adata_st.obs_names),
+            ).write_h5ad(mapping_det_path)
+            logger.info(f"Saved det mapping to {mapping_det_path}")
         else:
             logger.debug("No output path provided, skipping h5ad export.")
 
@@ -849,14 +851,6 @@ if __name__ == "__main__":
         help="Path where to store result to",
     )
     parser.add_argument(
-        "-mo",
-        "--mapping_output_path",
-        type=Path,
-        required=False,
-        default=None,
-        help="Path where to store mapping CSV to",
-    )
-    parser.add_argument(
         "--logging",
         dest="logging",
         choices=["normal", "verbose"],
@@ -887,7 +881,6 @@ if __name__ == "__main__":
         args.stdata,
         args.config,
         args.output_path,
-        args.mapping_output_path,
         verbose_logging=(args.logging == "verbose"),
         store_intermediate=True,
         no_gpu_limit=args.no_gpu_limit,

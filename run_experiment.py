@@ -49,7 +49,6 @@ def run_config(
     st_path: Path,
     run_config_path: Path,
     save_result_path: Optional[Path],
-    save_mapping_path: Optional[Path],
     metrics_folder: Path,
     metrics_folder_det: Optional[Path],
     run_permutation_tests: bool = False,
@@ -64,7 +63,6 @@ def run_config(
             st_path,
             run_config_path,
             output_path=save_result_path,
-            mapping_output_path=save_mapping_path,
             verbose_logging=verbose_flag,
             store_intermediate=True,
         )
@@ -274,7 +272,6 @@ def main(
                         st_path,
                         run_config_path,
                         (run_dir / "gep.h5ad") if save_result else None,
-                        (run_dir / "mapping.csv") if save_result else None,
                         metric_dir,
                         metric_dir_det,
                         run_permutation_tests=run_permutation_tests,
