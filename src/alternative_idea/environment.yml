@@ -17,6 +17,7 @@ dependencies:
   - pip:
     - scvi-tools
     - igraph
+    - leidenalg
   # dev
   - mypy==1.19.1
   - black==26.1.0
