@@ -17,7 +17,7 @@ from sklearn.metrics import roc_auc_score
 from sklearn.metrics.pairwise import cosine_similarity
 
 from ..utils import _dense_X
-from pre_check.metric import zscored_centroids as _zscored_centroids
+from ....pre_check.metric import zscored_centroids as _zscored_centroids
 
 logger = logging.getLogger(__name__)
 
