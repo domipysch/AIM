@@ -18,3 +18,4 @@ dependencies:
   - r-matrix
   - r-remotes
   - r-hdf5r
+  - r-seurat
