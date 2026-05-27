@@ -475,8 +475,8 @@ def alternative_idea_compute_mapping(
 
         A_thresh = A.detach().cpu().clone()
         A_thresh[A_thresh < 0.1] = 0.0
-        df_weight = pd.DataFrame(A_thresh.numpy())
-        df_weight.to_csv(folder_intermediate / "A_thresh.csv", index=False)
+        # df_weight = pd.DataFrame(A_thresh.numpy())
+        # df_weight.to_csv(folder_intermediate / "A_thresh.csv", index=False)
         _arr_to_h5ad(
             A_thresh.numpy(),
             folder_intermediate / "A_thresh.h5ad",
@@ -486,8 +486,8 @@ def alternative_idea_compute_mapping(
 
         B_thresh = B.detach().cpu().clone()
         B_thresh[B_thresh < 0.1] = 0.0
-        df_weight = pd.DataFrame(B_thresh.numpy())
-        df_weight.to_csv(folder_intermediate / "B_thresh.csv", index=False)
+        # df_weight = pd.DataFrame(B_thresh.numpy())
+        # df_weight.to_csv(folder_intermediate / "B_thresh.csv", index=False)
         _arr_to_h5ad(
             B_thresh.numpy(),
             folder_intermediate / "B_thresh.h5ad",
@@ -497,8 +497,8 @@ def alternative_idea_compute_mapping(
 
         C_thresh = C.detach().cpu().clone()
         C_thresh[C_thresh < 0.1] = 0.0
-        df_weight = pd.DataFrame(C_thresh.numpy())
-        df_weight.to_csv(folder_intermediate / "C_thresh.csv", index=False)
+        # df_weight = pd.DataFrame(C_thresh.numpy())
+        # df_weight.to_csv(folder_intermediate / "C_thresh.csv", index=False)
         _arr_to_h5ad(
             C_thresh.numpy(),
             folder_intermediate / "C_thresh.h5ad",
@@ -566,8 +566,8 @@ def alternative_idea_compute_mapping(
 
         M_normalized = torch.matmul(B_normalized.t(), X)
         M_np = M_normalized.detach().cpu().numpy()
-        df = pd.DataFrame(M_np)
-        df.to_csv(folder_intermediate / "M_normalized.csv", index=False)
+        # df = pd.DataFrame(M_np)
+        # df.to_csv(folder_intermediate / "M_normalized.csv", index=False)
         _arr_to_h5ad(
             M_np,
             folder_intermediate / "M_normalized.h5ad",
@@ -577,9 +577,9 @@ def alternative_idea_compute_mapping(
 
         c_used_idx = state_usage["C_used_indices"]
         cell_states = M_np[c_used_idx, :]
-        pd.DataFrame(cell_states).to_csv(
-            folder_intermediate / "cell_states_gep.csv", index=False
-        )
+        # pd.DataFrame(cell_states).to_csv(
+        #     folder_intermediate / "cell_states_gep.csv", index=False
+        # )
         _arr_to_h5ad(
             cell_states,
             folder_intermediate / "cell_states_gep.h5ad",
@@ -602,9 +602,9 @@ def alternative_idea_compute_mapping(
             B_argmax = torch.zeros_like(B)
             B_argmax.scatter_(1, argmax_idx, 1.0)
             B_argmax_np = B_argmax.detach().cpu().numpy()
-            pd.DataFrame(B_argmax_np).to_csv(
-                folder_intermediate / "B_argmax.csv", index=False
-            )
+            # pd.DataFrame(B_argmax_np).to_csv(
+            #     folder_intermediate / "B_argmax.csv", index=False
+            # )
             _arr_to_h5ad(
                 B_argmax_np,
                 folder_intermediate / "B_argmax.h5ad",
@@ -618,9 +618,9 @@ def alternative_idea_compute_mapping(
             C_argmax = torch.zeros_like(C_argmax)
             C_argmax.scatter_(1, argmax_idx, 1.0)
             C_argmax_np = C_argmax.detach().cpu().numpy()
-            pd.DataFrame(C_argmax_np).to_csv(
-                folder_intermediate / "C_argmax.csv", index=False
-            )
+            # pd.DataFrame(C_argmax_np).to_csv(
+            #     folder_intermediate / "C_argmax.csv", index=False
+            # )
             _arr_to_h5ad(
                 C_argmax_np,
                 folder_intermediate / "C_argmax.h5ad",
