@@ -189,4 +189,5 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         save_result=args.save_result,
         run_permutation_tests=args.run_permutation_tests,
+        no_gpu_limit=args.no_gpu_limit,
     )
