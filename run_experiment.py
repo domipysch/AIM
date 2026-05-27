@@ -52,6 +52,7 @@ def run_config(
     metrics_folder: Path,
     metrics_folder_det: Optional[Path],
     run_permutation_tests: bool = False,
+    no_gpu_limit: bool = False,
 ) -> dict:
     # Determine verbose flag from current logger level
     verbose_flag = logger.getEffectiveLevel() == logging.DEBUG
@@ -65,6 +66,7 @@ def run_config(
             output_path=save_result_path,
             verbose_logging=verbose_flag,
             store_intermediate=True,
+            no_gpu_limit=no_gpu_limit,
         )
     )
 
@@ -95,6 +97,7 @@ def main(
     experiment_config: Path,
     save_result: bool = False,
     run_permutation_tests: bool = False,
+    no_gpu_limit: bool = False,
 ):
 
     if not experiment_config.exists():
@@ -275,6 +278,7 @@ def main(
                         metric_dir,
                         metric_dir_det,
                         run_permutation_tests=run_permutation_tests,
+                        no_gpu_limit=no_gpu_limit,
                     )
                     status = "ok"
                 except Exception as e:

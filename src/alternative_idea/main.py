@@ -274,6 +274,12 @@ def alternative_idea_compute_mapping(
             f"Aborting to prevent OOM. Pass --no_gpu_limit to bypass this check."
         )
         sys.exit(1)
+    if no_gpu_limit and estimated_gb > 128.0:
+        logger.error(
+            f"Estimated GPU memory ({estimated_gb:.2f} GB) exceeds the 128GB limit. "
+            f"Aborting to prevent OOM. Pass --no_gpu_limit to bypass this check."
+        )
+        sys.exit(1)
 
     model = AlternativeIdeaModel(
         num_spots_st=num_spots,

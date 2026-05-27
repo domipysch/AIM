@@ -59,6 +59,7 @@ def main(
     output_dir: Path,
     save_result: bool = False,
     run_permutation_tests: bool = False,
+    no_gpu_limit: bool = False,
 ) -> None:
     pairs_csv = Path(pairs_csv)
     sc_dir = Path(sc_dir)
@@ -119,6 +120,7 @@ def main(
             cfg_path,
             save_result=save_result,
             run_permutation_tests=run_permutation_tests,
+            no_gpu_limit=no_gpu_limit,
         )
 
     # --- run analyses ---
@@ -170,6 +172,13 @@ if __name__ == "__main__":
         "--run_permutation_tests",
         action="store_true",
         help="Run permutation tests (passed through to run_experiment).",
+    )
+    parser.add_argument(
+        "--no_gpu_limit",
+        dest="no_gpu_limit",
+        action="store_true",
+        default=False,
+        help=f"Bypass the GPU memory guard and run regardless of estimated memory usage.",
     )
     args = parser.parse_args()
 
