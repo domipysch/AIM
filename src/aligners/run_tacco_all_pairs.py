@@ -66,6 +66,7 @@ parser.add_argument(
 parser.add_argument(
     "--permutation_tests",
     action="store_true",
+    default=False,
     help="Run permutation tests during metrics computation (slow)",
 )
 parser.add_argument(

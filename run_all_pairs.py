@@ -171,6 +171,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_permutation_tests",
         action="store_true",
+        default=False,
         help="Run permutation tests (passed through to run_experiment).",
     )
     parser.add_argument(

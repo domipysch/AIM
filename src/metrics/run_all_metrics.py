@@ -33,7 +33,7 @@ def main(
     """
     # Run metrics computations
     main2(sc_path, st_path, result_gep, metrics)
-    main4(sc_path, st_path, result_gep, metrics)
+    # main4(sc_path, st_path, result_gep, metrics)
 
     # Run permutation tests
     if run_permutation_tests:
