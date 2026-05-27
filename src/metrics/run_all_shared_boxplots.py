@@ -115,13 +115,13 @@ def main(metrics_paths: list[Path], labels: list[str], output_folder: Path):
     )
 
     # Create shared boxplot for o4
-    create_shared_boxplot(
-        [path / "o4" / "knn" / "cossim.json" for path in metrics_paths],
-        labels,
-        "Metric for objective O4",
-        "Custom locality metric",
-        output_path=output_folder / "o4_overall.pdf",
-    )
+    # create_shared_boxplot(
+    #     [path / "o4" / "knn" / "cossim.json" for path in metrics_paths],
+    #     labels,
+    #     "Metric for objective O4",
+    #     "Custom locality metric",
+    #     output_path=output_folder / "o4_overall.pdf",
+    # )
 
 
 if __name__ == "__main__":
