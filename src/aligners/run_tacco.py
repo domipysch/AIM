@@ -55,14 +55,29 @@ def tacco_align_data(
 
     # Map with TACCO
     logging.info("Align data with TACCO (annotation_col=%s)", annotation_col)
-    tc.tl.annotate(
-        adata_st,
-        adata_sc,
-        annotation_key=annotation_col,
-        result_key="align_result",
-        assume_valid_counts=True,
-        remove_constant_genes=False,  # We have issues with some datasets without this argument
-    )
+    try:
+        tc.tl.annotate(
+            adata_st,
+            adata_sc,
+            annotation_key=annotation_col,
+            result_key="align_result",
+            assume_valid_counts=True,
+            remove_constant_genes=False,  # We have issues with some datasets without this argument
+        )
+    except ValueError as e:
+        if "observations without non-zero variables" not in str(e):
+            raise
+        # TACCO's bisection boost can zero out spots mid-run; retry without bisection
+        logging.warning("TACCO bisection failed (%s) — retrying with bisections=0", e)
+        tc.tl.annotate(
+            adata_st,
+            adata_sc,
+            annotation_key=annotation_col,
+            result_key="align_result",
+            assume_valid_counts=True,
+            remove_constant_genes=False,
+            bisections=0,
+        )
     # Mapping now in adata_st.obsm["align_result"]
 
     # Compute mean expression per annotation group (cells x genes -> groups x genes)
