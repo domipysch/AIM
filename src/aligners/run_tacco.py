@@ -53,10 +53,6 @@ def tacco_align_data(
         annotation_col = adata_sc.obs.index.name or "cellID"
         adata_sc.obs[annotation_col] = adata_sc.obs_names.tolist()
 
-    # Change the datatype to float32 to avoid potential issues with TACCO
-    adata_sc.X = adata_sc.X.astype(np.float32)
-    adata_st.X = adata_st.X.astype(np.float32)
-
     # Map with TACCO
     logging.info("Align data with TACCO (annotation_col=%s)", annotation_col)
     tc.tl.annotate(
@@ -64,6 +60,8 @@ def tacco_align_data(
         adata_sc,
         annotation_key=annotation_col,
         result_key="align_result",
+        assume_valid_counts=True,
+        remove_constant_genes=False,  # We have issues with some datasets without this argument
     )
     # Mapping now in adata_st.obsm["align_result"]
 

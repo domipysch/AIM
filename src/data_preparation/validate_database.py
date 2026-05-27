@@ -50,6 +50,12 @@ def _raw_count_sanity(X: np.ndarray, label: str) -> list[str]:
             )
     if X.max() < 20:
         warns.append(f"{label}: X max={X.max():.3f} — may be log1p-transformed")
+    sample = X.flatten()[:1000]
+    if (np.abs(sample - np.round(sample)) > 1e-4).any():
+        warns.append(f"{label}: X contains non-integer values — expected raw counts")
+    n_zero = (X.sum(axis=1) == 0).sum()
+    if n_zero > 0:
+        warns.append(f"{label}: {n_zero} observation(s) with all-zero counts")
     return warns
 
 
@@ -212,6 +218,16 @@ def validate_pair(
         warns.append(
             f"pair {pair_id}: NumberSharedGenes={val} != actual shared genes={n_shared}"
         )
+
+    if n_shared > 0:
+        st_sub = adata_st[:, shared].X
+        if issparse(st_sub):
+            st_sub = st_sub.toarray()
+        n_zero = (st_sub.sum(axis=1) == 0).sum()
+        if n_zero > 0:
+            warns.append(
+                f"pair {pair_id}: {n_zero} ST spot(s) are all-zero after gene intersection — TACCO will fail"
+            )
 
     return errors, warns
 
