@@ -44,6 +44,37 @@ logger = logging.getLogger(__name__)
 _TEMPLATE_CONFIG = Path(__file__).parent / "experiment_config.yaml"
 
 
+def _count_runs(node) -> int:
+    """Return the total number of grid-search combinations for a config node."""
+    if isinstance(node, list):
+        return len(node) if node else 1
+    if isinstance(node, dict):
+        total = 1
+        for v in node.values():
+            total *= _count_runs(v)
+        return total
+    return 1  # scalar
+
+
+def _pair_is_complete(
+    pair_output: Path, sc_path: Path, st_path: Path, expected_runs: int
+) -> bool:
+    """Return True if summary.csv exists with exactly expected_runs ok rows."""
+    dataset_name = (
+        f"{sc_path.parent.name}_{sc_path.stem}"
+        f"__{st_path.parent.name}_{st_path.stem}"
+    )
+    summary_path = pair_output / dataset_name / "summary.csv"
+    if not summary_path.exists():
+        return False
+    try:
+        df = pd.read_csv(summary_path)
+        print(expected_runs)
+        return len(df) == expected_runs and (df["status"] == "ok").all()
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError):
+        return False
+
+
 def _load_template() -> dict:
     with open(_TEMPLATE_CONFIG) as f:
         cfg = yaml.safe_load(f) or {}
@@ -68,6 +99,7 @@ def main(
 
     pairs = pd.read_csv(pairs_csv)
     template = _load_template()
+    expected_runs = _count_runs(template)
 
     config_dir = output_dir / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -89,6 +121,10 @@ def main(
             continue
 
         pair_output = output_dir / f"pair_{pair_id}"
+
+        if _pair_is_complete(pair_output, sc_path, st_path, expected_runs):
+            logger.info("Pair %d already complete — skipping.", pair_id)
+            continue
 
         cfg = {
             "data": {
