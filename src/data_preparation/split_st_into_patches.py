@@ -8,10 +8,10 @@ bins along each axis, yielding up to n×n patches.
 The sc dataset is NOT touched — use the original sc.h5ad with every patch.
 
 Usage:
-  python -m src.data_preparation.split_st_into_patches -d <dataset_folder> -n <grid_size>
+  python -m src.data_preparation.split_st_into_patches -d <st_path> -n <grid_size>
 
   # Custom output directory:
-  python -m src.data_preparation.split_st_into_patches -d <dataset_folder> -n 3 -o <output_dir>
+  python -m src.data_preparation.split_st_into_patches -d <st_path> -n 3 -o <output_dir>
 
 Output structure:
   <output_dir>/
@@ -35,22 +35,21 @@ import matplotlib.colors as mcolors
 logger = logging.getLogger(__name__)
 
 
-def split_st_into_patches(dataset_folder: Path, n: int, output_dir: Path) -> None:
+def split_st_into_patches(st_path: Path, n: int, output_dir: Path) -> None:
     """
-    Load st.h5ad from dataset_folder, split into an n×n spatial grid,
+    Load the given st.h5ad, split into an n×n spatial grid,
     and write each patch as st.h5ad into a subdirectory of output_dir.
 
     Every spot is guaranteed to appear in exactly one patch.
     Empty patches (no spots) are skipped with a warning.
 
     Args:
-        dataset_folder: Folder containing st.h5ad (and sc.h5ad).
+        st_path: Full path to the ST h5ad file.
         n: Grid dimension. Produces up to n×n patches.
         output_dir: Root directory where patch subdirectories are written.
     """
-    st_path = dataset_folder / "st.h5ad"
     if not st_path.exists():
-        raise FileNotFoundError(f"st.h5ad not found in {dataset_folder}")
+        raise FileNotFoundError(f"ST file not found: {st_path}")
 
     logger.info("Loading ST data from %s", st_path)
     adata_st = ad.read_h5ad(st_path)
@@ -137,7 +136,6 @@ def split_st_into_patches(dataset_folder: Path, n: int, output_dir: Path) -> Non
         n * n,
         total_spots_written,
     )
-    print(f"\nSc dataset (shared):  {dataset_folder / 'sc.h5ad'}")
     print(f"Patch st.h5ad files:  {output_dir}/patch_<row>_<col>/st.h5ad")
 
     # --- Visualisation ---
@@ -202,7 +200,7 @@ def main() -> None:
         "--dataset",
         type=Path,
         required=True,
-        help="Path to the dataset folder containing st.h5ad",
+        help="Full path to the ST h5ad file (e.g. .../ST/01_mouse-ssp.h5ad)",
     )
     parser.add_argument(
         "-n",
@@ -231,7 +229,8 @@ def main() -> None:
     output_dir = (
         args.output
         if args.output is not None
-        else args.dataset / f"patches_{args.grid}x{args.grid}"
+        else args.dataset.parent
+        / f"{args.dataset.stem}_patches_{args.grid}x{args.grid}"
     )
 
     split_st_into_patches(args.dataset, args.grid, output_dir)
