@@ -161,6 +161,7 @@ def tangram_align_data(
         ad_ge = ad_ge.transpose()  # now G x S
         assert ad_ge.n_obs == adata_sc.n_vars
         assert ad_ge.n_vars == adata_st.n_obs
+        ad_ge.X = ad_ge.X.astype("float32")
 
         # Export ad_ge to CSV
         # - Rows: Genes
