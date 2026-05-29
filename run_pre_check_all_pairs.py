@@ -40,8 +40,10 @@ def process_pair(
 
     out_dir = args.output_dir / f"{pair_id:03d}_{sc_name}__{st_name}"
 
-    if not args.no_skip and (out_dir / "results.json").exists():
-        logger.info(f"[Pair {pair_id:>3}] Skipping — results.json already exists")
+    if not args.no_skip and (out_dir / "pre_check_report.pdf").exists():
+        logger.info(
+            f"[Pair {pair_id:>3}] Skipping — pre_check_report.pdf already exists"
+        )
         return None
 
     sc_path = args.sc_dir / f"{sc_name}.h5ad"
@@ -130,7 +132,7 @@ def main() -> None:
     parser.add_argument(
         "--no_skip",
         action="store_true",
-        help="Re-run pairs that already have a results.json (default: skip them)",
+        help="Re-run pairs that already have a pre_check_report.pdf (default: skip them)",
     )
     parser.add_argument(
         "--pair_ids",
