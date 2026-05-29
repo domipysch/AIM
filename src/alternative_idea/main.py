@@ -473,16 +473,16 @@ def alternative_idea_compute_mapping(
         K = B.shape[1]
         state_names = [f"state_{i}" for i in range(K)]
 
-        A_thresh = A.detach().cpu().clone()
-        A_thresh[A_thresh < 0.1] = 0.0
+        # A_thresh = A.detach().cpu().clone()
+        # A_thresh[A_thresh < 0.1] = 0.0
         # df_weight = pd.DataFrame(A_thresh.numpy())
         # df_weight.to_csv(folder_intermediate / "A_thresh.csv", index=False)
-        _arr_to_h5ad(
-            A_thresh.numpy(),
-            folder_intermediate / "A_thresh.h5ad",
-            obs_names=adata_st.obs_names.tolist(),
-            var_names=adata_sc.obs_names.tolist(),
-        )
+        # _arr_to_h5ad(
+        #     A_thresh.numpy(),
+        #     folder_intermediate / "A_thresh.h5ad",
+        #     obs_names=adata_st.obs_names.tolist(),
+        #     var_names=adata_sc.obs_names.tolist(),
+        # )
 
         B_thresh = B.detach().cpu().clone()
         B_thresh[B_thresh < 0.1] = 0.0
@@ -709,10 +709,10 @@ def main(
 
     # Setup Device
     # Use 'mps' for Apple Silicon, 'cuda' for NVIDIA, or 'cpu'
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-    elif torch.cuda.is_available():
+    if torch.cuda.is_available():
         device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
     else:
         device = torch.device("cpu")
 

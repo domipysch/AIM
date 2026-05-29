@@ -12,7 +12,8 @@ Usage
         --pairs_csv  Data/01_Datasets/pairs.csv \
         --sc_dir     Data/01_Datasets/scRNA \
         --st_dir     Data/01_Datasets/ST \
-        --output_dir Data/05_Experiments
+        --output_dir Data/05_Experiments \
+        --gpus 0 1 2 3
 
 Output layout
 -------------
@@ -30,7 +31,9 @@ Output layout
 
 import argparse
 import logging
+import os
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import pandas as pd
@@ -83,11 +86,57 @@ def _load_template() -> dict:
     return cfg
 
 
+def _run_pair_worker(
+    pair_id: int,
+    config_path: Path,
+    result_folder: Path,
+    gpu_id: int,
+    save_result: bool,
+    run_permutation_tests: bool,
+    no_gpu_limit: bool,
+) -> list[str]:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    logging.basicConfig(
+        stream=sys.stdout,
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    log = logging.getLogger(__name__)
+
+    errors: list[str] = []
+    tag = f"[Pair {pair_id:>3} | GPU {gpu_id}]"
+
+    log.info("%s Starting experiment", tag)
+    try:
+        run_experiment_main(
+            config_path,
+            save_result=save_result,
+            run_permutation_tests=run_permutation_tests,
+            no_gpu_limit=no_gpu_limit,
+        )
+    except Exception as exc:
+        msg = f"{tag} run_experiment FAILED: {exc}"
+        log.error(msg)
+        errors.append(msg)
+        return errors
+
+    log.info("%s Starting analysis", tag)
+    try:
+        run_analyses_main(result_folder)
+    except Exception as exc:
+        msg = f"{tag} run_analyses FAILED: {exc}"
+        log.error(msg)
+        errors.append(msg)
+
+    return errors
+
+
 def main(
     pairs_csv: Path,
     sc_dir: Path,
     st_dir: Path,
     output_dir: Path,
+    gpus: list[int],
     save_result: bool = False,
     run_permutation_tests: bool = False,
     no_gpu_limit: bool = False,
@@ -97,6 +146,19 @@ def main(
     st_dir = Path(st_dir)
     output_dir = Path(output_dir)
 
+    import torch
+
+    n_cuda = torch.cuda.device_count()
+    invalid = [g for g in gpus if g >= n_cuda]
+    if invalid:
+        logger.error(
+            "Invalid GPU ID(s) %s — only %d CUDA device(s) available (IDs 0–%d).",
+            invalid,
+            n_cuda,
+            n_cuda - 1,
+        )
+        sys.exit(1)
+
     pairs = pd.read_csv(pairs_csv)
     template = _load_template()
     expected_runs = _count_runs(template)
@@ -104,6 +166,7 @@ def main(
     config_dir = output_dir / "configs"
     config_dir.mkdir(parents=True, exist_ok=True)
 
+    pair_ids: list[int] = []
     config_paths: list[Path] = []
     result_folders: list[Path] = []
 
@@ -142,6 +205,7 @@ def main(
             yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
         logger.info("Config written → %s", config_path)
 
+        pair_ids.append(pair_id)
         config_paths.append(config_path)
         result_folders.append(pair_output)
 
@@ -149,20 +213,47 @@ def main(
         logger.error("No valid pairs found — aborting.")
         sys.exit(1)
 
-    # --- run experiments ---
-    logger.info("=== Running experiments for %d pair(s) ===", len(config_paths))
-    for cfg_path in config_paths:
-        run_experiment_main(
-            cfg_path,
-            save_result=save_result,
-            run_permutation_tests=run_permutation_tests,
-            no_gpu_limit=no_gpu_limit,
-        )
+    logger.info(
+        "=== Running %d pair(s) across %d GPU(s): %s ===",
+        len(config_paths),
+        len(gpus),
+        gpus,
+    )
 
-    # --- run analyses ---
-    logger.info("=== Running analyses for %d pair(s) ===", len(result_folders))
-    for result_folder in result_folders:
-        run_analyses_main(result_folder)
+    with ProcessPoolExecutor(max_workers=len(gpus)) as executor:
+        futures = {
+            executor.submit(
+                _run_pair_worker,
+                pair_id,
+                cfg_path,
+                result_folder,
+                gpus[i % len(gpus)],
+                save_result,
+                run_permutation_tests,
+                no_gpu_limit,
+            ): pair_id
+            for i, (pair_id, cfg_path, result_folder) in enumerate(
+                zip(pair_ids, config_paths, result_folders)
+            )
+        }
+        errors: list[str] = []
+        for future in as_completed(futures):
+            pid = futures[future]
+            try:
+                errors.extend(future.result())
+            except Exception as exc:
+                msg = f"[Pair {pid:>3}] Unexpected worker error: {exc}"
+                logger.error(msg)
+                errors.append(msg)
+            else:
+                logger.info("Pair %d done.", pid)
+
+    if errors:
+        logger.warning("\n%d error(s) occurred:", len(errors))
+        for e in errors:
+            logger.warning("  %s", e)
+    else:
+        logger.info("\nAll pairs completed successfully.")
 
 
 if __name__ == "__main__":
@@ -200,6 +291,15 @@ if __name__ == "__main__":
         help="Root folder for all pair outputs",
     )
     parser.add_argument(
+        "--gpus",
+        type=int,
+        nargs="+",
+        default=[0],
+        metavar="ID",
+        help="GPU IDs to use (space-separated). One pair runs per GPU in parallel. "
+        "Default: 0 (single GPU, sequential).",
+    )
+    parser.add_argument(
         "--save_result",
         action="store_true",
         help="Save the predicted GEP to disk (passed through to run_experiment).",
@@ -215,7 +315,7 @@ if __name__ == "__main__":
         dest="no_gpu_limit",
         action="store_true",
         default=False,
-        help=f"Bypass the GPU memory guard and run regardless of estimated memory usage.",
+        help="Bypass the GPU memory guard and run regardless of estimated memory usage.",
     )
     args = parser.parse_args()
 
@@ -224,6 +324,7 @@ if __name__ == "__main__":
         sc_dir=args.sc_dir,
         st_dir=args.st_dir,
         output_dir=args.output_dir,
+        gpus=args.gpus,
         save_result=args.save_result,
         run_permutation_tests=args.run_permutation_tests,
         no_gpu_limit=args.no_gpu_limit,
