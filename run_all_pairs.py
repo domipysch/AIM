@@ -31,6 +31,7 @@ Output layout
 
 import argparse
 import logging
+import multiprocessing
 import os
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -257,6 +258,7 @@ def main(
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn", force=True)
     logging.basicConfig(
         stream=sys.stdout,
         level=logging.INFO,
