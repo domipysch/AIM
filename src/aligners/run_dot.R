@@ -49,13 +49,16 @@ read_h5ad_X <- function(h5file) {
     indices  <- x_obj[["indices"]]$read()
     indptr   <- x_obj[["indptr"]]$read()
     shape    <- h5attr(x_obj, "shape")
-    m <- sparseMatrix(
-      j    = indices + 1L,
-      p    = indptr,
-      x    = as.numeric(data_vec),
-      dims = as.integer(shape),
-      repr = "R"
-    )
+    n_obs  <- as.integer(shape[1])
+    n_vars <- as.integer(shape[2])
+    # CSR has n_obs+1 entries in indptr; CSC has n_vars+1.
+    if (length(indptr) - 1L == n_obs) {
+      m <- sparseMatrix(j = indices + 1L, p = indptr, x = as.numeric(data_vec),
+                        dims = c(n_obs, n_vars), repr = "R")
+    } else {
+      m <- sparseMatrix(i = indices + 1L, p = indptr, x = as.numeric(data_vec),
+                        dims = c(n_obs, n_vars), repr = "C")
+    }
     return(as.matrix(m))  # n_obs x n_vars
   } else {
     # Dense: hdf5r reads HDF5 C-order (n_obs, n_vars) into R as (n_vars x n_obs) —
