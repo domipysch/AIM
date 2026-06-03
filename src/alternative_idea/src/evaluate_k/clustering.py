@@ -248,7 +248,7 @@ def run_leiden_clustering(
     adata_processed : Working copy of adata_sc with UMAP + Leiden stored.
     """
     adata = adata_sc.copy()
-    run_pca_neighbors_umap(adata)
+    run_pca_neighbors_umap(adata, skip_umap=True)
     sc.tl.leiden(adata, resolution=resolution, key_added="_leiden_ref")
     labels = adata.obs["_leiden_ref"].astype(int).values
     logger.info(

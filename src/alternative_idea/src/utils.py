@@ -44,6 +44,7 @@ def run_pca_neighbors_umap(
     adata: AnnData,
     n_comps: int = 30,
     n_neighbors: int = 15,
+    skip_umap: bool = False,
 ) -> None:
     """In-place: optional normalize/log1p → PCA → neighbors → optional UMAP."""
 
@@ -54,7 +55,8 @@ def run_pca_neighbors_umap(
     n = min(n_comps, adata.n_obs - 1, adata.n_vars - 1)
     sc.pp.pca(adata, n_comps=n)
     sc.pp.neighbors(adata, n_neighbors=n_neighbors, use_rep="X_pca")
-    sc.tl.umap(adata)
+    if not skip_umap:
+        sc.tl.umap(adata)
 
 
 def build_sc_knn_graph(

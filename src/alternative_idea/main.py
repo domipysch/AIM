@@ -389,7 +389,7 @@ def alternative_idea_compute_mapping(
         total_loss = loss_dict["loss"]
 
         # 3. Optionaler Gradient-Check (Nur zur Diagnose)
-        if epoch % 100 == 0:
+        if epoch % 100 == 0 and verbose_logging:
             logger.debug(f"\n--- Gradient Analysis (Epoch {epoch}) ---")
             for name, loss_val in loss_dict.items():
                 if name == "loss":

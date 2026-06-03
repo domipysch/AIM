@@ -121,13 +121,13 @@ def _run_pair_worker(
         errors.append(msg)
         return errors
 
-    log.info("%s Starting analysis", tag)
-    try:
-        run_analyses_main(result_folder)
-    except Exception as exc:
-        msg = f"{tag} run_analyses FAILED: {exc}"
-        log.error(msg)
-        errors.append(msg)
+    # log.info("%s Starting analysis", tag)
+    # try:
+    #     run_analyses_main(result_folder)
+    # except Exception as exc:
+    #     msg = f"{tag} run_analyses FAILED: {exc}"
+    #     log.error(msg)
+    #     errors.append(msg)
 
     return errors
 
