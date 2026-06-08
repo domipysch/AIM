@@ -106,27 +106,27 @@ def _run_pair_worker(
     errors: list[str] = []
     tag = f"[Pair {pair_id:>3} | GPU {gpu_id}]"
 
-    log.info("%s Starting experiment", tag)
-    try:
-        run_experiment_main(
-            config_path,
-            save_result=save_result,
-            run_permutation_tests=run_permutation_tests,
-            no_gpu_limit=no_gpu_limit,
-        )
-    except Exception as exc:
-        msg = f"{tag} run_experiment FAILED: {exc}"
-        log.error(msg)
-        errors.append(msg)
-        return errors
-
-    # log.info("%s Starting analysis", tag)
+    # log.info("%s Starting experiment", tag)
     # try:
-    #     run_analyses_main(result_folder)
+    #     run_experiment_main(
+    #         config_path,
+    #         save_result=save_result,
+    #         run_permutation_tests=run_permutation_tests,
+    #         no_gpu_limit=no_gpu_limit,
+    #     )
     # except Exception as exc:
-    #     msg = f"{tag} run_analyses FAILED: {exc}"
+    #     msg = f"{tag} run_experiment FAILED: {exc}"
     #     log.error(msg)
     #     errors.append(msg)
+    #     return errors
+
+    log.info("%s Starting analysis", tag)
+    try:
+        run_analyses_main(result_folder)
+    except Exception as exc:
+        msg = f"{tag} run_analyses FAILED: {exc}"
+        log.error(msg)
+        errors.append(msg)
 
     return errors
 
@@ -227,9 +227,9 @@ def main(
 
         pair_output = output_dir / f"pair_{pair_id}"
 
-        if _pair_is_complete(pair_output, sc_path, st_path, expected_runs):
-            logger.info("Pair %d already complete — skipping.", pair_id)
-            continue
+        # if _pair_is_complete(pair_output, sc_path, st_path, expected_runs):
+        #     logger.info("Pair %d already complete — skipping.", pair_id)
+        #     continue
 
         cfg = {
             "data": {
