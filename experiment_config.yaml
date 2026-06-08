@@ -1,19 +1,16 @@
 data:
   sc_paths:
-    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\04_ColorectalCancer\sc.h5ad
+    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\scRNA\01_mouse-ssp.h5ad
+#    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\Subexperiment_NonMarker_Diffs\01_mouse-ssp.h5ad
   st_paths:
-    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\04_ColorectalCancer\patches_4x4\patch_2_2\st.h5ad
+    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\ST\01_mouse-ssp.h5ad
 output:
-  output_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\05_Experiments\04_ColorectalCancer
+  output_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\MouseSSP-AltIdea-Temp
 mapping:
   deterministic: true
 model:
   K:
-    - 10
-    - 25
-    - 50
-    - 75
-    - 100
+    - 5
 training:
   lr:
     - 0.008
@@ -28,11 +25,11 @@ sc_embedding:
   method: pca
   d: 32
 loss_weights:
-  - lambda_rec_spot: 0.5
-    lambda_rec_gene: 0.5
+  - lambda_rec_spot: 1.0
+    lambda_rec_gene: 0
     lambda_clust_intra: 0
     lambda_clust_inter: 0
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
+    lambda_state_entropy: 0.01
+    lambda_spot_entropy: 0.008
     lambda_soft_modularity: 0
-    lambda_soft_contingency: 1.0
+    lambda_soft_contingency: 0

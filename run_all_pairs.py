@@ -73,7 +73,6 @@ def _pair_is_complete(
         return False
     try:
         df = pd.read_csv(summary_path)
-        print(expected_runs)
         return len(df) == expected_runs and (df["status"] == "ok").all()
     except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError):
         return False
@@ -132,6 +131,44 @@ def _run_pair_worker(
     return errors
 
 
+def _check_completion(
+    pairs_csv: Path,
+    sc_dir: Path,
+    st_dir: Path,
+    output_dir: Path,
+) -> None:
+    """Print completion status for every pair and exit."""
+    pairs = pd.read_csv(pairs_csv)
+    template = _load_template()
+    expected_runs = _count_runs(template)
+
+    complete = incomplete = missing = 0
+    for _, row in pairs.iterrows():
+        pair_id = int(row["PairID"])
+        sc_path = sc_dir / f"{row['scName']}.h5ad"
+        st_path = st_dir / f"{row['stName']}.h5ad"
+
+        if not sc_path.exists() or not st_path.exists():
+            print(f"  Pair {pair_id:>3}  MISSING FILES")
+            missing += 1
+            continue
+
+        pair_output = output_dir / f"pair_{pair_id}"
+        done = _pair_is_complete(pair_output, sc_path, st_path, expected_runs)
+        status = "COMPLETE  " if done else "incomplete"
+        print(f"  Pair {pair_id:>3}  {status}  ({row['scName']} × {row['stName']})")
+        if done:
+            complete += 1
+        else:
+            incomplete += 1
+
+    print(
+        f"\n  {complete} complete, {incomplete} incomplete, {missing} missing files  "
+        f"(expected {expected_runs} runs per pair)"
+    )
+    sys.exit(0)
+
+
 def main(
     pairs_csv: Path,
     sc_dir: Path,
@@ -141,11 +178,15 @@ def main(
     save_result: bool = False,
     run_permutation_tests: bool = False,
     no_gpu_limit: bool = False,
+    check: bool = False,
 ) -> None:
     pairs_csv = Path(pairs_csv)
     sc_dir = Path(sc_dir)
     st_dir = Path(st_dir)
     output_dir = Path(output_dir)
+
+    if check:
+        _check_completion(pairs_csv, sc_dir, st_dir, output_dir)
 
     import torch
 
@@ -319,6 +360,12 @@ if __name__ == "__main__":
         default=False,
         help="Bypass the GPU memory guard and run regardless of estimated memory usage.",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        default=False,
+        help="Print completion status for all pairs and exit without running anything.",
+    )
     args = parser.parse_args()
 
     main(
@@ -330,4 +377,5 @@ if __name__ == "__main__":
         save_result=args.save_result,
         run_permutation_tests=args.run_permutation_tests,
         no_gpu_limit=args.no_gpu_limit,
+        check=args.check,
     )
