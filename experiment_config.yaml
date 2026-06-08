@@ -10,7 +10,11 @@ mapping:
   deterministic: true
 model:
   K:
-    - 5
+    - 10
+    - 25
+    - 50
+    - 75
+    - 100
 training:
   lr:
     - 0.008
