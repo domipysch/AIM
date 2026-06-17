@@ -33,6 +33,7 @@ Assumptions
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -78,6 +79,10 @@ def run_analysis(
     output_dir: Path,
     leiden_resolution: float,
     K: int,
+    adata_processed_base: AnnData | None = None,
+    leiden_labels: np.ndarray | None = None,
+    leiden_shared_labels: np.ndarray | None = None,
+    adata_shared: AnnData | None = None,
 ) -> dict:
     """
     Full post-mapping analysis pipeline.
@@ -149,43 +154,57 @@ def run_analysis(
     adata_states.write_h5ad(state_h5ad)
     logger.info("Cell-state profiles → %s", state_h5ad)
 
-    # ── Prepare sc data once (normalise, PCA, neighbors, UMAP) ───────────────
-    adata_processed = adata_sc.copy()
-    run_pca_neighbors_umap(adata_processed)
+    # ── Prepare sc data (copy pre-computed base or compute from scratch) ──────
+    if adata_processed_base is not None:
+        adata_processed = adata_processed_base.copy()
+    else:
+        adata_processed = adata_sc.copy()
+        run_pca_neighbors_umap(adata_processed)
 
-    # ── Computed clustering metrics ───────────────────────────────────────────
-    logger.info("Computing metrics for the computed clustering…")
-    metrics_computed = compute_all_metrics(
-        adata_processed, cell_states, adata_st=adata_st, shared_genes=shared_genes
-    )
-    logger.info("Computed:  %s", metrics_computed)
-    adata_processed.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
+    # ── Leiden reference – all genes (pre-computed or on demand) ─────────────
+    if leiden_labels is None:
+        leiden_labels, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
 
-    # ── Leiden reference – all genes ─────────────────────────────────────────
-    leiden_labels, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
-    metrics_leiden = compute_all_metrics(
-        adata_processed, leiden_labels, adata_st=adata_st, shared_genes=shared_genes
-    )
+    # ── Leiden reference – shared genes (pre-computed or on demand) ───────────
+    if leiden_shared_labels is None:
+        leiden_shared_labels, adata_shared = run_leiden_shared_genes(
+            adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+        )
+
+    # ── Clustering metrics – three independent calls run in parallel ──────────
+    logger.info("Computing clustering metrics (computed / Leiden all / Leiden shared)…")
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        fut_computed = ex.submit(
+            compute_all_metrics,
+            adata_processed,
+            cell_states,
+            adata_st=adata_st,
+            shared_genes=shared_genes,
+        )
+        fut_leiden = ex.submit(
+            compute_all_metrics,
+            adata_processed,
+            leiden_labels,
+            adata_st=adata_st,
+            shared_genes=shared_genes,
+        )
+        fut_shared = ex.submit(
+            compute_all_metrics,
+            adata_processed,
+            leiden_shared_labels,
+            adata_st=adata_st,
+            shared_genes=shared_genes,
+        )
+        metrics_computed = fut_computed.result()
+        metrics_leiden = fut_leiden.result()
+        metrics_leiden_shared = fut_shared.result()
+
+    logger.info("Computed:           %s", metrics_computed)
     logger.info("Leiden (all genes): %s", metrics_leiden)
+    logger.info("Leiden (shared):    %s", metrics_leiden_shared)
+
+    adata_processed.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
     adata_processed.obs["leiden_state"] = pd.Categorical(leiden_labels.astype(str))
-
-    # ── Leiden reference – shared genes ───────────────────────────────────────
-    logger.info(
-        "Running Leiden clustering – shared genes (resolution=%.2f)…", leiden_resolution
-    )
-    leiden_shared_labels, adata_shared = run_leiden_shared_genes(
-        adata_sc,
-        shared_genes=shared_genes,
-        resolution=leiden_resolution,
-    )
-    metrics_leiden_shared = compute_all_metrics(
-        adata_processed,
-        leiden_shared_labels,
-        adata_st=adata_st,
-        shared_genes=shared_genes,
-    )
-    logger.info("Leiden (shared genes): %s", metrics_leiden_shared)
-
     adata_processed.obs["leiden_shared_state"] = pd.Categorical(
         leiden_shared_labels.astype(str)
     )

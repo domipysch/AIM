@@ -1,10 +1,11 @@
 """
-Generate per-pair experiment configs from the template and run the full pipeline.
+Generate per-pair experiment configs from the template and run experiments across all pairs.
 
 For each row in pairs.csv the script:
   1. Writes a config YAML (data + output filled in, rest from experiment_config.yaml)
-  2. Runs run_experiment for all pairs
-  3. Runs run_analyses_per_k for all pairs
+  2. Runs run_experiment for all pairs in parallel across GPUs
+
+Post-mapping analyses are handled separately by run_analyses_all_pairs.py.
 
 Usage
 -----
@@ -39,9 +40,6 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
-
-from run_experiment import main as run_experiment_main
-from run_analyses_per_k import main as run_analyses_main
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +87,22 @@ def _load_template() -> dict:
 def _run_pair_worker(
     pair_id: int,
     config_path: Path,
-    result_folder: Path,
     gpu_id: int,
     save_result: bool,
     run_permutation_tests: bool,
     no_gpu_limit: bool,
+    cpu_mode: bool = False,
 ) -> list[str]:
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    if cpu_mode:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        tag = f"[Pair {pair_id:>3} | CPU]"
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+        tag = f"[Pair {pair_id:>3} | GPU {gpu_id}]"
+
+    # Import AFTER setting CUDA_VISIBLE_DEVICES so torch sees the correct device(s)
+    from run_experiment import main as run_experiment_main
+
     logging.basicConfig(
         stream=sys.stdout,
         level=logging.INFO,
@@ -104,7 +111,6 @@ def _run_pair_worker(
     log = logging.getLogger(__name__)
 
     errors: list[str] = []
-    tag = f"[Pair {pair_id:>3} | GPU {gpu_id}]"
 
     log.info("%s Starting experiment", tag)
     try:
@@ -113,20 +119,13 @@ def _run_pair_worker(
             save_result=save_result,
             run_permutation_tests=run_permutation_tests,
             no_gpu_limit=no_gpu_limit,
+            force_cpu=cpu_mode,
         )
     except Exception as exc:
         msg = f"{tag} run_experiment FAILED: {exc}"
         log.error(msg)
         errors.append(msg)
         return errors
-
-    log.info("%s Starting analysis", tag)
-    try:
-        run_analyses_main(result_folder)
-    except Exception as exc:
-        msg = f"{tag} run_analyses FAILED: {exc}"
-        log.error(msg)
-        errors.append(msg)
 
     return errors
 
@@ -179,6 +178,8 @@ def main(
     run_permutation_tests: bool = False,
     no_gpu_limit: bool = False,
     check: bool = False,
+    cpu_mode: bool = False,
+    workers: int = 1,
 ) -> None:
     pairs_csv = Path(pairs_csv)
     sc_dir = Path(sc_dir)
@@ -188,18 +189,23 @@ def main(
     if check:
         _check_completion(pairs_csv, sc_dir, st_dir, output_dir)
 
-    import torch
+    if cpu_mode:
+        n_workers = workers
+        logger.info("CPU mode — using %d worker(s).", n_workers)
+    else:
+        import torch
 
-    n_cuda = torch.cuda.device_count()
-    invalid = [g for g in gpus if g >= n_cuda]
-    if invalid:
-        logger.error(
-            "Invalid GPU ID(s) %s — only %d CUDA device(s) available (IDs 0–%d).",
-            invalid,
-            n_cuda,
-            n_cuda - 1,
-        )
-        sys.exit(1)
+        n_cuda = torch.cuda.device_count()
+        invalid = [g for g in gpus if g >= n_cuda]
+        if invalid:
+            logger.error(
+                "Invalid GPU ID(s) %s — only %d CUDA device(s) available (IDs 0–%d).",
+                invalid,
+                n_cuda,
+                n_cuda - 1,
+            )
+            sys.exit(1)
+        n_workers = len(gpus)
 
     pairs = pd.read_csv(pairs_csv)
     template = _load_template()
@@ -210,7 +216,6 @@ def main(
 
     pair_ids: list[int] = []
     config_paths: list[Path] = []
-    result_folders: list[Path] = []
 
     # --- generate one config per pair ---
     for _, row in pairs.iterrows():
@@ -249,34 +254,38 @@ def main(
 
         pair_ids.append(pair_id)
         config_paths.append(config_path)
-        result_folders.append(pair_output)
 
     if not config_paths:
         logger.error("No valid pairs found — aborting.")
         sys.exit(1)
 
-    logger.info(
-        "=== Running %d pair(s) across %d GPU(s): %s ===",
-        len(config_paths),
-        len(gpus),
-        gpus,
-    )
+    if cpu_mode:
+        logger.info(
+            "=== Running %d pair(s) on CPU with %d worker(s) ===",
+            len(config_paths),
+            n_workers,
+        )
+    else:
+        logger.info(
+            "=== Running %d pair(s) across %d GPU(s): %s ===",
+            len(config_paths),
+            len(gpus),
+            gpus,
+        )
 
-    with ProcessPoolExecutor(max_workers=len(gpus)) as executor:
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {
             executor.submit(
                 _run_pair_worker,
                 pair_id,
                 cfg_path,
-                result_folder,
-                gpus[i % len(gpus)],
+                0 if cpu_mode else gpus[i % len(gpus)],
                 save_result,
                 run_permutation_tests,
                 no_gpu_limit,
+                cpu_mode,
             ): pair_id
-            for i, (pair_id, cfg_path, result_folder) in enumerate(
-                zip(pair_ids, config_paths, result_folders)
-            )
+            for i, (pair_id, cfg_path) in enumerate(zip(pair_ids, config_paths))
         }
         errors: list[str] = []
         for future in as_completed(futures):
@@ -366,6 +375,19 @@ if __name__ == "__main__":
         default=False,
         help="Print completion status for all pairs and exit without running anything.",
     )
+    parser.add_argument(
+        "--cpu",
+        dest="cpu_mode",
+        action="store_true",
+        default=False,
+        help="Run on CPU instead of GPU. --gpus is ignored; use --workers to control parallelism.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel worker processes in CPU mode (default: 1).",
+    )
     args = parser.parse_args()
 
     main(
@@ -378,4 +400,6 @@ if __name__ == "__main__":
         run_permutation_tests=args.run_permutation_tests,
         no_gpu_limit=args.no_gpu_limit,
         check=args.check,
+        cpu_mode=args.cpu_mode,
+        workers=args.workers,
     )

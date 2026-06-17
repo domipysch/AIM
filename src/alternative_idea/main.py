@@ -703,13 +703,15 @@ def main(
     store_intermediate: bool = False,
     verbose_logging: bool = False,
     no_gpu_limit: bool = False,
+    force_cpu: bool = False,
 ) -> tuple[AnnData, Optional[AnnData], AnnData, dict]:
 
     mapping_config, _, training_config, _, _ = load_config(config_path)
 
     # Setup Device
-    # Use 'mps' for Apple Silicon, 'cuda' for NVIDIA, or 'cpu'
-    if torch.cuda.is_available():
+    if force_cpu:
+        device = torch.device("cpu")
+    elif torch.cuda.is_available():
         device = torch.device("cuda")
     elif torch.backends.mps.is_available():
         device = torch.device("mps")

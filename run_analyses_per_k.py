@@ -53,13 +53,16 @@ from pathlib import Path
 
 import anndata as ad
 import pandas as pd
+import scanpy as sc
 import yaml
 
 from src.alternative_idea.src.evaluate_k.analysis import run_analysis
+from src.alternative_idea.src.evaluate_k.clustering import run_leiden_shared_genes
 from src.alternative_idea.src.evaluate_k.report import (
     generate_per_k_report,
     generate_summary_report,
 )
+from src.alternative_idea.src.utils import run_pca_neighbors_umap
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s  %(levelname)s  %(message)s"
@@ -140,6 +143,34 @@ def main(result_folder: Path) -> None:
     logger.info("Loading st data from %s", st_path)
     adata_st = ad.read_h5ad(st_path)
 
+    # ── Pre-compute K-independent artifacts (shared across all runs) ──────────
+    shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
+
+    logger.info("Pre-computing adata_processed (normalize → PCA → neighbors → UMAP)…")
+    adata_processed_base = adata_sc.copy()
+    run_pca_neighbors_umap(adata_processed_base)
+
+    logger.info(
+        "Pre-computing Leiden clustering (all genes, resolution=%.2f)…",
+        leiden_resolution,
+    )
+    sc.tl.leiden(
+        adata_processed_base, resolution=leiden_resolution, key_added="_leiden_ref"
+    )
+    leiden_labels_precomp = adata_processed_base.obs["_leiden_ref"].astype(int).values
+    logger.info("Leiden (all genes): %d clusters", len(set(leiden_labels_precomp)))
+
+    logger.info(
+        "Pre-computing Leiden clustering (shared genes, resolution=%.2f)…",
+        leiden_resolution,
+    )
+    leiden_shared_labels_precomp, adata_shared_precomp = run_leiden_shared_genes(
+        adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+    )
+    logger.info(
+        "Leiden (shared genes): %d clusters", len(set(leiden_shared_labels_precomp))
+    )
+
     run_dirs = _run_dirs(pair_dir)
     if not run_dirs:
         logger.error("No numbered run directories found in %s", pair_dir)
@@ -177,6 +208,10 @@ def main(result_folder: Path) -> None:
             output_dir=output_dir,
             K=K,
             leiden_resolution=leiden_resolution,
+            adata_processed_base=adata_processed_base,
+            leiden_labels=leiden_labels_precomp,
+            leiden_shared_labels=leiden_shared_labels_precomp,
+            adata_shared=adata_shared_precomp,
         )
         logger.info("Run %s done → %s", run_dir.name, output_dir)
 
