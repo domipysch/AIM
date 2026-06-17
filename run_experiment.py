@@ -1,17 +1,27 @@
 import argparse
-import os
+import csv
+import copy
+import itertools
+import json
+import logging
 import shutil
 import sys
+import time
+import traceback
 from pathlib import Path
 from typing import Optional
+import anndata as ad
+import pandas as pd
+import scanpy as sc
 import yaml
-import itertools
-import copy
-import time
-import csv
-import traceback
-import logging
 from src.alternative_idea import main as alternative_idea_main
+from src.alternative_idea.src.evaluate_k.analysis import run_analysis
+from src.alternative_idea.src.evaluate_k.clustering import run_leiden_shared_genes
+from src.alternative_idea.src.evaluate_k.report import (
+    generate_per_k_report,
+    generate_summary_report,
+)
+from src.alternative_idea.src.utils import run_pca_neighbors_umap
 from src.metrics import (
     run_all_metrics,
     run_all_shared_boxplots,
@@ -21,25 +31,40 @@ from src.metrics import (
 logger = logging.getLogger(__name__)
 
 
+def _read_median_cossim(run_dir: Path) -> tuple[float | None, float | None]:
+    """Return (gene_median, spot_median) from the metrics cossim JSONs, or (None, None)."""
+    metrics_dir = run_dir / "metrics"
+
+    def _read_median(json_path: Path) -> float | None:
+        if not json_path.exists():
+            return None
+        with open(json_path) as f:
+            return float(json.load(f)["median"])
+
+    gene_median = _read_median(metrics_dir / "cossim-per-gene.json")
+    spot_median = _read_median(metrics_dir / "cossim-per-spot.json")
+    return gene_median, spot_median
+
+
 def create_shared_boxplots(
-    ids: list[str],
-    metrics_folder: Path,
+    metric_dirs: list[Path],
+    labels: list[str],
     output_folder: Path,
     run_permutation_tests: bool = False,
 ):
 
     # Run shared metrics
     run_all_shared_boxplots.main(
-        [metrics_folder / s_id for s_id in ids],
-        ids,
+        metric_dirs,
+        labels,
         output_folder,
     )
 
     # Run shared permutation test boxplots
     if run_permutation_tests:
         run_all_permutation_boxplots.main(
-            [metrics_folder / s_id for s_id in ids],
-            ids,
+            metric_dirs,
+            labels,
             output_folder,
         )
 
@@ -50,7 +75,6 @@ def run_config(
     run_config_path: Path,
     save_result_path: Optional[Path],
     metrics_folder: Path,
-    metrics_folder_det: Optional[Path],
     run_permutation_tests: bool = False,
     no_gpu_limit: bool = False,
     force_cpu: bool = False,
@@ -81,16 +105,15 @@ def run_config(
         run_permutation_tests=run_permutation_tests,
     )
 
-    # Run individual metrics (deterministic) if applicable
-    if predicted_gep_det is not None:
-        assert metrics_folder_det is not None
-        run_all_metrics.main(
-            sc_path,
-            st_path,
-            metrics_folder_det,
-            result_gep=predicted_gep_det,
-            run_permutation_tests=run_permutation_tests,
-        )
+    # Run individual metrics (deterministic)
+    run_all_metrics.main(
+        sc_path,
+        st_path,
+        metrics_folder,
+        result_gep=predicted_gep_det,
+        run_permutation_tests=run_permutation_tests,
+        name_suffix="-det",
+    )
 
     return losses_after_last_epoch
 
@@ -120,16 +143,14 @@ def main(
     data_cfg = base_cfg.pop("data")
     output_cfg = base_cfg.pop("output")
 
-    sc_paths = [Path(p) for p in data_cfg["sc_paths"]]
-    st_paths = [Path(p) for p in data_cfg["st_paths"]]
+    sc_path = Path(data_cfg["sc_path"])
+    st_path = Path(data_cfg["st_path"])
     output_folder = Path(output_cfg["output_folder"])
 
-    for sc_path in sc_paths:
-        if not sc_path.exists():
-            raise FileNotFoundError(f"sc.h5ad not found: {sc_path}")
-    for st_path in st_paths:
-        if not st_path.exists():
-            raise FileNotFoundError(f"st.h5ad not found: {st_path}")
+    if not sc_path.exists():
+        raise FileNotFoundError(f"sc.h5ad not found: {sc_path}")
+    if not st_path.exists():
+        raise FileNotFoundError(f"st.h5ad not found: {st_path}")
 
     # Helper: collect leaf paths -> list of values (lists become value lists, scalars become singleton list)
     def collect_leaves(node, path=()):
@@ -190,11 +211,9 @@ def main(
     for v in lists:
         total_runs *= len(v)
 
-    n_configs = len(sc_paths) * len(st_paths)
     logger.info(
         f"Experiment config loaded from {experiment_config}. "
-        f"Total runs per SC×ST config: {total_runs}, "
-        f"configs: {n_configs} ({len(sc_paths)} SC × {len(st_paths)} ST)"
+        f"Total runs: {total_runs}"
     )
 
     # Function to set a value in nested dict by path
@@ -206,156 +225,212 @@ def main(
             cur = cur[key]
         cur[path[-1]] = value
 
-    for sc_path, st_path in itertools.product(sc_paths, st_paths):
-        dataset_name = f"{sc_path.parent.name}_{sc_path.stem}__{st_path.parent.name}_{st_path.stem}"
-        ds_folder = output_folder / dataset_name
-        ds_metric_folder = ds_folder / "metrics"
+    ds_folder = output_folder
 
-        logger.info(f"=== Dataset: {dataset_name} ===")
+    logger.info(f"=== SC: {sc_path.stem}  ST: {st_path.stem} ===")
 
-        if os.path.exists(ds_folder):
-            shutil.rmtree(ds_folder)
-        ds_folder.mkdir(parents=True, exist_ok=False)
-        ds_metric_folder.mkdir(parents=True, exist_ok=False)
+    ds_folder.mkdir(parents=True, exist_ok=True)
 
-        # Copy experiment config to output folder for reference
-        shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
+    # Copy experiment config to output folder for reference
+    shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
 
-        # Prepare summary CSV
-        summary_path = ds_folder / "summary.csv"
+    # ── Analysis pre-computation (shared across all K runs for this dataset) ──
+    leiden_resolution = float(
+        base_cfg.get("training", {}).get("reference_leiden_clustering_resolution", 3.0)
+    )
+    analysis_ready = False
+    analysis_summary_rows: list[dict] = []
+    try:
+        logger.info("Pre-computing analysis artifacts (PCA, UMAP, Leiden)…")
+        adata_sc = ad.read_h5ad(sc_path)
+        adata_st = ad.read_h5ad(st_path)
+        shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
 
-        # Iterate over grid
-        combo_iter = itertools.product(*lists)
+        adata_processed_base = adata_sc.copy()
+        run_pca_neighbors_umap(adata_processed_base)
+        sc.tl.leiden(
+            adata_processed_base, resolution=leiden_resolution, key_added="_leiden_ref"
+        )
+        leiden_labels_precomp = (
+            adata_processed_base.obs["_leiden_ref"].astype(int).values
+        )
 
-        run_id = 0
-        _fixed_cols = [
-            "id",
-            "config_path",
-            "output_path",
-            "status",
-            "duration_seconds",
-            "error_message",
-        ]
-        with open(summary_path, "w", newline="") as summary_file:
-            # DictWriter is created after the first run, once loss column names are known.
-            writer = None
+        leiden_shared_labels_precomp, _ = run_leiden_shared_genes(
+            adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+        )
+        analysis_ready = True
+        logger.info("Analysis pre-computation done.")
+    except Exception as _pre_exc:
+        logger.warning(
+            "Analysis pre-computation failed — reports will be skipped: %s", _pre_exc
+        )
 
-            for combo in combo_iter:
-                # Build run-specific config
-                cfg_copy = copy.deepcopy(base_cfg)
-                for path, val in zip(paths, combo):
-                    set_in_dict(cfg_copy, path, val)
+    # Prepare summary CSV
+    summary_path = ds_folder / "summary.csv"
 
-                run_dir = ds_folder / str(run_id)
-                run_dir.mkdir(parents=True, exist_ok=True)
-                run_config_path = run_dir / "config.yml"
-                with open(run_config_path, "w") as cf:
-                    yaml.safe_dump(cfg_copy, cf, sort_keys=False)
+    # Iterate over grid
+    combo_iter = itertools.product(*lists)
 
-                result_path = run_dir / "result_GEP.h5ad"
+    run_id = 0
+    _fixed_cols = [
+        "id",
+        "config_path",
+        "output_path",
+        "status",
+        "duration_seconds",
+        "error_message",
+    ]
+    with open(summary_path, "w", newline="") as summary_file:
+        # DictWriter is created after the first run, once loss column names are known.
+        writer = None
 
-                metric_dir = ds_metric_folder / str(run_id)
-                metric_dir.mkdir(parents=True, exist_ok=False)
+        for combo in combo_iter:
+            # Build run-specific config
+            cfg_copy = copy.deepcopy(base_cfg)
+            for path, val in zip(paths, combo):
+                set_in_dict(cfg_copy, path, val)
 
-                # if mode is 'deterministic', then also create a folder "<run_id>_det"
-                metric_dir_det = None
-                if cfg_copy["mapping"]["deterministic"]:
-                    metric_dir_det = ds_metric_folder / f"{run_id}_det"
-                    metric_dir_det.mkdir(parents=True, exist_ok=False)
+            run_dir = ds_folder / str(run_id)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            run_config_path = run_dir / "config.yml"
+            with open(run_config_path, "w") as cf:
+                yaml.safe_dump(cfg_copy, cf, sort_keys=False)
 
-                start = time.time()
-                exc = None
-                tb = ""
-                losses_after_last_epoch = {}
-                status = "error"
-                error_msg = ""
+            result_path = run_dir / "result_GEP.h5ad"
+
+            metric_dir = run_dir / "metrics"
+            metric_dir.mkdir(parents=True, exist_ok=True)
+
+            start = time.time()
+            exc = None
+            tb = ""
+            losses_after_last_epoch = {}
+            status = "error"
+            error_msg = ""
+            try:
+                logger.info(
+                    f"Starting run {run_id}/{total_runs - 1} -> writing to {run_dir}"
+                )
+                losses_after_last_epoch = run_config(
+                    sc_path,
+                    st_path,
+                    run_config_path,
+                    (run_dir / "gep.h5ad") if save_result else None,
+                    metric_dir,
+                    run_permutation_tests=run_permutation_tests,
+                    no_gpu_limit=no_gpu_limit,
+                    force_cpu=force_cpu,
+                )
+                status = "ok"
+            except Exception as e:
+                exc = e
+                error_msg = str(e)
+                tb = traceback.format_exc()
+
+            duration = time.time() - start
+            if exc is None:
+                logger.info(f"Run {run_id} completed in {duration:.2f}s")
+            else:
+                logger.error(f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}")
+
+            # ── Per-run analysis & report ─────────────────────────────────
+            if exc is None and analysis_ready:
                 try:
-                    logger.info(
-                        f"Starting run {run_id}/{total_runs - 1} -> writing to {run_dir}"
-                    )
-                    losses_after_last_epoch = run_config(
-                        sc_path,
-                        st_path,
-                        run_config_path,
-                        (run_dir / "gep.h5ad") if save_result else None,
-                        metric_dir,
-                        metric_dir_det,
-                        run_permutation_tests=run_permutation_tests,
-                        no_gpu_limit=no_gpu_limit,
-                        force_cpu=force_cpu,
-                    )
-                    status = "ok"
-                except Exception as e:
-                    exc = e
-                    error_msg = str(e)
-                    tb = traceback.format_exc()
+                    b_path = run_dir / "intermediate" / "B_thresh.h5ad"
+                    c_path = run_dir / "intermediate" / "C_thresh.h5ad"
+                    if b_path.exists() and c_path.exists():
+                        K = cfg_copy["model"]["K"]
+                        B = ad.read_h5ad(b_path).X
+                        C = ad.read_h5ad(c_path).X
+                        analysis_dir = run_dir / "analysis"
+                        results = run_analysis(
+                            adata_sc=adata_sc,
+                            adata_st=adata_st,
+                            B=B,
+                            C=C,
+                            output_dir=analysis_dir,
+                            K=K,
+                            leiden_resolution=leiden_resolution,
+                            adata_processed_base=adata_processed_base,
+                            leiden_labels=leiden_labels_precomp,
+                            leiden_shared_labels=leiden_shared_labels_precomp,
+                        )
+                        generate_per_k_report(analysis_dir, K, str(run_id))
 
-                duration = time.time() - start
-                if exc is None:
-                    logger.info(f"Run {run_id} completed in {duration:.2f}s")
-                else:
+                        gene_median, spot_median = _read_median_cossim(run_dir)
+                        analysis_row: dict = {"run": str(run_id), "K": K}
+                        analysis_row["Computed states"] = results["n_computed_states"]
+                        analysis_row["Computed states > 1%"] = results[
+                            "n_computed_states_above_1pct"
+                        ]
+                        analysis_row["Mapped states"] = results["n_mapped_states"]
+                        analysis_row["per_state_perm_p"] = results["substate_metrics"][
+                            "weighted_perm_p"
+                        ]
+                        analysis_row["margin_computed_mean"] = results[
+                            "substate_metrics"
+                        ]["margin_computed_mean"]
+                        analysis_row["margin_leiden_mean"] = results[
+                            "substate_metrics"
+                        ]["margin_leiden_mean"]
+                        for metric, value in results["metrics_computed"].items():
+                            analysis_row[f"{metric}__computed"] = value
+                        analysis_row["contingency_score"] = results[
+                            "contingency_matching"
+                        ]["score"]
+                        analysis_row["median_cossim_gene"] = gene_median
+                        analysis_row["median_cossim_spot"] = spot_median
+                        analysis_summary_rows.append(analysis_row)
+                    else:
+                        logger.warning(
+                            "Run %s: B/C intermediate files missing — skipping analysis",
+                            run_id,
+                        )
+                except Exception as _analysis_exc:
                     logger.error(
-                        f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}"
+                        "Analysis failed for run %s: %s", run_id, _analysis_exc
                     )
 
-                row = {
-                    "id": run_id,
-                    "config_path": str(run_config_path),
-                    "output_path": str(result_path),
-                    "status": status,
-                    "duration_seconds": f"{duration:.3f}",
-                    "error_message": error_msg,
-                    **losses_after_last_epoch,
-                }
-                if writer is None:
-                    fieldnames = _fixed_cols + [k for k in losses_after_last_epoch]
-                    writer = csv.DictWriter(
-                        summary_file, fieldnames=fieldnames, extrasaction="ignore"
-                    )
-                    writer.writeheader()
-                writer.writerow(row)
-                summary_file.flush()
+            row = {
+                "id": run_id,
+                "config_path": str(run_config_path),
+                "output_path": str(result_path),
+                "status": status,
+                "duration_seconds": f"{duration:.3f}",
+                "error_message": error_msg,
+                **losses_after_last_epoch,
+            }
+            if writer is None:
+                fieldnames = _fixed_cols + [k for k in losses_after_last_epoch]
+                writer = csv.DictWriter(
+                    summary_file, fieldnames=fieldnames, extrasaction="ignore"
+                )
+                writer.writeheader()
+            writer.writerow(row)
+            summary_file.flush()
 
-                if exc is not None:
-                    raise exc
+            if exc is not None:
+                raise exc
 
-                run_id += 1
+            run_id += 1
 
-        # Create shared boxplots for this dataset
-        shared_dir = ds_folder / "shared"
-        shared_dir.mkdir(parents=True, exist_ok=True)
-        run_names = list(map(str, range(run_id)))
-        if base_cfg["mapping"]["deterministic"]:
-            run_names += list(f"{runid}_det" for runid in range(run_id))
-        create_shared_boxplots(
-            run_names,
-            ds_metric_folder,
-            shared_dir,
-            run_permutation_tests=run_permutation_tests,
-        )
+    # ── Summary analysis report ───────────────────────────────────────────
+    if analysis_summary_rows:
+        overview_path = ds_folder / "analysis_overview.csv"
+        df = pd.DataFrame(analysis_summary_rows).set_index("run").T
+        df.to_csv(overview_path, index=True)
+        logger.info("Analysis overview → %s", overview_path)
+        generate_summary_report(ds_folder)
 
-    # Create cross-dataset shared boxplots (one box per dataset, best/only run per dataset)
-    if len(sc_paths) * len(st_paths) > 1:
-        all_metric_folders = []
-        all_labels = []
-        for sc_path, st_path in itertools.product(sc_paths, st_paths):
-            dataset_name = f"{sc_path.parent.name}_{sc_path.stem}__{st_path.parent.name}_{st_path.stem}"
-            ds_metric_folder = output_folder / dataset_name / "metrics"
-            for run_id_str in map(str, range(total_runs)):
-                all_metric_folders.append(ds_metric_folder / run_id_str)
-                all_labels.append(f"{dataset_name}/{run_id_str}")
-            if base_cfg["mapping"]["deterministic"]:
-                for run_id_str in map(str, range(total_runs)):
-                    all_metric_folders.append(ds_metric_folder / f"{run_id_str}_det")
-                    all_labels.append(f"{dataset_name}/{run_id_str}_det")
-        cross_dataset_shared = output_folder / "shared"
-        cross_dataset_shared.mkdir(parents=True, exist_ok=True)
-        create_shared_boxplots(
-            all_labels,
-            output_folder,
-            cross_dataset_shared,
-            run_permutation_tests=run_permutation_tests,
-        )
+    # Create shared boxplots for this dataset (probabilistic metrics, one box per run)
+    shared_dir = ds_folder / "shared"
+    shared_dir.mkdir(parents=True, exist_ok=True)
+    create_shared_boxplots(
+        [ds_folder / str(i) / "metrics" for i in range(run_id)],
+        [str(i) for i in range(run_id)],
+        shared_dir,
+        run_permutation_tests=run_permutation_tests,
+    )
 
 
 if __name__ == "__main__":

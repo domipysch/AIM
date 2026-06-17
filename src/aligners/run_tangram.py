@@ -1,5 +1,7 @@
 import os
 from pathlib import Path
+
+import anndata
 import tangram as tg
 import pandas as pd
 import scanpy as sc
@@ -9,7 +11,6 @@ from anndata import AnnData
 import argparse
 from scipy.sparse import issparse
 import torch
-from ..utils.io import load_sc_adata, load_st_adata
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,8 @@ def tangram_align_data(
 
     # Load input scRNA and ST data
     logger.info("Load data")
-    adata_sc = load_sc_adata(Path(sc_path))  # C x G
-    adata_st = load_st_adata(Path(st_path))  # S x G
+    adata_sc = anndata.read_h5ad(Path(sc_path))  # C x G
+    adata_st = anndata.read_h5ad(Path(st_path))  # S x G
     logger.info("Data loaded")
     logger.info(f"Single Cell Data: {adata_sc.n_obs} cells x {adata_sc.n_vars} genes")
     logger.info(f"Spatial Data: {adata_st.n_obs} spots x {adata_st.n_vars} genes")

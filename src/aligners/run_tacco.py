@@ -1,4 +1,6 @@
 from pathlib import Path
+
+import anndata
 import tacco as tc
 import pandas as pd
 import numpy as np
@@ -6,7 +8,6 @@ import logging
 from anndata import AnnData
 import argparse
 from scipy.sparse import issparse
-from ..utils.io import load_sc_adata, load_st_adata
 
 
 def tacco_align_data(
@@ -37,8 +38,8 @@ def tacco_align_data(
     output_folder.mkdir(parents=True, exist_ok=True)
 
     logging.info("Load data")
-    adata_sc = load_sc_adata(Path(sc_path))  # C x G
-    adata_st = load_st_adata(Path(st_path))  # S x G
+    adata_sc = anndata.read_h5ad(Path(sc_path))  # C x G
+    adata_st = anndata.read_h5ad(Path(st_path))  # S x G
 
     # Determine which obs column to use as the annotation key for TACCO
     if map_cell_types:

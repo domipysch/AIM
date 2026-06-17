@@ -1,15 +1,9 @@
-mapping:
-  deterministic: false
-graph:
-  type: knn
-  k: 4
 model:
   K: 20
 training:
   lr: 0.001
   epochs: 1
   normalize_and_log: false
-  use_cm: false
 sc_embedding:
   method: pca   # pca | scvi
   d: 32
@@ -20,5 +14,4 @@ loss_weights:
   lambda_clust_inter: 1.0
   lambda_state_entropy: 1.0
   lambda_spot_entropy: 1.0
-  lambda_soft_modularity: 0.0
   lambda_soft_contingency: 0.0

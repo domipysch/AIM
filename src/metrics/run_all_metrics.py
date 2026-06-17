@@ -18,6 +18,7 @@ def main(
     metrics: Path,
     result_gep: AnnData,
     run_permutation_tests: bool = False,
+    name_suffix: str = "",
 ):
     """
 
@@ -27,12 +28,13 @@ def main(
         result_gep: Predicted Z' (G x S)
         metrics:
         run_permutation_tests:
+        name_suffix: Appended to output filenames before .json (e.g. "-det").
 
     Returns:
 
     """
     # Run metrics computations
-    main2(sc_path, st_path, result_gep, metrics)
+    main2(sc_path, st_path, result_gep, metrics, name_suffix=name_suffix)
     # main4(sc_path, st_path, result_gep, metrics)
 
     # Run permutation tests

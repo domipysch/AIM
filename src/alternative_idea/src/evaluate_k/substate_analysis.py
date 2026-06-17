@@ -60,9 +60,8 @@ def compute_substate_metrics(
     spot_states: np.ndarray,
     leiden_labels: np.ndarray,
     shared_genes: list[str],
-    n_top_genes: int = 8,
-    n_perm: int = 100,
-    n_top_discriminable: int = 100,
+    n_top_genes: int = 30,
+    n_perm: int = 50,
     seed: int = 42,
 ) -> dict:
     """
@@ -76,9 +75,8 @@ def compute_substate_metrics(
     spot_states       : Hard spot-state labels, shape (n_spots,).
     leiden_labels     : Leiden cluster labels on sc data, shape (n_cells,).
     shared_genes      : Genes present in both sc and st data (ordered).
-    n_top_genes       : Number of top genes to select from spot centroid.
+    n_top_genes       : Number of top highly-variable genes (by variance across all ST spots) used for cosine similarity.
     n_perm            : Number of permutations for null distributions.
-    n_top_discriminable : Top-N discriminable genes to check membership in.
     seed              : RNG seed for reproducibility.
 
     Returns
@@ -101,6 +99,20 @@ def compute_substate_metrics(
     shared_st_idx = [st_gene_names.index(g) for g in shared_genes]
 
     X_st_shared = X_st_full[:, shared_st_idx]  # (n_spots, n_shared)
+
+    # ── Top-N HVGs from all ST spots (shared genes) — one set for all states ──
+    gene_var = X_st_shared.var(axis=0)
+    top_n_st_idx = np.argsort(gene_var)[::-1][:n_top_genes]
+    top_n_genes = [shared_genes[i] for i in top_n_st_idx]
+    top_n_sc_idx = [sc_gene_names.index(g) for g in top_n_genes]
+    logger.info("Top-%d HVGs from ST data (shared): %s…", n_top_genes, top_n_genes[:5])
+
+    # ── Pre-compute all Leiden centroids in the top-N gene subspace ───────────
+    # Done once here so the per-state loop and permutations are just dict lookups.
+    all_leiden_centroids: dict[int, np.ndarray] = {
+        int(ls): X_sc[leiden_labels == ls][:, top_n_sc_idx].mean(axis=0)
+        for ls in np.unique(leiden_labels)
+    }
 
     # ── Map Leiden clusters to computed states ────────────────────────────────
     unique_cs = sorted(np.unique(computed_states).tolist())
@@ -145,9 +157,6 @@ def compute_substate_metrics(
                 **base,
                 "cossim_centroid": float("nan"),
                 "perm_p_value": float("nan"),
-                "marker_in_top100_count": float("nan"),
-                "indisting_actual_mean": float("nan"),
-                "indisting_null_mean": float("nan"),
             }
             continue
 
@@ -155,27 +164,9 @@ def compute_substate_metrics(
             "CS%d: %d Leiden sub-clusters, %d spots", cs, len(ls_targets), n_spots
         )
 
-        ls_masks = {ls: leiden_labels == ls for ls in ls_targets}
-
-        # ── Spot centroid → top-N marker genes ────────────────────────────────
-        cs_spots_shared = X_st_shared[cs_spot_mask]  # (n_spots, n_shared)
-        centroid_spots = cs_spots_shared.mean(axis=0)  # (n_shared,)
-
-        top_n_st_idx = np.argsort(centroid_spots)[::-1][:n_top_genes]
-        top_n_genes = [shared_genes[i] for i in top_n_st_idx]
-        top_n_sc_idx = [sc_gene_names.index(g) for g in top_n_genes]
-
-        # ── LS centroids (full gene space + shared gene space) ────────────────
-        ls_centroids_full: dict[int, np.ndarray] = {
-            ls: X_sc[mask].mean(axis=0) for ls, mask in ls_masks.items()
-        }
-        ls_centroids_shared_arr = np.array(
-            [ls_centroids_full[ls][shared_sc_idx] for ls in ls_targets]
-        )  # (n_ls, n_shared)
-
-        # ── Metric A: cossim_centroid + perm_p_value ─────────────────────────
+        # ── cossim_centroid + perm_p_value ────────────────────────────────────
         ls_vecs_topn = np.array(
-            [ls_centroids_full[ls][top_n_sc_idx] for ls in ls_targets]
+            [all_leiden_centroids[ls] for ls in ls_targets]
         )  # (n_ls, n_top_genes)
         cossim_centroid = _mean_pairwise_cossim(ls_vecs_topn)
 
@@ -191,67 +182,14 @@ def compute_substate_metrics(
             ]
             perm_sims_a = []
             for draw in perm_draws:
-                vecs = np.array(
-                    [
-                        X_sc[leiden_labels == c][:, top_n_sc_idx].mean(axis=0)
-                        for c in draw
-                    ]
-                )
+                vecs = np.array([all_leiden_centroids[int(c)] for c in draw])
                 perm_sims_a.append(_mean_pairwise_cossim(vecs))
             perm_p_value = float(np.mean(np.array(perm_sims_a) >= cossim_centroid))
-
-        # ── Metric B: fraction of top-N genes in top-discriminable genes ──────
-        # Requires at least 2 sub-clusters to form pairwise log2FC comparisons.
-        if len(ls_targets) >= 2:
-            ls_pairs = list(combinations(ls_targets, 2))
-            pair_log2fc = np.zeros((len(ls_pairs), len(sc_gene_names)))
-            for k, (ls_i, ls_j) in enumerate(ls_pairs):
-                X_i = X_sc[ls_masks[ls_i]]
-                X_j = X_sc[ls_masks[ls_j]]
-                pair_log2fc[k] = np.abs(
-                    np.log2(X_i.mean(axis=0) + 1) - np.log2(X_j.mean(axis=0) + 1)
-                )
-            gene_discrim = pair_log2fc.mean(axis=0)
-            top_discrim_set = set(
-                np.argsort(gene_discrim)[::-1][:n_top_discriminable].tolist()
-            )
-            n_in_top = len(set(top_n_sc_idx) & top_discrim_set)
-            marker_in_top100_count: int | float = int(n_in_top)
-        else:
-            marker_in_top100_count = float("nan")
-
-        # ── Metric C: per-spot indistinguishability ───────────────────────────
-        # Requires at least 2 sub-clusters; variance over a single centroid is
-        # always 0 and the null is identical, so the comparison carries no information.
-        if len(ls_targets) >= 2:
-            sim_matrix = cosine_similarity(
-                cs_spots_shared, ls_centroids_shared_arr
-            )  # (n_spots, n_ls)
-            spot_sim_var = sim_matrix.var(axis=1)
-            indisting_actual_mean = float(spot_sim_var.mean())
-
-            perm_null_means = []
-            for draw in perm_draws:
-                rand_cents = np.array(
-                    [
-                        X_sc[leiden_labels == c][:, shared_sc_idx].mean(axis=0)
-                        for c in draw
-                    ]
-                )
-                sim_perm = cosine_similarity(cs_spots_shared, rand_cents)
-                perm_null_means.append(float(sim_perm.var(axis=1).mean()))
-            indisting_null_mean = float(np.mean(perm_null_means))
-        else:
-            indisting_actual_mean = float("nan")
-            indisting_null_mean = float("nan")
 
         per_state[cs] = {
             **base,
             "cossim_centroid": float(cossim_centroid),
             "perm_p_value": float(perm_p_value),
-            "marker_in_top100_count": marker_in_top100_count,
-            "indisting_actual_mean": indisting_actual_mean,
-            "indisting_null_mean": indisting_null_mean,
         }
 
     # ── Global: spot-level mapping clarity ────────────────────────────────────

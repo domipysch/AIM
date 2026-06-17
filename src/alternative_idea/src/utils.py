@@ -1,5 +1,4 @@
 from typing import Dict
-from .spatial_graph import SpatialGraphType
 import numpy as np
 import pandas as pd
 import logging
@@ -59,64 +58,6 @@ def run_pca_neighbors_umap(
         sc.tl.umap(adata)
 
 
-def build_sc_knn_graph(
-    X: torch.Tensor,
-    n_pca_components: int = 50,
-    n_neighbors: int = 15,
-    device=None,
-) -> tuple[torch.Tensor, torch.Tensor, float]:
-    """
-    Precompute a symmetric KNN graph on PCA of X_sc for the soft modularity loss.
-    Only called once before training — not part of the forward pass.
-
-    Args:
-        X              : scRNA-seq data (C x G_sc), as a torch Tensor
-        n_pca_components: number of PCA dimensions to use
-        n_neighbors    : k for the KNN graph
-        device         : torch device to place the output tensors on
-
-    Returns:
-        W      : sparse COO tensor (C x C) — symmetric binary KNN adjacency
-        k      : dense tensor (C,)         — degree of each cell
-        two_m  : float                     — total sum of edge weights (= 2 * #edges)
-    """
-    import numpy as np
-    from sklearn.decomposition import PCA
-    from sklearn.neighbors import kneighbors_graph
-
-    X_np = X.detach().cpu().numpy()
-    n_components = min(n_pca_components, X_np.shape[0] - 1, X_np.shape[1])
-
-    # PCA embedding
-    X_pca = PCA(n_components=n_components).fit_transform(X_np)
-
-    # KNN graph (binary connectivity), then symmetrised
-    A = kneighbors_graph(
-        X_pca, n_neighbors=n_neighbors, mode="connectivity", include_self=False
-    )
-    A = A + A.T  # symmetrize (can double some edges — still binary after sign)
-    A.data[:] = 1.0  # force binary weights
-
-    # Convert to sparse torch COO tensor
-    A_coo = A.tocoo()
-    indices = torch.tensor(np.vstack([A_coo.row, A_coo.col]), dtype=torch.long)
-    values = torch.tensor(A_coo.data, dtype=torch.float32)
-    W = torch.sparse_coo_tensor(indices, values, tuple(A.shape), dtype=torch.float32)
-    if device is not None:
-        W = W.to(device)
-
-    # Degree vector and total edge weight
-    k_np = np.array(A.sum(axis=1)).flatten().astype(np.float32)
-    k = torch.tensor(k_np, dtype=torch.float32, device=device)
-    two_m = float(k.sum().item())
-
-    logger.info(
-        f"sc KNN graph built: {A.shape[0]} cells, {n_neighbors} neighbors, "
-        f"2m={two_m:.0f}, PCA={n_components} dims"
-    )
-    return W, k, two_m
-
-
 def fmt_nonzero_4(x: float) -> str:
     """
     Format a numeric value for display to cap at up to four decimal places.
@@ -137,31 +78,6 @@ def fmt_nonzero_4(x: float) -> str:
     return f"{xf:.4f}"
 
 
-def graph_type_from_config(graph_cfg: Dict) -> SpatialGraphType:
-
-    if not isinstance(graph_cfg, dict):
-        raise ValueError("`graph_cfg` must be a dict.")
-
-    graph_type = graph_cfg.get("type")
-    if not isinstance(graph_type, str):
-        raise ValueError("`graph.type` must be a string in the config.")
-
-    t = graph_type.strip().lower()
-
-    if t == "knn":
-        return SpatialGraphType.KNN
-    if t == "mutual_knn":
-        return SpatialGraphType.MUTUAL_KNN
-    if t == "radius":
-        return SpatialGraphType.RADIUS
-    if t == "delaunay":
-        return SpatialGraphType.DELAUNAY
-
-    raise ValueError(
-        f"Unsupported graph.type: '{graph_type}'. Expected one of: knn, mutual_knn, radius, delaunay."
-    )
-
-
 def dump_loss_logs(losses, config_path) -> dict:
 
     losses_after_last_epoch = {}
@@ -174,7 +90,6 @@ def dump_loss_logs(losses, config_path) -> dict:
         "clust_inter",
         "state_entropy",
         "spot_entropy",
-        "soft_modularity",
         "soft_contingency",
     ):
         comp_vals = losses.get(comp, {})
@@ -281,15 +196,6 @@ def create_loss_plots(losses, loss_dir):
         ),
         label="spot_entropy-weighted",
     )
-    if "soft_modularity" in losses:
-        plt.plot(
-            epochs,
-            list(
-                v * losses["soft_modularity"]["weight"]
-                for v in losses["soft_modularity"]["values"]
-            ),
-            label="soft_modularity-weighted",
-        )
     if "soft_contingency" in losses:
         plt.plot(
             epochs,
@@ -321,7 +227,6 @@ def create_loss_plots(losses, loss_dir):
         "spot_entropy",
         *(("clust_intra",) if "clust_intra" in losses else ()),
         *(("clust_inter",) if "clust_inter" in losses else ()),
-        *(("soft_modularity",) if "soft_modularity" in losses else ()),
         *(("soft_contingency",) if "soft_contingency" in losses else ()),
     )
 

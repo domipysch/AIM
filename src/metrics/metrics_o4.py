@@ -2,6 +2,8 @@ import enum
 from typing import Any
 import os
 from pathlib import Path
+
+import anndata
 import pandas as pd
 import networkx as nx
 import numpy as np
@@ -9,7 +11,6 @@ from anndata import AnnData
 from scipy.spatial import cKDTree, Delaunay
 from scipy.spatial.distance import cdist
 from .utils.dataset_query import get_z_real_and_predicted_data_only_shared_genes
-from ..utils.io import load_st_adata
 import warnings
 from .utils.distance_metrics import (
     cosine_similarity,
@@ -60,7 +61,7 @@ def create_spatial_graph(
     Edges get an attribute 'weight' with the euclidean distance.
     """
 
-    adata_st = load_st_adata(st_path)
+    adata_st = anndata.read_h5ad(st_path)
 
     # Get spot ids
     spot_ids = adata_st.obs_names.astype(str).tolist()
@@ -206,7 +207,7 @@ def binary_adjacency_matrix_from_graph(st_path: Path, G: nx.Graph) -> pd.DataFra
     Returns:
     - A: pandas.DataFrame, shape (n_spots, n_spots), values 0/1, Index/Columns = spot_ids
     """
-    adata_st = load_st_adata(st_path)
+    adata_st = anndata.read_h5ad(st_path)
     spot_ids = adata_st.obs_names.astype(str).tolist()
     n = len(spot_ids)
     idx_map = {sid: i for i, sid in enumerate(spot_ids)}
@@ -250,7 +251,7 @@ def locality_matrix(
     Returns: pandas.DataFrame with Index/Columns = spot_ids (as strings) and dtype dtype.
     """
 
-    adata_st = load_st_adata(st_path)
+    adata_st = anndata.read_h5ad(st_path)
     spot_ids = adata_st.obs_names.astype(str).tolist()
     n = len(spot_ids)
 

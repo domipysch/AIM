@@ -13,7 +13,6 @@ import scanpy as sc
 from anndata import AnnData
 
 from ..utils import _dense_X
-from sklearn.metrics.pairwise import cosine_distances
 
 logger = logging.getLogger(__name__)
 
@@ -262,120 +261,65 @@ def plot_state_fractions(
     logger.info("State fractions → %s", output_path)
 
 
-def _gep_dist_panel(
-    ax: plt.Axes,
-    D: np.ndarray,
-    tick_labels: list[str],
-    title: str,
-    fontsize: int,
-) -> None:
-    """Draw a single pairwise cosine-distance heatmap on *ax*."""
-    K = D.shape[0]
-    vmax = max(float(D.max()), 1e-6)
-    im = ax.imshow(D, cmap="viridis", vmin=0, vmax=vmax, aspect="auto")
-    plt.colorbar(im, ax=ax, label="Cosine distance", fraction=0.046, pad=0.04)
-
-    ax.set_xticks(range(K))
-    ax.set_yticks(range(K))
-    ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=fontsize)
-    ax.set_yticklabels(tick_labels, fontsize=fontsize)
-    ax.set_title(title, fontsize=11)
-
-    ann_fs = max(4, fontsize - 1)
-    for i in range(K):
-        for j in range(K):
-            color = "white" if D[i, j] > vmax * 0.55 else "black"
-            ax.text(
-                j,
-                i,
-                f"{D[i, j]:.2f}",
-                ha="center",
-                va="center",
-                fontsize=ann_fs,
-                color=color,
-            )
-
-
-def plot_gep_distance_comparison(
-    adata_norm: AnnData,
-    cell_states: np.ndarray,
-    leiden_labels_all: np.ndarray,
-    leiden_labels_shared: np.ndarray,
-    shared_genes: list[str],
-    unique_computed: list[int],
-    unique_leiden_all: list[int],
-    unique_leiden_shared: list[int],
+def plot_spatial_cell_states(
+    adata_st: AnnData,
+    spot_states: np.ndarray,
     output_path: Path,
-    cell_fractions: dict[int, float] | None = None,
-    spot_fractions: dict[int, float] | None = None,
+    dot_size: float = 8.0,
 ) -> None:
     """
-    Three-panel pairwise cosine-distance heatmap of GEP centroids.
+    Scatter plot of ST spots in physical space, coloured by computed cell-state.
 
-    Left   — computed cell states (all SC genes)
-    Centre — Leiden clusters restricted to shared genes
-    Right  — Leiden clusters on all SC genes
-
-    Centroids are mean log-normalised expression per group.  Lower distance
-    = more similar expression profile.  State labels include cell/spot
-    fractions when provided.
+    Coordinates are read from adata_st.obsm["spatial"].
     """
-    X_all = _dense_X(adata_norm)
-    available_shared = [g for g in shared_genes if g in adata_norm.var_names]
-    X_shared = _dense_X(adata_norm[:, available_shared])
+    if "spatial" not in adata_st.obsm:
+        logger.warning("adata_st has no obsm['spatial'] — skipping spatial plot.")
+        return
 
-    def _centroids(X: np.ndarray, labels: np.ndarray, unique: list[int]) -> np.ndarray:
-        return np.stack([X[labels == k].mean(axis=0) for k in unique])
+    coords = np.asarray(adata_st.obsm["spatial"])
+    unique_states = sorted(np.unique(spot_states).tolist())
+    K = len(unique_states)
 
-    C_computed = _centroids(X_all, cell_states, unique_computed)
-    C_leiden_shared = _centroids(X_shared, leiden_labels_shared, unique_leiden_shared)
-    C_leiden_all = _centroids(X_all, leiden_labels_all, unique_leiden_all)
+    # Build a colour palette: tab20 for ≤20 states, cycling for more
+    cmap_base = plt.get_cmap("tab20")
+    palette = [cmap_base(i % 20) for i in range(K)]
+    state_to_color = {s: palette[i] for i, s in enumerate(unique_states)}
 
-    # Tick labels for computed states optionally include fractions
-    def _state_label(state_id: int) -> str:
-        parts = [f"S{state_id}"]
-        if cell_fractions is not None:
-            parts.append(f"c:{cell_fractions.get(state_id, 0):.1%}")
-        if spot_fractions is not None:
-            parts.append(f"s:{spot_fractions.get(state_id, 0):.1%}")
-        return " ".join(parts)
+    fig, ax = plt.subplots(figsize=(7, 6))
+    for state, color in state_to_color.items():
+        mask = spot_states == state
+        ax.scatter(
+            coords[mask, 0],
+            coords[mask, 1],
+            c=[color],
+            s=dot_size,
+            label=f"State {state}",
+            linewidths=0,
+            alpha=0.85,
+            rasterized=True,
+        )
 
-    computed_labels = [_state_label(k) for k in unique_computed]
-    leiden_shared_labels = [f"L{l}" for l in unique_leiden_shared]
-    leiden_all_labels = [f"L{l}" for l in unique_leiden_all]
+    ax.set_aspect("equal")
+    ax.invert_yaxis()
+    ax.set_xlabel("x", fontsize=10)
+    ax.set_ylabel("y", fontsize=10)
+    ax.set_title("Spatial distribution of computed cell states", fontsize=12)
 
-    panels = [
-        (
-            cosine_distances(C_computed),
-            computed_labels,
-            "Computed states\n(all SC genes)",
-        ),
-        (
-            cosine_distances(C_leiden_shared),
-            leiden_shared_labels,
-            "Leiden clusters\n(shared genes)",
-        ),
-        (
-            cosine_distances(C_leiden_all),
-            leiden_all_labels,
-            "Leiden clusters\n(all SC genes)",
-        ),
-    ]
+    # Legend: compact when many states
+    legend_fs = max(5, min(9, 120 // K))
+    ncol = max(1, K // 20)
+    ax.legend(
+        loc="upper right",
+        fontsize=legend_fs,
+        markerscale=1.5,
+        ncol=ncol,
+        framealpha=0.7,
+    )
 
-    max_K = max(len(unique_computed), len(unique_leiden_shared), len(unique_leiden_all))
-    cell_size = max(0.45, min(0.85, 9.0 / max_K))
-    side = max(4.5, max_K * cell_size + 2.0)
-    fontsize = max(5, min(8, int(9 - max_K // 4)))
-
-    fig, axes = plt.subplots(1, 3, figsize=(side * 3 + 1.5, side))
-    for ax, (D, labels, title) in zip(axes, panels):
-        _gep_dist_panel(ax, D, labels, title, fontsize)
-
-    fig.suptitle("Pairwise cosine distance between GEP centroids", fontsize=13, y=1.01)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    logger.info("GEP distance comparison → %s", output_path)
+    logger.info("Spatial cell-state plot → %s", output_path)
 
 
 def plot_greedy_matched_fingerprints(

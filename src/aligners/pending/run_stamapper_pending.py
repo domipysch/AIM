@@ -9,7 +9,7 @@ from scipy.sparse import issparse
 
 from STAMapper import pipeline
 from STAMapper.utils.train import seed_everything
-from utils.io import load_sc_adata, load_st_adata
+import anndata
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +61,8 @@ def stamapper_align_data(
     seed_everything(seed)
 
     logger.info("Load data")
-    adata_sc = load_sc_adata(Path(sc_path))
-    adata_st = load_st_adata(Path(st_path))
+    adata_sc = anndata.readh5ad(Path(sc_path))
+    adata_st = anndata.readh5ad(Path(st_path))
     logger.info(
         "Single Cell Data: %d cells x %d genes", adata_sc.n_obs, adata_sc.n_vars
     )

@@ -24,8 +24,7 @@ Output layout
         pair_1.yaml
         ...
       pair_0/
-        <sc_stem>__<st_stem>/   ← produced by run_experiment
-          ...
+        ...
       pair_1/
         ...
 """
@@ -58,15 +57,9 @@ def _count_runs(node) -> int:
     return 1  # scalar
 
 
-def _pair_is_complete(
-    pair_output: Path, sc_path: Path, st_path: Path, expected_runs: int
-) -> bool:
+def _pair_is_complete(pair_output: Path, expected_runs: int) -> bool:
     """Return True if summary.csv exists with exactly expected_runs ok rows."""
-    dataset_name = (
-        f"{sc_path.parent.name}_{sc_path.stem}"
-        f"__{st_path.parent.name}_{st_path.stem}"
-    )
-    summary_path = pair_output / dataset_name / "summary.csv"
+    summary_path = pair_output / "summary.csv"
     if not summary_path.exists():
         return False
     try:
@@ -153,7 +146,7 @@ def _check_completion(
             continue
 
         pair_output = output_dir / f"pair_{pair_id}"
-        done = _pair_is_complete(pair_output, sc_path, st_path, expected_runs)
+        done = _pair_is_complete(pair_output, expected_runs)
         status = "COMPLETE  " if done else "incomplete"
         print(f"  Pair {pair_id:>3}  {status}  ({row['scName']} × {row['stName']})")
         if done:
@@ -232,14 +225,14 @@ def main(
 
         pair_output = output_dir / f"pair_{pair_id}"
 
-        if _pair_is_complete(pair_output, sc_path, st_path, expected_runs):
+        if _pair_is_complete(pair_output, expected_runs):
             logger.info("Pair %d already complete — skipping.", pair_id)
             continue
 
         cfg = {
             "data": {
-                "sc_paths": [str(sc_path.resolve())],
-                "st_paths": [str(st_path.resolve())],
+                "sc_path": str(sc_path.resolve()),
+                "st_path": str(st_path.resolve()),
             },
             "output": {
                 "output_folder": str(pair_output.resolve()),

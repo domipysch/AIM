@@ -32,15 +32,10 @@ class AlternativeIdeaLoss(nn.Module):
         lambda_rec_gene: float = 0.0,
         lambda_state_entropy: float = 1.0,
         lambda_spot_entropy: float = 1.0,
-        lambda_soft_modularity: float = 0.0,
         lambda_clust_intra: float = 0.0,
         lambda_clust_inter: float = 0.0,
         eps: float = 1e-8,
         k: int = 20,
-        use_cm: bool = False,
-        knn_W: Tensor | None = None,
-        knn_k: Tensor | None = None,
-        knn_two_m: float = 1.0,
         lambda_soft_contingency: float = 0.0,
         leiden_labels: Tensor | None = None,
         leiden_n_clusters: int = 0,
@@ -53,14 +48,8 @@ class AlternativeIdeaLoss(nn.Module):
         self.lambda_clust_intra = lambda_clust_intra
         self.lambda_clust_inter = lambda_clust_inter
         self.lambda_spot_entropy = lambda_spot_entropy
-        self.lambda_soft_modularity = lambda_soft_modularity
         self.eps = eps
         self.lnK = torch.log(torch.tensor(k, dtype=torch.float32))
-        self.use_cm = use_cm
-        # KNN graph components for soft modularity (precomputed, fixed during training)
-        self.knn_W = knn_W  # sparse (C x C) or None
-        self.knn_k = knn_k  # dense  (C,)    or None
-        self.knn_two_m = knn_two_m  # scalar float
         # Leiden over-clustering components for soft contingency (precomputed, fixed)
         self.lambda_soft_contingency = lambda_soft_contingency
         self.leiden_labels = leiden_labels  # integer (C,) or None
@@ -88,24 +77,14 @@ class AlternativeIdeaLoss(nn.Module):
             )
 
         # 1. Create Z_prime (The augmented spot data reconstructed from the scRNA-seq reference)
-        if self.use_cm:
+        C = torch.matmul(A, B)  # (S x K)
 
-            C = torch.matmul(A, B)  # (S x K)
+        # Compute B_normalized: Normalize B^T by the number of cells assigned to each state to prevent scale issues
+        B_normalized_sum_over_types_1 = B / (torch.sum(B, dim=0) + self.eps)  # (K x C)
 
-            # Compute B_normalized: Normalize B^T by the number of cells assigned to each state to prevent scale issues
-            B_normalized_sum_over_types_1 = B / (
-                torch.sum(B, dim=0) + self.eps
-            )  # (K x C)
-
-            M = torch.matmul(
-                B_normalized_sum_over_types_1.t(), X_shared
-            )  # (K x G_shared)
-            # M = torch.matmul(B.t(), X_shared)  # (K x G_shared)
-            Z_prime = torch.matmul(C, M)  # (S x G_shared)
-
-        else:
-            # (S x C) @ (C x G_shared) -> (S x G_shared)
-            Z_prime = torch.matmul(A, X_shared)
+        M = torch.matmul(B_normalized_sum_over_types_1.t(), X_shared)  # (K x G_shared)
+        # M = torch.matmul(B.t(), X_shared)  # (K x G_shared)
+        Z_prime = torch.matmul(C, M)  # (S x G_shared)
 
         # 2. Compute Cosine Similarity Components
         # Dot product across the gene dimension for each spot
@@ -146,15 +125,10 @@ class AlternativeIdeaLoss(nn.Module):
             Z_shared: Empirical ST data restricted to shared genes (S x G_shared)
         """
         # 1. Compute Z_prime (same as in get_rec_spot_loss)
-        if self.use_cm:
-            C = torch.matmul(A, B)  # (S x K)
-            B_normalized = B / (
-                torch.sum(B, dim=0) + self.eps
-            )  # (C x K), col-normalised
-            M = torch.matmul(B_normalized.t(), X_shared)  # (K x G_shared)
-            Z_prime = torch.matmul(C, M)  # (S x G_shared)
-        else:
-            Z_prime = torch.matmul(A, X_shared)  # (S x G_shared)
+        C = torch.matmul(A, B)  # (S x K)
+        B_normalized = B / (torch.sum(B, dim=0) + self.eps)  # (C x K), col-normalised
+        M = torch.matmul(B_normalized.t(), X_shared)  # (K x G_shared)
+        Z_prime = torch.matmul(C, M)  # (S x G_shared)
 
         # 2. Cosine similarity gene-wise: sum over spots (dim=0)
         dot_product = torch.sum(Z_shared * Z_prime, dim=0)  # (G_shared,)
@@ -247,31 +221,6 @@ class AlternativeIdeaLoss(nn.Module):
         mask = 1.0 - torch.eye(K, device=S.device, dtype=S.dtype)
         return -(sq_dist * mask).sum() / (K * (K - 1))
 
-    def get_soft_modularity_loss(self, B: Tensor) -> Tensor:
-        """
-        Differentiable soft modularity on the precomputed sc KNN graph.
-
-        Replaces the hard cluster-indicator delta(c_i, c_j) with the dot product
-        of soft assignment rows B[i,:] · B[j,:], making the whole expression
-        differentiable through B.
-
-        Q_soft = Tr(B^T @ (W - k*k^T / 2m) @ B) / 2m
-        loss   = -Q_soft   (we minimise, so negate modularity)
-
-        Args:
-            B: Cell-to-state assignment matrix (C x K), rows are soft assignments.
-        """
-        # W @ B: sparse-dense matmul → (C x K)
-        WB = torch.sparse.mm(self.knn_W, B)
-        # Tr(B^T W B) = sum of element-wise product of B and WB
-        trace_WB = torch.sum(B * WB)
-        # k^T B → (K,);  Tr(B^T k k^T/2m B) = ||k^T B||^2 / 2m
-        assert self.knn_k is not None
-        kB = self.knn_k @ B
-        trace_null = torch.dot(kB, kB) / self.knn_two_m
-        Q_soft = (trace_WB - trace_null) / self.knn_two_m
-        return -Q_soft
-
     def get_soft_contingency_loss(self, B: Tensor) -> Tensor:
         """
         Cluster-size-weighted entropy of the soft contingency matrix.
@@ -331,12 +280,6 @@ class AlternativeIdeaLoss(nn.Module):
         l_spot_entropy = self.get_spot_entropy_loss(A, B)
         l_clust_intra = self.get_clust_intra_loss(A, B, Y)
         l_clust_inter = self.get_clust_inter_loss(B, Y)
-        l_soft_modularity = (
-            self.get_soft_modularity_loss(B)
-            if self.lambda_soft_modularity > 0.0 and self.knn_W is not None
-            else B.sum()
-            * 0.0  # differentiable zero — keeps grad_fn for the analysis loop
-        )
         l_soft_contingency = (
             self.get_soft_contingency_loss(B)
             if self.lambda_soft_contingency > 0.0 and self.leiden_labels is not None
@@ -356,7 +299,6 @@ class AlternativeIdeaLoss(nn.Module):
             + self.lambda_spot_entropy * l_spot_entropy
             + self.lambda_clust_intra * l_clust_intra
             + self.lambda_clust_inter * l_clust_inter
-            + self.lambda_soft_modularity * l_soft_modularity
             + self.lambda_soft_contingency * l_soft_contingency
         )
 
@@ -368,6 +310,5 @@ class AlternativeIdeaLoss(nn.Module):
             "spot_entropy": l_spot_entropy,
             "clust_intra": l_clust_intra,
             "clust_inter": l_clust_inter,
-            "soft_modularity": l_soft_modularity,
             "soft_contingency": l_soft_contingency,
         }

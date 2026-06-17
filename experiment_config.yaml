@@ -1,13 +1,8 @@
 data:
-  sc_paths:
-    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\scRNA\01_mouse-ssp.h5ad
-#    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\Subexperiment_NonMarker_Diffs\01_mouse-ssp.h5ad
-  st_paths:
-    - C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\ST\01_mouse-ssp.h5ad
+  sc_path: C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\scRNA\01_mouse-ssp.h5ad
+  st_path: C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\ST\01_mouse-ssp.h5ad
 output:
   output_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\MouseSSP-AltIdea-Temp
-mapping:
-  deterministic: true
 model:
   K:
     - 10
@@ -22,18 +17,15 @@ training:
     - 1000
   normalize_and_log:
     - false
-  use_cm:
-    - true
   reference_leiden_clustering_resolution: 3.0
 sc_embedding:
   method: pca
   d: 32
 loss_weights:
-  - lambda_rec_spot: 1.0
-    lambda_rec_gene: 0
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
     lambda_clust_intra: 0
     lambda_clust_inter: 0
-    lambda_state_entropy: 0.01
-    lambda_spot_entropy: 0.008
-    lambda_soft_modularity: 0
-    lambda_soft_contingency: 0
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_contingency: 1

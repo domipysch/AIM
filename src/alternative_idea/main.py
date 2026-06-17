@@ -4,6 +4,7 @@ import sys
 import os
 from pathlib import Path
 from typing import Any, Optional
+import anndata
 import pandas as pd
 import yaml
 import scanpy as sc
@@ -13,12 +14,9 @@ import logging
 import numpy as np
 import scipy.sparse as sp
 from anndata import AnnData
-from ..utils.io import anndata_to_csv, load_sc_adata, load_st_adata
 from .src.utils import (
-    fmt_nonzero_4,
     create_loss_plots,
     dump_loss_logs,
-    build_sc_knn_graph,
 )
 from .src.model import AlternativeIdeaModel
 from .src.loss import AlternativeIdeaLoss
@@ -75,7 +73,7 @@ def _arr_to_h5ad(
     adata.write_h5ad(path)
 
 
-def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
+def load_config(config_path: Path) -> tuple[dict, dict, dict, dict]:
     if not os.path.exists(config_path):
         raise Exception(f"Config file not found at {config_path}")
 
@@ -88,7 +86,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
 
         # Ensure required sections exist
         required_sections = [
-            "mapping",
             "model",
             "training",
             "loss_weights",
@@ -100,7 +97,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
                 f"Missing required config sections: {', '.join(missing_sections)}"
             )
 
-        mapping_cfg = cfg.get("mapping") if isinstance(cfg.get("mapping"), dict) else {}
         model_cfg = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
         training_cfg = (
             cfg.get("training") if isinstance(cfg.get("training"), dict) else {}
@@ -112,13 +108,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
             cfg.get("sc_embedding") if isinstance(cfg.get("sc_embedding"), dict) else {}
         )
 
-        # Validate mapping config
-        if not mapping_cfg:
-            raise ValueError("`mapping` must be a mapping in the config.")
-        for key in ("deterministic",):
-            if key not in mapping_cfg:
-                raise ValueError(f"`mapping.{key}` is required in the config.")
-
         # Validate model config
         if not model_cfg:
             raise ValueError("`model` must be a mapping in the config.")
@@ -129,7 +118,7 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
         # Validate training config
         if not training_cfg:
             raise ValueError("`training` must be a mapping in the config.")
-        for key in ("lr", "epochs", "use_cm"):
+        for key in ("lr", "epochs"):
             if key not in training_cfg:
                 raise ValueError(f"`training.{key}` is required in the config.")
         # Optional normalize_and_log flag: default True (preserve previous behavior)
@@ -156,7 +145,6 @@ def load_config(config_path: Path) -> tuple[dict, dict, dict, dict, dict]:
             raise ValueError("`sc_embedding.d` must be a positive integer.")
 
     return (
-        mapping_cfg,
         model_cfg,
         training_cfg,
         loss_weights_cfg,
@@ -178,7 +166,6 @@ def alternative_idea_compute_mapping(
     # 1. Load Config
     logger.debug(f"Load config: {path_to_config}")
     (
-        mapping_config,
         model_config,
         training_config,
         loss_weights,
@@ -289,14 +276,6 @@ def alternative_idea_compute_mapping(
 
     # 7. Initialize Loss and Optimizer
 
-    # Precompute sc KNN graph for soft modularity loss (once, before training starts)
-    knn_W, knn_k, knn_two_m = None, None, 1.0
-    if loss_weights.get("lambda_soft_modularity", 0.0) > 0.0:
-        logger.info("Precomputing sc KNN graph for soft modularity loss...")
-        knn_W, knn_k, knn_two_m = build_sc_knn_graph(
-            X, n_pca_components=50, n_neighbors=15, device=device
-        )
-
     loss = AlternativeIdeaLoss(
         lambda_rec_spot=loss_weights["lambda_rec_spot"],
         lambda_rec_gene=loss_weights["lambda_rec_gene"],
@@ -304,13 +283,8 @@ def alternative_idea_compute_mapping(
         lambda_clust_inter=loss_weights.get("lambda_clust_inter", 0.0),
         lambda_state_entropy=loss_weights["lambda_state_entropy"],
         lambda_spot_entropy=loss_weights["lambda_spot_entropy"],
-        lambda_soft_modularity=loss_weights.get("lambda_soft_modularity", 0.0),
         lambda_soft_contingency=loss_weights.get("lambda_soft_contingency", 0.0),
         k=model_config["K"],
-        use_cm=bool(training_config["use_cm"]),
-        knn_W=knn_W,
-        knn_k=knn_k,
-        knn_two_m=knn_two_m,
         leiden_labels=leiden_labels,
         leiden_n_clusters=leiden_n_clusters,
         Y_scale=Y_scale,
@@ -343,16 +317,6 @@ def alternative_idea_compute_mapping(
             "weight": loss_weights["lambda_spot_entropy"],
             "values": list(),
         },
-        **(
-            {
-                "soft_modularity": {
-                    "weight": loss_weights.get("lambda_soft_modularity", 0.0),
-                    "values": list(),
-                }
-            }
-            if loss_weights.get("lambda_soft_modularity", 0.0) > 0.0
-            else {}
-        ),
         **(
             {
                 "soft_contingency": {
@@ -426,10 +390,6 @@ def alternative_idea_compute_mapping(
         losses["spot_entropy"]["values"].append(
             to_scalar(loss_dict.get("spot_entropy"))
         )
-        if loss_weights.get("lambda_soft_modularity", 0.0) > 0.0:
-            losses["soft_modularity"]["values"].append(
-                to_scalar(loss_dict.get("soft_modularity"))
-            )
         if loss_weights.get("lambda_soft_contingency", 0.0) > 0.0:
             losses["soft_contingency"]["values"].append(
                 to_scalar(loss_dict.get("soft_contingency"))
@@ -595,38 +555,36 @@ def alternative_idea_compute_mapping(
         # df = pd.DataFrame(CM_normalized.detach().cpu().numpy())
         # df.to_csv(folder_intermediate / "CM_normalized.csv", index=False)
 
-        if mapping_config.get("deterministic"):
+        # B: Argmax per cell -> One-hot pro Zeile
+        argmax_idx = torch.argmax(B, dim=1, keepdim=True)
+        B_argmax = torch.zeros_like(B)
+        B_argmax.scatter_(1, argmax_idx, 1.0)
+        B_argmax_np = B_argmax.detach().cpu().numpy()
+        # pd.DataFrame(B_argmax_np).to_csv(
+        #     folder_intermediate / "B_argmax.csv", index=False
+        # )
+        _arr_to_h5ad(
+            B_argmax_np,
+            folder_intermediate / "B_argmax.h5ad",
+            obs_names=adata_sc.obs_names.tolist(),
+            var_names=state_names,
+        )
 
-            # B: Argmax per cell -> One-hot pro Zeile
-            argmax_idx = torch.argmax(B, dim=1, keepdim=True)
-            B_argmax = torch.zeros_like(B)
-            B_argmax.scatter_(1, argmax_idx, 1.0)
-            B_argmax_np = B_argmax.detach().cpu().numpy()
-            # pd.DataFrame(B_argmax_np).to_csv(
-            #     folder_intermediate / "B_argmax.csv", index=False
-            # )
-            _arr_to_h5ad(
-                B_argmax_np,
-                folder_intermediate / "B_argmax.h5ad",
-                obs_names=adata_sc.obs_names.tolist(),
-                var_names=state_names,
-            )
-
-            # C: Argmax per spot -> One-hot pro Zeile
-            C_argmax = torch.matmul(A, B_argmax)
-            argmax_idx = torch.argmax(C_argmax, dim=1, keepdim=True)
-            C_argmax = torch.zeros_like(C_argmax)
-            C_argmax.scatter_(1, argmax_idx, 1.0)
-            C_argmax_np = C_argmax.detach().cpu().numpy()
-            # pd.DataFrame(C_argmax_np).to_csv(
-            #     folder_intermediate / "C_argmax.csv", index=False
-            # )
-            _arr_to_h5ad(
-                C_argmax_np,
-                folder_intermediate / "C_argmax.h5ad",
-                obs_names=adata_st.obs_names.tolist(),
-                var_names=state_names,
-            )
+        # C: Argmax per spot -> One-hot pro Zeile
+        C_argmax = torch.matmul(A, B_argmax)
+        argmax_idx = torch.argmax(C_argmax, dim=1, keepdim=True)
+        C_argmax = torch.zeros_like(C_argmax)
+        C_argmax.scatter_(1, argmax_idx, 1.0)
+        C_argmax_np = C_argmax.detach().cpu().numpy()
+        # pd.DataFrame(C_argmax_np).to_csv(
+        #     folder_intermediate / "C_argmax.csv", index=False
+        # )
+        _arr_to_h5ad(
+            C_argmax_np,
+            folder_intermediate / "C_argmax.h5ad",
+            obs_names=adata_st.obs_names.tolist(),
+            var_names=state_names,
+        )
 
     logger.info("Alignment complete.")
     return A, B, losses
@@ -639,7 +597,6 @@ def compute_gene_expression_prediction(
     adata_st: AnnData,
     deterministic_mapping: bool,
     torch_device: torch.device,
-    use_cm: bool,
 ) -> AnnData:
 
     X_sc = adata_sc.X.toarray() if sp.issparse(adata_sc.X) else np.asarray(adata_sc.X)
@@ -664,21 +621,12 @@ def compute_gene_expression_prediction(
         # A, B leave is they are
         C = torch.matmul(spot_to_cell_map, cell_to_cell_type)  # S x T
 
-    if use_cm:
-        logger.info(
-            "Using CM for final mapping output as per config (training.use_cm=true)"
-        )
-        # Compute M = B_normalized^T @ X
-        B_normalized = cell_to_cell_type / (
-            torch.sum(cell_to_cell_type, dim=0) + 1e-6
-        )  # (K x C)
-        M = torch.matmul(B_normalized.t(), adata_sc_tensor)  # T x G
-        # Compute Z' = C @ M
-        predicted_spot_expressions = torch.matmul(C, M)  # S x G
-    else:
-        predicted_spot_expressions = torch.matmul(
-            spot_to_cell_map, adata_sc_tensor
-        )  # S x G
+    # Compute M = B_normalized^T @ X, then Z' = C @ M
+    B_normalized = cell_to_cell_type / (
+        torch.sum(cell_to_cell_type, dim=0) + 1e-6
+    )  # (K x C)
+    M = torch.matmul(B_normalized.t(), adata_sc_tensor)  # T x G
+    predicted_spot_expressions = torch.matmul(C, M)  # S x G
 
     # Transpose to G x S
     predicted_spot_expressions = predicted_spot_expressions.T  # now G x S
@@ -704,9 +652,9 @@ def main(
     verbose_logging: bool = False,
     no_gpu_limit: bool = False,
     force_cpu: bool = False,
-) -> tuple[AnnData, Optional[AnnData], AnnData, dict]:
+) -> tuple[AnnData, AnnData, AnnData, dict]:
 
-    mapping_config, _, training_config, _, _ = load_config(config_path)
+    _, training_config, _, _ = load_config(config_path)
 
     # Setup Device
     if force_cpu:
@@ -720,8 +668,8 @@ def main(
 
     # Step 1: Load data
     logger.info("Load input scRNA and ST data...")
-    adata_sc = load_sc_adata(sc_path)  # C x G
-    adata_st = load_st_adata(st_path)  # S x G
+    adata_sc = anndata.read_h5ad(sc_path)  # C x G
+    adata_st = anndata.read_h5ad(st_path)  # S x G
     logger.info("Loaded input scRNA and ST data.")
 
     # Step 2: Map data using AlternativeIdea
@@ -763,7 +711,6 @@ def main(
         adata_st,
         False,
         device,
-        training_config["use_cm"],
     )
 
     # Step 5 (optional): Export prob GEP + mapping to h5ad
@@ -786,44 +733,40 @@ def main(
     else:
         logger.debug("No output path provided, skipping h5ad export.")
 
-    # Step 6 (optional): Apply one-hot encoding to mapping & repeat steps 4 & 5
-    adata_prediction_det = None
-    if mapping_config["deterministic"]:
-        logger.info(
-            "Apply deterministic mapping & compute prediction with one-hot encoded mapping"
+    # Step 6: Apply one-hot encoding to mapping & repeat steps 4 & 5
+    logger.info(
+        "Apply deterministic mapping & compute prediction with one-hot encoded mapping"
+    )
+    adata_prediction_det = compute_gene_expression_prediction(
+        spot_to_cell_map,
+        cell_to_cell_type,
+        adata_sc,
+        adata_st,
+        True,
+        device,
+    )
+
+    if output_path is not None:
+        output_path_deterministic = output_path.with_name(
+            output_path.stem + "_deterministic" + output_path.suffix
         )
 
-        adata_prediction_det = compute_gene_expression_prediction(
-            spot_to_cell_map,
-            cell_to_cell_type,
-            adata_sc,
-            adata_st,
-            True,
-            device,
-            training_config["use_cm"],
-        )
+        adata_prediction_det.write_h5ad(output_path_deterministic)
+        logger.info(f"Saved det GEP to {output_path_deterministic}")
 
-        if output_path is not None:
-            output_path_deterministic = output_path.with_name(
-                output_path.stem + "_deterministic" + output_path.suffix
-            )
-
-            adata_prediction_det.write_h5ad(output_path_deterministic)
-            logger.info(f"Saved det GEP to {output_path_deterministic}")
-
-            mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
-            argmax_idx = np.argmax(mapping_np, axis=0)
-            one_hot = np.zeros_like(mapping_np, dtype=np.uint8)
-            one_hot[argmax_idx, np.arange(mapping_np.shape[1])] = 1
-            mapping_det_path = output_path.parent / "mapping_det.h5ad"
-            AnnData(
-                X=one_hot,
-                obs=pd.DataFrame(index=adata_sc.obs_names),
-                var=pd.DataFrame(index=adata_st.obs_names),
-            ).write_h5ad(mapping_det_path)
-            logger.info(f"Saved det mapping to {mapping_det_path}")
-        else:
-            logger.debug("No output path provided, skipping h5ad export.")
+        mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
+        argmax_idx = np.argmax(mapping_np, axis=0)
+        one_hot = np.zeros_like(mapping_np, dtype=np.uint8)
+        one_hot[argmax_idx, np.arange(mapping_np.shape[1])] = 1
+        mapping_det_path = output_path.parent / "mapping_det.h5ad"
+        AnnData(
+            X=one_hot,
+            obs=pd.DataFrame(index=adata_sc.obs_names),
+            var=pd.DataFrame(index=adata_st.obs_names),
+        ).write_h5ad(mapping_det_path)
+        logger.info(f"Saved det mapping to {mapping_det_path}")
+    else:
+        logger.debug("No output path provided, skipping h5ad export.")
 
     # Step 7: Return result
     return (

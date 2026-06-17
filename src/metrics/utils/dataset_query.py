@@ -2,7 +2,7 @@ from typing import List, Tuple
 from pathlib import Path
 import pandas as pd
 from anndata import AnnData
-from ...utils.io import load_sc_adata, load_st_adata
+import anndata
 
 
 def get_sc_genes(sc_path: Path) -> List[str]:
@@ -15,7 +15,7 @@ def get_sc_genes(sc_path: Path) -> List[str]:
     Returns:
         List of gene ID strings in file order.
     """
-    return load_sc_adata(sc_path).var_names.tolist()
+    return anndata.read_h5ad(sc_path).var_names.tolist()
 
 
 def get_st_genes(st_path: Path) -> List[str]:
@@ -28,7 +28,7 @@ def get_st_genes(st_path: Path) -> List[str]:
     Returns:
         List of gene ID strings in file order.
     """
-    return load_st_adata(st_path).var_names.tolist()
+    return anndata.read_h5ad(st_path).var_names.tolist()
 
 
 def get_shared_genes(sc_path: Path, st_path: Path) -> List[str]:
@@ -58,7 +58,7 @@ def get_cell_annotations(sc_path: Path) -> pd.DataFrame:
     Returns:
         DataFrame of cell annotations with cell IDs as index.
     """
-    return load_sc_adata(sc_path).obs
+    return anndata.read_h5ad(sc_path).obs
 
 
 def get_z_real_and_predicted_data_only_shared_genes(
@@ -76,7 +76,7 @@ def get_z_real_and_predicted_data_only_shared_genes(
         Tuple (st_shared, result_shared): both AnnData objects of shape (S x shared_G),
         aligned to the same set of shared genes in the same order.
     """
-    st_ad = load_st_adata(st_path)
+    st_ad = anndata.read_h5ad(st_path)
     result_gep = result_gep.transpose()
 
     # Filter to shared marker genes, preserving the order from st_ad

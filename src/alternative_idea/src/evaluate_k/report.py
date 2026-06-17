@@ -150,12 +150,7 @@ def _substate_metrics_table(csv_path: Path) -> str:
     header = rows[0]
     n = len(header)
 
-    def _col(name: str) -> int:
-        return header.index(name) if name in header else -1
-
-    perm_p_col = _col("perm_p")
-    var_act_col = _col("var_act")
-    var_null_col = _col("var_null")
+    perm_p_col = header.index("perm_p") if "perm_p" in header else -1
 
     lines = [
         "#table(",
@@ -178,73 +173,11 @@ def _substate_metrics_table(csv_path: Path) -> str:
             except ValueError:
                 pass
 
-        if (
-            var_act_col >= 0
-            and var_null_col >= 0
-            and var_act_col < len(row)
-            and var_null_col < len(row)
-        ):
-            try:
-                fill = (
-                    _GREEN
-                    if float(row[var_act_col]) < float(row[var_null_col])
-                    else _RED
-                )
-                col_fill[var_act_col] = fill
-                col_fill[var_null_col] = fill
-            except ValueError:
-                pass
-
         cells = []
         for ci, v in enumerate(row):
             text = _esc(v) if ci == 0 else _fmt(v)
             if ci in col_fill:
                 cells.append(f"table.cell(fill: {col_fill[ci]})[{text}]")
-            else:
-                cells.append(f"[{text}]")
-        lines.append("  " + ", ".join(cells) + ",")
-
-    lines.append(")")
-    return "\n".join(lines)
-
-
-def _mapping_clarity_table(csv_path: Path) -> str:
-    """
-    Typst table for mapping_clarity.csv.
-    Both value cells are coloured green when margin_computed_mean > margin_leiden_mean.
-    """
-    with open(csv_path, newline="", encoding="utf-8") as fh:
-        rows = list(csv.reader(fh))
-    if not rows:
-        return "#text[_(no data)_]"
-
-    # Locate the two metric rows by name
-    data = {r[0]: r[1] for r in rows[1:] if len(r) >= 2}
-    try:
-        computed_margin = float(data.get("margin_computed_mean", "nan"))
-        leiden_margin = float(data.get("margin_leiden_mean", "nan"))
-        value_fill = _GREEN if computed_margin > leiden_margin else ""
-    except ValueError:
-        value_fill = ""
-
-    header = rows[0]
-    n = len(header)
-
-    lines = [
-        "#table(",
-        f"  columns: {n},",
-        "  stroke: 0.5pt,",
-        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
-        "  align: (col, _) => if col == 0 { left } else { right },",
-        "  " + ", ".join(f"[*{_esc(h)}*]" for h in header) + ",",
-    ]
-
-    for row in rows[1:]:
-        cells = []
-        for ci, v in enumerate(row):
-            text = _esc(v) if ci == 0 else _fmt(v)
-            if ci > 0 and value_fill:
-                cells.append(f"table.cell(fill: {value_fill})[{text}]")
             else:
                 cells.append(f"[{text}]")
         lines.append("  " + ", ".join(cells) + ",")
@@ -313,11 +246,11 @@ def generate_per_k_report(
     analysis_dir: Path,
     K: int,
     run_id: str,
-    median_cossim_gene: float | None = None,
-    median_cossim_spot: float | None = None,
 ) -> Path | None:
     """Generate a PDF report for one analysis run and return its path."""
     analysis_dir = Path(analysis_dir)
+    plots_dir = analysis_dir / "plots"
+    data_dir = analysis_dir / "data"
     out_pdf = analysis_dir / f"report_K{K}.pdf"
 
     parts: list[str] = [_PAGE_SETUP]
@@ -336,26 +269,43 @@ def generate_per_k_report(
 #v(0.5em)
 """)
 
-    # Unsupervised metrics
-    unsup = analysis_dir / "unsupervised_metrics.csv"
-    if unsup.exists():
-        parts.append(f"""
-= Unsupervised Metrics
+    base = analysis_dir  # .typ lives here; image paths are relative to it
 
-{_csv_table(unsup)}
-""")
+    # UMAP comparison
+    parts.append(
+        _section_img(plots_dir / "umap_comparison.png", "UMAP Comparison", base)
+    )
 
-    # Supervised metrics
-    sup = analysis_dir / "supervised_metrics.csv"
-    if sup.exists():
-        parts.append(f"""
-= Supervised Metrics
+    # Spatial cell-state plot
+    parts.append(
+        _section_img(
+            plots_dir / "spatial_cell_states.png",
+            "Spatial Distribution of Cell States",
+            base,
+        )
+    )
 
-{_csv_table(sup)}
-""")
+    # Cell-state profiles (combined heatmap + bars)
+    parts.append(
+        _section_img(plots_dir / "cell_state_profiles.png", "Cell-State Profiles", base)
+    )
+
+    # Fraction bar charts standalone
+    parts.append(
+        _section_img(
+            plots_dir / "cell_state_fractions.png",
+            "Cell- and Spot-State Fractions",
+            base,
+        )
+    )
+
+    # Contingency heatmap
+    parts.append(
+        _section_img(plots_dir / "contingency_heatmap.png", "Contingency Heatmap", base)
+    )
 
     # Per-state sub-cluster analysis
-    substate_csv = analysis_dir / "substate_metrics.csv"
+    substate_csv = data_dir / "substate_metrics.csv"
     if substate_csv.exists():
         parts.append(f"""
 = Per-State Sub-cluster Analysis
@@ -365,95 +315,10 @@ def generate_per_k_report(
 #set text(size: 11pt)
 """)
 
-    # Spot-level mapping clarity
-    clarity_csv = analysis_dir / "mapping_clarity.csv"
-    if clarity_csv.exists():
-        parts.append(f"""
-= Spot-level Mapping Clarity
-
-{_mapping_clarity_table(clarity_csv)}
-""")
-
-    # O2 cosine similarity
-    if median_cossim_gene is not None or median_cossim_spot is not None:
-        o2_rows: list[tuple[str, str]] = []
-        if median_cossim_gene is not None:
-            o2_rows.append(("Genewise median cosine sim", f"{median_cossim_gene:.4f}"))
-        if median_cossim_spot is not None:
-            o2_rows.append(("Spotwise median cosine sim", f"{median_cossim_spot:.4f}"))
-        parts.append(f"""
-= O2 Cosine Similarity
-
-{_two_col_table(o2_rows)}
-""")
-
-    base = analysis_dir  # .typ lives here; image paths are relative to it
-
-    # UMAP comparison
-    parts.append(
-        _section_img(analysis_dir / "umap_comparison.png", "UMAP Comparison", base)
-    )
-
-    # GEP centroid distance comparison
-    parts.append(
-        _section_img(
-            analysis_dir / "gep_distance_comparison.png",
-            "GEP Pairwise Cosine Distance",
-            base,
-        )
-    )
-
-    # Cell-state profiles (combined heatmap + bars)
-    parts.append(
-        _section_img(
-            analysis_dir / "cell_state_profiles.png", "Cell-State Profiles", base
-        )
-    )
-
-    # Fraction bar charts standalone
-    parts.append(
-        _section_img(
-            analysis_dir / "cell_state_fractions.png",
-            "Cell- and Spot-State Fractions",
-            base,
-        )
-    )
-
-    # Centroid matching — side-by-side when both exist
-    hung = analysis_dir / "centroid_matching_hungarian.png"
-    greedy = analysis_dir / "centroid_matching_greedy.png"
-    if hung.exists() and greedy.exists():
-        parts.append(f"""
-= Centroid Matching
-
-#grid(
-  columns: (1fr, 1fr),
-  gutter: 1em,
-  [
-    {_img(hung, base, "100%")}
-    #align(center)[_Hungarian_]
-  ],
-  [
-    {_img(greedy, base, "100%")}
-    #align(center)[_Greedy_]
-  ],
-)
-""")
-    else:
-        parts.append(_section_img(hung, "Centroid Matching (Hungarian)", base))
-        parts.append(_section_img(greedy, "Centroid Matching (Greedy)", base))
-
-    # Contingency & AUC heatmaps
-    parts.append(
-        _section_img(
-            analysis_dir / "contingency_heatmap.png", "Contingency Heatmap", base
-        )
-    )
-
     # Optional ground-truth crosstab
     parts.append(
         _section_img(
-            analysis_dir / "crosstab_heatmap.png", "Ground-Truth Crosstab Heatmap", base
+            plots_dir / "crosstab_heatmap.png", "Ground-Truth Crosstab Heatmap", base
         )
     )
 
@@ -464,7 +329,12 @@ def generate_per_k_report(
 # ─── Summary report ───────────────────────────────────────────────────────────
 
 _SUMMARY_INT_ROWS = {"K", "Computed states", "Computed states > 1%", "Mapped states"}
-_SUMMARY_EXCLUDE_ROWS = {"modularity_spatial_hvg__computed", "centroid_cosim__computed"}
+_SUMMARY_EXCLUDE_ROWS = {
+    "modularity_spatial_hvg__computed",
+    "centroid_cosim__computed",
+    "silhouette__computed",
+    "dunn_index__computed",
+}
 _SUMMARY_MIN_BOLD_ROWS = {"per_state_perm_p"}
 
 
@@ -526,61 +396,6 @@ def _overview_table(overview_csv: Path) -> str:
     return "\n".join(lines)
 
 
-def _best_k_table(overview_csv: Path) -> str:
-    """Build a Typst table showing the best run/K for each metric (all higher-is-better)."""
-    with open(overview_csv, newline="", encoding="utf-8") as fh:
-        rows = list(csv.reader(fh))
-
-    if len(rows) < 2:
-        return ""
-
-    run_ids = rows[0][1:]
-    k_row = next((r for r in rows[1:] if r and r[0] == "K"), None)
-    k_vals = k_row[1:] if k_row else run_ids
-    data_rows = [
-        r for r in rows[1:] if r and r[0] != "K" and r[0] not in _SUMMARY_EXCLUDE_ROWS
-    ]
-
-    cells = ["  [*Metric*], [*Best run*], [*K*], [*Value*],"]
-    for row in data_rows:
-        metric = row[0]
-        if metric in _SUMMARY_INT_ROWS:
-            continue
-        raw = row[1:]
-        try:
-            vals = [float(v) if v else float("nan") for v in raw]
-        except ValueError:
-            continue
-        valid = [(i, v) for i, v in enumerate(vals) if v == v]  # drop NaN
-        if not valid:
-            continue
-        best_i, best_v = max(valid, key=lambda t: t[1])
-        best_run = run_ids[best_i] if best_i < len(run_ids) else "?"
-        raw_k = k_vals[best_i] if best_i < len(k_vals) else "?"
-        try:
-            best_k = str(int(float(raw_k)))
-        except (ValueError, TypeError):
-            best_k = str(raw_k)
-        cells.append(
-            f"  [{_esc(metric)}], [{_esc(str(best_run))}], "
-            f"[{best_k}], [{best_v:.4f}],"
-        )
-
-    if len(cells) == 1:  # only header row, nothing to show
-        return ""
-
-    return (
-        "#table(\n"
-        "  columns: 4,\n"
-        "  stroke: 0.5pt,\n"
-        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },\n"
-        "  align: (col, _) => if col == 0 { left } else { right },\n"
-        + "\n".join(cells)
-        + "\n"
-        ")"
-    )
-
-
 def _umap_gallery(overview_csv: Path, pair_dir: Path) -> str:
     """Return Typst source for one UMAP image per run, stacked vertically."""
     with open(overview_csv, newline="", encoding="utf-8") as fh:
@@ -594,7 +409,7 @@ def _umap_gallery(overview_csv: Path, pair_dir: Path) -> str:
 
     blocks: list[str] = []
     for run_id, k_val in zip(run_ids, k_vals):
-        img_path = pair_dir / run_id / "analysis" / "umap_comparison.png"
+        img_path = pair_dir / run_id / "analysis" / "plots" / "umap_comparison.png"
         if not img_path.exists():
             continue
         k_label = int(float(k_val)) if k_val != "?" else run_id
@@ -618,9 +433,6 @@ def generate_summary_report(pair_dir: Path) -> Path | None:
 
     out_pdf = pair_dir / "summary_report.pdf"
 
-    best_tbl = _best_k_table(overview)
-    best_section = f"\n= Best Run per Metric\n\n{best_tbl}\n" if best_tbl else ""
-
     umap_gallery = _umap_gallery(overview, pair_dir)
     umap_section = (
         f"\n= UMAP Comparison per K\n\n{umap_gallery}\n" if umap_gallery else ""
@@ -642,7 +454,7 @@ def generate_summary_report(pair_dir: Path) -> Path | None:
 #set text(size: 8.5pt)
 {_overview_table(overview)}
 #set text(size: 11pt)
-{best_section}{umap_section}
+{umap_section}
 """
 
     return out_pdf if _compile(source, out_pdf) else None
