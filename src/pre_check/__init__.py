@@ -110,6 +110,7 @@ def run_pre_check(
         n_clusters_sc,
         n_clusters_st,
     )
+    dataset_summary["leiden_resolution"] = leiden_resolution
     gene_table = compute_gene_table(X_sc, X_st, shared)
     save_summary(dataset_summary, gene_table, output_dir)
 

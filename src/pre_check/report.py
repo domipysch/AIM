@@ -118,14 +118,19 @@ def _two_col_table(
 def _three_col_table(
     rows: list[tuple[str, str, str]],
     header: tuple[str, str, str] = ("Metric", "SC", "ST"),
+    last_col_left: bool = False,
 ) -> str:
-    """Three-column Typst table (metric, SC value, ST value)."""
+    """Three-column Typst table (metric, col2, col3)."""
+    if last_col_left:
+        align = "if col == 1 { right } else { left }"
+    else:
+        align = "if col == 0 { left } else { right }"
     lines = [
         "#table(",
         "  columns: 3,",
         "  stroke: 0.5pt,",
         "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
-        "  align: (col, _) => if col == 0 { left } else { right },",
+        f"  align: (col, _) => {align},",
         f"  [*{_esc(header[0])}*], [*{_esc(header[1])}*], [*{_esc(header[2])}*],",
     ]
     for label, v_sc, v_st in rows:
@@ -138,48 +143,37 @@ def _three_col_table(
 
 
 def _dataset_overview_section(summary: dict) -> str:
-    def _pct(v):
-        return f"{v:.2f} %"
+    n_shared = summary.get("n_shared_genes", "—")
+    pct_sc = summary.get("pct_shared_of_sc", None)
+    pct_st = summary.get("pct_shared_of_st", None)
+    shared_sc = f"{n_shared} ({pct_sc:.1f} %)" if pct_sc is not None else str(n_shared)
+    shared_st = f"{n_shared} ({pct_st:.1f} %)" if pct_st is not None else str(n_shared)
+
+    def _libsize(prefix: str) -> str:
+        mean = summary.get(f"{prefix}_libsize_mean", "—")
+        med = summary.get(f"{prefix}_libsize_median", "—")
+        std = summary.get(f"{prefix}_libsize_std", "—")
+        return f"{mean} / {med} / {std}"
+
+    res = summary.get("leiden_resolution", "?")
+    leiden_label = f"#LeidenClusters (res: {res})"
 
     rows = [
         (
-            "Observations",
+            "#Observations",
             summary.get("n_cells_sc", "—"),
             summary.get("n_spots_st", "—"),
         ),
         (
-            "Genes (total)",
+            "#Genes",
             summary.get("n_genes_sc", "—"),
             summary.get("n_genes_st", "—"),
         ),
-        (
-            "Shared genes",
-            summary.get("n_shared_genes", "—"),
-            summary.get("n_shared_genes", "—"),
-        ),
-        (
-            "Shared of total",
-            _pct(summary.get("pct_shared_of_sc", 0)),
-            _pct(summary.get("pct_shared_of_st", 0)),
-        ),
-        (
-            "Library size (mean)",
-            summary.get("sc_libsize_mean", "—"),
-            summary.get("st_libsize_mean", "—"),
-        ),
-        (
-            "Library size (median)",
-            summary.get("sc_libsize_median", "—"),
-            summary.get("st_libsize_median", "—"),
-        ),
-        (
-            "Library size (std)",
-            summary.get("sc_libsize_std", "—"),
-            summary.get("st_libsize_std", "—"),
-        ),
+        ("#SharedGenes", shared_sc, shared_st),
+        ("Library size (mean/median/std)", _libsize("sc"), _libsize("st")),
         ("Sparsity", summary.get("sc_sparsity", "—"), summary.get("st_sparsity", "—")),
         (
-            "Leiden clusters",
+            leiden_label,
             summary.get("n_clusters_sc", "—"),
             summary.get("n_clusters_st", "—"),
         ),
@@ -193,51 +187,82 @@ def _dataset_overview_section(summary: dict) -> str:
     return f"""
 = Dataset Overview
 
-{ _three_col_table(rows, header=("", "SC", "ST")) }
+{ _three_col_table(rows, header=("", "scData", "Spatial data")) }
 """
 
 
 def _metrics_section(results: dict) -> str:
     rows = [
-        ("Shared genes", results.get("n_shared_genes", "—")),
-        ("SC Leiden clusters", results.get("n_clusters_sc", "—")),
-        ("ST Leiden clusters", results.get("n_clusters_st", "—")),
         (
             "Variance rank Spearman ρ",
             f"{results.get('variance_rank_spearman', float('nan')):.4f}",
+            "Rank correlation of per-gene variance between SC and ST",
         ),
         (
             "Centroid cosine sim (Hungarian)",
             f"{results.get('centroid_cosine_sim', float('nan')):.4f}",
+            "Mean cosim of optimally matched cluster centroids",
         ),
         (
             "Centroid cosine sim (Greedy)",
             f"{results.get('greedy_cosine_sim', float('nan')):.4f}",
+            "Mean cosim via greedy best-match pairing",
         ),
         (
             "Top-gene Jaccard (top 5)",
             f"{results.get('top_gene_jaccard_top5', float('nan')):.4f}",
+            "Overlap of top-5 marker genes per matched cluster pair",
         ),
         (
             "Top-gene Jaccard (top 10)",
             f"{results.get('top_gene_jaccard_top10', float('nan')):.4f}",
+            "Overlap of top-10 marker genes per matched cluster pair",
         ),
         (
             "Top-gene Jaccard (top 20)",
             f"{results.get('top_gene_jaccard_top20', float('nan')):.4f}",
+            "Overlap of top-20 marker genes per matched cluster pair",
         ),
     ]
     pt = results.get("permutation_test")
     if pt:
         rows += [
-            ("Permutation test z-score", f"{pt.get('z_score', float('nan')):.3f}"),
-            ("Permutation test p-value", f"{pt.get('p_value', float('nan')):.4f}"),
-            ("Permutation null mean", f"{pt.get('null_mean', float('nan')):.4f}"),
+            (
+                "Permutation test z-score",
+                f"{pt.get('z_score', float('nan')):.3f}",
+                "Standardised score vs. gene-shuffle null",
+            ),
+            (
+                "Permutation test p-value",
+                f"{pt.get('p_value', float('nan')):.4f}",
+                "Fraction of permutations exceeding observed similarity",
+            ),
+            (
+                "Permutation null mean",
+                f"{pt.get('null_mean', float('nan')):.4f}",
+                "Mean centroid cosim under gene-shuffle null",
+            ),
         ]
+
+    lines = [
+        "#table(",
+        "  columns: 2,",
+        "  stroke: 0.5pt,",
+        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
+        "  align: (col, _) => if col == 0 { left } else { right },",
+        "  [*Metric*], [*Value*],",
+    ]
+    for name, value, desc in rows:
+        metric_cell = (
+            f"[*{_esc(name)}*\\ " f"#text(size: 8.5pt, fill: luma(100))[{_esc(desc)}]]"
+        )
+        lines.append(f"  {metric_cell}, [{_esc(value)}],")
+    lines.append(")")
+
     return f"""
 = Compatibility Metrics
 
-{_two_col_table(rows)}
+{chr(10).join(lines)}
 """
 
 
@@ -318,6 +343,15 @@ def generate_pre_check_report(output_dir: Path) -> Path | None:
         )
     )
 
+    # Log-norm distributions (marker vs non-marker)
+    parts.append(
+        _section_img(
+            plots_dir / "gene_log_norms_boxplot.png",
+            "Gene Log-Norm Distributions (Marker vs Non-Marker)",
+            base,
+        )
+    )
+
     # UMAP + spatial
     parts.append(
         _section_img(plots_dir / "umap.png", "UMAP Embeddings (SC and ST)", base)
@@ -375,22 +409,6 @@ def generate_pre_check_report(output_dir: Path) -> Path | None:
         _section_img(
             plots_dir / "permutation_null.png",
             "Permutation Test — Null Distribution",
-            base,
-        )
-    )
-
-    # Gene norm boxplots (marker vs non-marker, SC and ST on shared scale)
-    parts.append(
-        _section_img(
-            plots_dir / "gene_norms_boxplot.png",
-            "Gene Norm Distributions (Marker vs Non-Marker)",
-            base,
-        )
-    )
-    parts.append(
-        _section_img(
-            plots_dir / "gene_log_norms_boxplot.png",
-            "Gene Log-Norm Distributions (Marker vs Non-Marker)",
             base,
         )
     )
