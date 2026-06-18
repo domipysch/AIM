@@ -27,8 +27,6 @@ from .src.sc_embedding import compute_sc_embedding
 
 logger = logging.getLogger(__name__)
 
-GPU_LIMIT_GB = 6.0
-
 
 def estimate_gpu_memory_gb(
     num_cells: int,
@@ -159,7 +157,7 @@ def alternative_idea_compute_mapping(
     verbose_logging: bool,
     device: torch.device,
     save_intermediate: bool = False,
-    no_gpu_limit: bool = False,
+    gpu_limit_gb: int = 6,
     sc_data_dir: Optional[Path] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
 
@@ -255,16 +253,10 @@ def alternative_idea_compute_mapping(
         K=model_config["K"],
     )
     logger.info(f"Estimated GPU memory requirement: {estimated_gb:.2f} GB")
-    if not no_gpu_limit and estimated_gb > GPU_LIMIT_GB:
+    if estimated_gb > gpu_limit_gb:
         logger.error(
-            f"Estimated GPU memory ({estimated_gb:.2f} GB) exceeds the {GPU_LIMIT_GB:.0f} GB limit. "
-            f"Aborting to prevent OOM. Pass --no_gpu_limit to bypass this check."
-        )
-        sys.exit(1)
-    if no_gpu_limit and estimated_gb > 128.0:
-        logger.error(
-            f"Estimated GPU memory ({estimated_gb:.2f} GB) exceeds the 128GB limit. "
-            f"Aborting to prevent OOM. Pass --no_gpu_limit to bypass this check."
+            f"Estimated GPU memory ({estimated_gb:.2f} GB) exceeds the {gpu_limit_gb} GB limit. "
+            f"Aborting to prevent OOM. Pass --gpu_limit_gb with a higher value to override."
         )
         sys.exit(1)
 
@@ -647,10 +639,10 @@ def main(
     sc_path: Path,
     st_path: Path,
     config_path: Path,
-    output_path: Optional[Path],
+    output_path: Path,
     store_intermediate: bool = False,
     verbose_logging: bool = False,
-    no_gpu_limit: bool = False,
+    gpu_limit_gb: int = 6,
     force_cpu: bool = False,
 ) -> tuple[AnnData, AnnData, AnnData, dict]:
 
@@ -681,7 +673,7 @@ def main(
         verbose_logging=verbose_logging,
         device=device,
         save_intermediate=store_intermediate,
-        no_gpu_limit=no_gpu_limit,
+        gpu_limit_gb=gpu_limit_gb,
         sc_data_dir=sc_path.parent,
     )  # S x C, plus loss history
     logger.info("Obtained spot-to-cell mapping AnnData.")
@@ -713,25 +705,22 @@ def main(
         device,
     )
 
-    # Step 5 (optional): Export prob GEP + mapping to h5ad
+    # Step 5: Export prob GEP + mapping to h5ad
     # Layout: obs = genes (G), var = spots (S)
-    if output_path is not None:
-        output_path = Path(output_path).with_suffix(".h5ad")
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path = Path(output_path).with_suffix(".h5ad")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        adata_prediction_prob.write_h5ad(output_path)
-        logger.info(f"Saved prob GEP to {output_path}")
+    adata_prediction_prob.write_h5ad(output_path)
+    logger.info(f"Saved prob GEP to {output_path}")
 
-        mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
-        mapping_prob_path = output_path.parent / "mapping_prob.h5ad"
-        AnnData(
-            X=mapping_np.astype(np.float32),
-            obs=pd.DataFrame(index=adata_sc.obs_names),
-            var=pd.DataFrame(index=adata_st.obs_names),
-        ).write_h5ad(mapping_prob_path)
-        logger.info(f"Saved prob mapping to {mapping_prob_path}")
-    else:
-        logger.debug("No output path provided, skipping h5ad export.")
+    mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
+    mapping_prob_path = output_path.parent / "mapping_prob.h5ad"
+    AnnData(
+        X=mapping_np.astype(np.float32),
+        obs=pd.DataFrame(index=adata_sc.obs_names),
+        var=pd.DataFrame(index=adata_st.obs_names),
+    ).write_h5ad(mapping_prob_path)
+    logger.info(f"Saved prob mapping to {mapping_prob_path}")
 
     # Step 6: Apply one-hot encoding to mapping & repeat steps 4 & 5
     logger.info(
@@ -746,27 +735,24 @@ def main(
         device,
     )
 
-    if output_path is not None:
-        output_path_deterministic = output_path.with_name(
-            output_path.stem + "_deterministic" + output_path.suffix
-        )
+    output_path_deterministic = output_path.with_name(
+        output_path.stem + "_deterministic" + output_path.suffix
+    )
 
-        adata_prediction_det.write_h5ad(output_path_deterministic)
-        logger.info(f"Saved det GEP to {output_path_deterministic}")
+    adata_prediction_det.write_h5ad(output_path_deterministic)
+    logger.info(f"Saved det GEP to {output_path_deterministic}")
 
-        mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
-        argmax_idx = np.argmax(mapping_np, axis=0)
-        one_hot = np.zeros_like(mapping_np, dtype=np.uint8)
-        one_hot[argmax_idx, np.arange(mapping_np.shape[1])] = 1
-        mapping_det_path = output_path.parent / "mapping_det.h5ad"
-        AnnData(
-            X=one_hot,
-            obs=pd.DataFrame(index=adata_sc.obs_names),
-            var=pd.DataFrame(index=adata_st.obs_names),
-        ).write_h5ad(mapping_det_path)
-        logger.info(f"Saved det mapping to {mapping_det_path}")
-    else:
-        logger.debug("No output path provided, skipping h5ad export.")
+    mapping_np = spot_to_cell_map.detach().cpu().numpy().T  # C×S
+    argmax_idx = np.argmax(mapping_np, axis=0)
+    one_hot = np.zeros_like(mapping_np, dtype=np.uint8)
+    one_hot[argmax_idx, np.arange(mapping_np.shape[1])] = 1
+    mapping_det_path = output_path.parent / "mapping_det.h5ad"
+    AnnData(
+        X=one_hot,
+        obs=pd.DataFrame(index=adata_sc.obs_names),
+        var=pd.DataFrame(index=adata_st.obs_names),
+    ).write_h5ad(mapping_det_path)
+    logger.info(f"Saved det mapping to {mapping_det_path}")
 
     # Step 7: Return result
     return (
@@ -809,11 +795,11 @@ if __name__ == "__main__":
         help="Logging verbosity. Use 'verbose' for more logs.",
     )
     parser.add_argument(
-        "--no_gpu_limit",
-        dest="no_gpu_limit",
-        action="store_true",
-        default=False,
-        help=f"Bypass the {GPU_LIMIT_GB:.0f} GB GPU memory guard and run regardless of estimated memory usage.",
+        "--gpu_limit_gb",
+        dest="gpu_limit_gb",
+        type=int,
+        default=6,
+        help="GPU memory limit in GB. Abort if estimated usage exceeds this value (default: 6).",
     )
     args = parser.parse_args()
 
@@ -834,5 +820,5 @@ if __name__ == "__main__":
         args.output_path,
         verbose_logging=(args.logging == "verbose"),
         store_intermediate=True,
-        no_gpu_limit=args.no_gpu_limit,
+        gpu_limit_gb=args.gpu_limit_gb,
     )

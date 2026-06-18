@@ -81,9 +81,8 @@ def _run_pair_worker(
     pair_id: int,
     config_path: Path,
     gpu_id: int,
-    save_result: bool,
     run_permutation_tests: bool,
-    no_gpu_limit: bool,
+    gpu_limit_gb: int,
     cpu_mode: bool = False,
 ) -> list[str]:
     if cpu_mode:
@@ -109,9 +108,8 @@ def _run_pair_worker(
     try:
         run_experiment_main(
             config_path,
-            save_result=save_result,
             run_permutation_tests=run_permutation_tests,
-            no_gpu_limit=no_gpu_limit,
+            gpu_limit_gb=gpu_limit_gb,
             force_cpu=cpu_mode,
         )
     except Exception as exc:
@@ -123,54 +121,14 @@ def _run_pair_worker(
     return errors
 
 
-def _check_completion(
-    pairs_csv: Path,
-    sc_dir: Path,
-    st_dir: Path,
-    output_dir: Path,
-) -> None:
-    """Print completion status for every pair and exit."""
-    pairs = pd.read_csv(pairs_csv)
-    template = _load_template()
-    expected_runs = _count_runs(template)
-
-    complete = incomplete = missing = 0
-    for _, row in pairs.iterrows():
-        pair_id = int(row["PairID"])
-        sc_path = sc_dir / f"{row['scName']}.h5ad"
-        st_path = st_dir / f"{row['stName']}.h5ad"
-
-        if not sc_path.exists() or not st_path.exists():
-            print(f"  Pair {pair_id:>3}  MISSING FILES")
-            missing += 1
-            continue
-
-        pair_output = output_dir / f"pair_{pair_id}"
-        done = _pair_is_complete(pair_output, expected_runs)
-        status = "COMPLETE  " if done else "incomplete"
-        print(f"  Pair {pair_id:>3}  {status}  ({row['scName']} × {row['stName']})")
-        if done:
-            complete += 1
-        else:
-            incomplete += 1
-
-    print(
-        f"\n  {complete} complete, {incomplete} incomplete, {missing} missing files  "
-        f"(expected {expected_runs} runs per pair)"
-    )
-    sys.exit(0)
-
-
 def main(
     pairs_csv: Path,
     sc_dir: Path,
     st_dir: Path,
     output_dir: Path,
     gpus: list[int],
-    save_result: bool = False,
     run_permutation_tests: bool = False,
-    no_gpu_limit: bool = False,
-    check: bool = False,
+    gpu_limit_gb: int = 6,
     cpu_mode: bool = False,
     workers: int = 1,
 ) -> None:
@@ -178,9 +136,6 @@ def main(
     sc_dir = Path(sc_dir)
     st_dir = Path(st_dir)
     output_dir = Path(output_dir)
-
-    if check:
-        _check_completion(pairs_csv, sc_dir, st_dir, output_dir)
 
     if cpu_mode:
         n_workers = workers
@@ -273,9 +228,8 @@ def main(
                 pair_id,
                 cfg_path,
                 0 if cpu_mode else gpus[i % len(gpus)],
-                save_result,
                 run_permutation_tests,
-                no_gpu_limit,
+                gpu_limit_gb,
                 cpu_mode,
             ): pair_id
             for i, (pair_id, cfg_path) in enumerate(zip(pair_ids, config_paths))
@@ -336,6 +290,12 @@ if __name__ == "__main__":
         help="Root folder for all pair outputs",
     )
     parser.add_argument(
+        "--run_permutation_tests",
+        action="store_true",
+        default=False,
+        help="Run permutation tests (passed through to run_experiment).",
+    )
+    parser.add_argument(
         "--gpus",
         type=int,
         nargs="+",
@@ -345,28 +305,11 @@ if __name__ == "__main__":
         "Default: 0 (single GPU, sequential).",
     )
     parser.add_argument(
-        "--save_result",
-        action="store_true",
-        help="Save the predicted GEP to disk (passed through to run_experiment).",
-    )
-    parser.add_argument(
-        "--run_permutation_tests",
-        action="store_true",
-        default=False,
-        help="Run permutation tests (passed through to run_experiment).",
-    )
-    parser.add_argument(
-        "--no_gpu_limit",
-        dest="no_gpu_limit",
-        action="store_true",
-        default=False,
-        help="Bypass the GPU memory guard and run regardless of estimated memory usage.",
-    )
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        default=False,
-        help="Print completion status for all pairs and exit without running anything.",
+        "--gpu_limit_gb",
+        dest="gpu_limit_gb",
+        type=int,
+        default=6,
+        help="GPU memory limit in GB. Abort if estimated usage exceeds this value (default: 6).",
     )
     parser.add_argument(
         "--cpu",
@@ -389,10 +332,8 @@ if __name__ == "__main__":
         st_dir=args.st_dir,
         output_dir=args.output_dir,
         gpus=args.gpus,
-        save_result=args.save_result,
         run_permutation_tests=args.run_permutation_tests,
-        no_gpu_limit=args.no_gpu_limit,
-        check=args.check,
+        gpu_limit_gb=args.gpu_limit_gb,
         cpu_mode=args.cpu_mode,
         workers=args.workers,
     )

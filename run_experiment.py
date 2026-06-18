@@ -9,7 +9,6 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Optional
 import anndata as ad
 import pandas as pd
 import scanpy as sc
@@ -73,10 +72,10 @@ def run_config(
     sc_path: Path,
     st_path: Path,
     run_config_path: Path,
-    save_result_path: Optional[Path],
+    output_path: Path,
     metrics_folder: Path,
     run_permutation_tests: bool = False,
-    no_gpu_limit: bool = False,
+    gpu_limit_gb: int = 6,
     force_cpu: bool = False,
 ) -> dict:
     # Determine verbose flag from current logger level
@@ -88,10 +87,10 @@ def run_config(
             sc_path,
             st_path,
             run_config_path,
-            output_path=save_result_path,
+            output_path=output_path,
             verbose_logging=verbose_flag,
             store_intermediate=True,
-            no_gpu_limit=no_gpu_limit,
+            gpu_limit_gb=gpu_limit_gb,
             force_cpu=force_cpu,
         )
     )
@@ -120,9 +119,8 @@ def run_config(
 
 def main(
     experiment_config: Path,
-    save_result: bool = False,
     run_permutation_tests: bool = False,
-    no_gpu_limit: bool = False,
+    gpu_limit_gb: int = 6,
     force_cpu: bool = False,
 ):
 
@@ -315,10 +313,10 @@ def main(
                     sc_path,
                     st_path,
                     run_config_path,
-                    (run_dir / "gep.h5ad") if save_result else None,
+                    run_dir / "gep.h5ad",
                     metric_dir,
                     run_permutation_tests=run_permutation_tests,
-                    no_gpu_limit=no_gpu_limit,
+                    gpu_limit_gb=gpu_limit_gb,
                     force_cpu=force_cpu,
                 )
                 status = "ok"
@@ -448,12 +446,6 @@ if __name__ == "__main__":
         help="Path(s) to experiment config YAML. Multiple configs are run sequentially.",
     )
     parser.add_argument(
-        "-s",
-        "--save_result",
-        action="store_true",
-        help="Whether to save the predicted GEP to disk",
-    )
-    parser.add_argument(
         "--run_permutation_tests",
         dest="run_permutation_tests",
         action="store_true",
@@ -481,6 +473,5 @@ if __name__ == "__main__":
     for cfg_path in args.experiment_config:
         main(
             cfg_path,
-            save_result=args.save_result,
             run_permutation_tests=args.run_permutation_tests,
         )
