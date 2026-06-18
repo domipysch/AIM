@@ -356,12 +356,6 @@ def main(
                         analysis_row["per_state_perm_p"] = results["substate_metrics"][
                             "weighted_perm_p"
                         ]
-                        analysis_row["margin_computed_mean"] = results[
-                            "substate_metrics"
-                        ]["margin_computed_mean"]
-                        analysis_row["margin_leiden_mean"] = results[
-                            "substate_metrics"
-                        ]["margin_leiden_mean"]
                         for metric, value in results["metrics_computed"].items():
                             analysis_row[f"{metric}__computed"] = value
                         analysis_row["contingency_score"] = results[
