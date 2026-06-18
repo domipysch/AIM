@@ -17,6 +17,7 @@ import scanpy as sc
 from anndata import AnnData
 
 matplotlib.use("Agg")
+matplotlib.rcParams["text.parse_math"] = False
 
 logger = logging.getLogger(__name__)
 
