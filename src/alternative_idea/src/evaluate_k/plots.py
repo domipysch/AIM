@@ -16,6 +16,14 @@ from ..utils import _dense_X
 
 logger = logging.getLogger(__name__)
 
+_FRAC_THRESHOLD = 0.01  # states with cell- or spot-fraction below this are hidden
+
+
+def _build_state_palette(unique_states: list[int]) -> dict[int, tuple]:
+    """Consistent tab20 colour palette keyed by integer state id."""
+    cmap_base = plt.get_cmap("tab20")
+    return {s: cmap_base(i % 20) for i, s in enumerate(unique_states)}
+
 
 def plot_umap(
     adata: AnnData,
@@ -36,20 +44,61 @@ def plot_umap_comparison(
     adata: AnnData,
     panels: list[tuple[str, str]],
     output_path: Path,
+    cell_fractions: dict[int, float] | None = None,
+    spot_fractions: dict[int, float] | None = None,
+    state_palette: dict[int, tuple] | None = None,
 ) -> None:
     """
     Save multiple UMAP panels side by side for visual comparison.
 
     Parameters
     ----------
-    panels : list of (color_key, title) pairs — all keys must exist in adata.obs.
+    panels           : list of (color_key, title) pairs — all keys must exist in adata.obs.
+    cell_fractions   : if provided, used to annotate the computed_state panel with
+                       the number of states above _FRAC_THRESHOLD.
+    spot_fractions   : same purpose as cell_fractions.
+    state_palette    : if provided, pre-assigned to adata.uns for the computed_state panel
+                       so colours stay consistent with the spatial plot.
     """
+    # Pre-assign palette so scanpy uses our colours for computed_state
+    if state_palette is not None and "computed_state" in adata.obs:
+        cats = adata.obs["computed_state"].cat.categories.tolist()
+        adata.uns["computed_state_colors"] = [
+            mcolors.to_hex(state_palette.get(int(c), (0.7, 0.7, 0.7, 1.0)))
+            for c in cats
+        ]
+
     n = len(panels)
     fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
     if n == 1:
         axes = [axes]
     for ax, (color_key, title) in zip(axes, panels):
-        sc.pl.umap(adata, color=color_key, title=title, ax=ax, show=False, save=False)
+        n_total = int(adata.obs[color_key].nunique())
+        if (
+            color_key == "computed_state"
+            and cell_fractions is not None
+            and spot_fractions is not None
+        ):
+            n_above = sum(
+                1
+                for k, cf in cell_fractions.items()
+                if cf > _FRAC_THRESHOLD and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+            )
+            count_line = f"{n_total} states  ({n_above} > 1 %)"
+        else:
+            count_line = f"{n_total} clusters"
+        sc.pl.umap(
+            adata,
+            color=color_key,
+            title=f"{title}\n{count_line}",
+            ax=ax,
+            show=False,
+            save=False,
+            legend_loc=None,
+        )
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -128,6 +177,7 @@ def plot_state_profiles(
     output_path: Path,
     cell_fractions: dict[int, float] | None = None,
     spot_fractions: dict[int, float] | None = None,
+    state_palette: dict[int, tuple] | None = None,
 ) -> None:
     """
     Cluster-mean expression heatmap for each computed cell state, with optional
@@ -147,6 +197,18 @@ def plot_state_profiles(
     gene_order = np.argsort(X.var(axis=0))[::-1]
 
     unique_states = sorted(np.unique(cell_states))
+    if cell_fractions is not None and spot_fractions is not None:
+        unique_states = [
+            k
+            for k in unique_states
+            if cell_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+            and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+        ]
+    if not unique_states:
+        logger.warning(
+            "No states above fraction threshold — skipping state-profile plot."
+        )
+        return
     K = len(unique_states)
 
     mat = np.stack(
@@ -187,7 +249,7 @@ def plot_state_profiles(
     fig.colorbar(im, ax=ax_heat, label="z-score", fraction=0.015, pad=0.01)
 
     ax_idx = 1
-    for fractions, label, color in [
+    for fractions, label, fallback_color in [
         (cell_fractions, "Cell fraction", "steelblue"),
         (spot_fractions, "Spot fraction", "darkorange"),
     ]:
@@ -195,7 +257,12 @@ def plot_state_profiles(
             continue
         ax = axes[ax_idx]
         values = [fractions.get(k, 0.0) for k in unique_states]
-        ax.barh(range(K), values, color=color, alpha=0.8)
+        bar_colors = (
+            [state_palette.get(k, (0.7, 0.7, 0.7, 1.0)) for k in unique_states]
+            if state_palette is not None
+            else fallback_color
+        )
+        ax.barh(range(K), values, color=bar_colors, alpha=0.8)
         for i, v in enumerate(values):
             ax.text(v + 0.002, i, f"{v:.1%}", va="center", fontsize=7)
         ax.set_yticks(range(K))
@@ -217,6 +284,7 @@ def plot_state_fractions(
     spot_fractions: dict[int, float],
     unique_states: list[int],
     output_path: Path,
+    state_palette: dict[int, tuple] | None = None,
 ) -> None:
     """
     Standalone export of the cell-fraction and spot-fraction bar charts.
@@ -233,6 +301,17 @@ def plot_state_fractions(
     if not active:
         return
 
+    if cell_fractions and spot_fractions:
+        unique_states = [
+            k
+            for k in unique_states
+            if cell_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+            and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+        ]
+    if not unique_states:
+        logger.warning("No states above fraction threshold — skipping fractions plot.")
+        return
+
     K = len(unique_states)
     fig, axes = plt.subplots(
         1,
@@ -242,9 +321,14 @@ def plot_state_fractions(
     )
     axes = axes[0]
 
-    for ax, (fractions, label, color) in zip(axes, active):
+    for ax, (fractions, label, fallback_color) in zip(axes, active):
         values = [fractions.get(k, 0.0) for k in unique_states]
-        ax.barh(range(K), values, color=color, alpha=0.8)
+        bar_colors = (
+            [state_palette.get(k, (0.7, 0.7, 0.7, 1.0)) for k in unique_states]
+            if state_palette is not None
+            else fallback_color
+        )
+        ax.barh(range(K), values, color=bar_colors, alpha=0.8)
         for i, v in enumerate(values):
             ax.text(v + 0.002, i, f"{v:.1%}", va="center", fontsize=8)
         ax.set_yticks(range(K))
@@ -266,11 +350,16 @@ def plot_spatial_cell_states(
     spot_states: np.ndarray,
     output_path: Path,
     dot_size: float = 8.0,
+    state_palette: dict[int, tuple] | None = None,
+    cell_fractions: dict[int, float] | None = None,
+    spot_fractions: dict[int, float] | None = None,
 ) -> None:
     """
     Scatter plot of ST spots in physical space, coloured by computed cell-state.
 
     Coordinates are read from adata_st.obsm["spatial"].
+    Only states with cell- and spot-fraction > _FRAC_THRESHOLD are shown when
+    fractions are supplied.  state_palette syncs colours with the UMAP.
     """
     if "spatial" not in adata_st.obsm:
         logger.warning("adata_st has no obsm['spatial'] — skipping spatial plot.")
@@ -278,12 +367,29 @@ def plot_spatial_cell_states(
 
     coords = np.asarray(adata_st.obsm["spatial"])
     unique_states = sorted(np.unique(spot_states).tolist())
+
+    # Filter to states above the fraction threshold
+    if cell_fractions is not None and spot_fractions is not None:
+        unique_states = [
+            s
+            for s in unique_states
+            if cell_fractions.get(s, 0.0) > _FRAC_THRESHOLD
+            and spot_fractions.get(s, 0.0) > _FRAC_THRESHOLD
+        ]
+    if not unique_states:
+        logger.warning("No states above fraction threshold — skipping spatial plot.")
+        return
+
     K = len(unique_states)
 
-    # Build a colour palette: tab20 for ≤20 states, cycling for more
-    cmap_base = plt.get_cmap("tab20")
-    palette = [cmap_base(i % 20) for i in range(K)]
-    state_to_color = {s: palette[i] for i, s in enumerate(unique_states)}
+    # Use provided palette or fall back to tab20
+    if state_palette is not None:
+        state_to_color = {
+            s: state_palette[s] for s in unique_states if s in state_palette
+        }
+    else:
+        cmap_base = plt.get_cmap("tab20")
+        state_to_color = {s: cmap_base(i % 20) for i, s in enumerate(unique_states)}
 
     fig, ax = plt.subplots(figsize=(7, 6))
     for state, color in state_to_color.items():
@@ -303,7 +409,9 @@ def plot_spatial_cell_states(
     ax.invert_yaxis()
     ax.set_xlabel("x", fontsize=10)
     ax.set_ylabel("y", fontsize=10)
-    ax.set_title("Spatial distribution of computed cell states", fontsize=12)
+    ax.set_title(
+        f"Spatial distribution of computed cell states  ({K} > 1 %)", fontsize=12
+    )
 
     # Legend: compact when many states
     legend_fs = max(5, min(9, 120 // K))

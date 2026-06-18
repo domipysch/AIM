@@ -9,7 +9,7 @@ Public API
 ----------
 compute_substate_metrics(adata_sc, adata_st, computed_states, spot_states,
                          leiden_labels, shared_genes, ...)
-    -> dict with keys "per_state", "margin_computed_mean", "margin_leiden_mean"
+    -> dict with keys "per_state", "weighted_perm_p"
 """
 
 from __future__ import annotations
@@ -42,12 +42,6 @@ def _mean_pairwise_cossim(vecs: np.ndarray) -> float:
         for i, j in combinations(range(n), 2)
     ]
     return float(np.mean(sims))
-
-
-def _margin(sim_mat: np.ndarray) -> np.ndarray:
-    """Per-spot margin: cosim(winner) − cosim(runner-up). Shape (n_spots,)."""
-    top2 = np.partition(sim_mat, -2, axis=1)[:, -2:]
-    return top2[:, 1] - top2[:, 0]
 
 
 # ─── Main function ─────────────────────────────────────────────────────────────
@@ -83,8 +77,6 @@ def compute_substate_metrics(
     -------
     dict with keys:
         "per_state"            dict[cs_id -> metrics dict]
-        "margin_computed_mean" float  mean spot margin under computed clustering
-        "margin_leiden_mean"   float  mean spot margin under Leiden clustering
     """
     rng = np.random.default_rng(seed)
 
@@ -95,24 +87,11 @@ def compute_substate_metrics(
     sc_gene_names = list(adata_sc.var_names)
     st_gene_names = list(adata_st.var_names)
 
-    shared_sc_idx = [sc_gene_names.index(g) for g in shared_genes]
     shared_st_idx = [st_gene_names.index(g) for g in shared_genes]
 
     X_st_shared = X_st_full[:, shared_st_idx]  # (n_spots, n_shared)
 
-    # ── Top-N HVGs from all ST spots (shared genes) — one set for all states ──
-    gene_var = X_st_shared.var(axis=0)
-    top_n_st_idx = np.argsort(gene_var)[::-1][:n_top_genes]
-    top_n_genes = [shared_genes[i] for i in top_n_st_idx]
-    top_n_sc_idx = [sc_gene_names.index(g) for g in top_n_genes]
-    logger.info("Top-%d HVGs from ST data (shared): %s…", n_top_genes, top_n_genes[:5])
-
-    # ── Pre-compute all Leiden centroids in the top-N gene subspace ───────────
-    # Done once here so the per-state loop and permutations are just dict lookups.
-    all_leiden_centroids: dict[int, np.ndarray] = {
-        int(ls): X_sc[leiden_labels == ls][:, top_n_sc_idx].mean(axis=0)
-        for ls in np.unique(leiden_labels)
-    }
+    # Gene selection is now per-state (see inside the loop below).
 
     # ── Map Leiden clusters to computed states ────────────────────────────────
     unique_cs = sorted(np.unique(computed_states).tolist())
@@ -164,9 +143,28 @@ def compute_substate_metrics(
             "CS%d: %d Leiden sub-clusters, %d spots", cs, len(ls_targets), n_spots
         )
 
+        # ── Per-state gene selection: top-N by fold-change vs all other spots ─
+        mean_state = X_st_shared[cs_spot_mask].mean(axis=0)  # (n_shared,)
+        mean_rest = X_st_shared[~cs_spot_mask].mean(axis=0)  # (n_shared,)
+        fold_change = mean_state / (mean_rest + 1e-6)
+        top_n_idx = np.argsort(fold_change)[::-1][:n_top_genes]
+        top_n_sc_idx = [sc_gene_names.index(shared_genes[i]) for i in top_n_idx]
+        logger.debug(
+            "CS%d: top-%d genes by fold-change: %s…",
+            cs,
+            n_top_genes,
+            [shared_genes[i] for i in top_n_idx[:5]],
+        )
+
+        # Leiden centroids in this state's gene subspace
+        leiden_centroids_state: dict[int, np.ndarray] = {
+            int(ls): X_sc[leiden_labels == ls][:, top_n_sc_idx].mean(axis=0)
+            for ls in all_leiden
+        }
+
         # ── cossim_centroid + perm_p_value ────────────────────────────────────
         ls_vecs_topn = np.array(
-            [all_leiden_centroids[ls] for ls in ls_targets]
+            [leiden_centroids_state[ls] for ls in ls_targets]
         )  # (n_ls, n_top_genes)
         cossim_centroid = _mean_pairwise_cossim(ls_vecs_topn)
 
@@ -182,7 +180,7 @@ def compute_substate_metrics(
             ]
             perm_sims_a = []
             for draw in perm_draws:
-                vecs = np.array([all_leiden_centroids[int(c)] for c in draw])
+                vecs = np.array([leiden_centroids_state[int(c)] for c in draw])
                 perm_sims_a.append(_mean_pairwise_cossim(vecs))
             perm_p_value = float(np.mean(np.array(perm_sims_a) >= cossim_centroid))
 
@@ -192,55 +190,24 @@ def compute_substate_metrics(
             "perm_p_value": float(perm_p_value),
         }
 
-    # ── Global: spot-level mapping clarity ────────────────────────────────────
-    unique_cs_arr = np.array(unique_cs)
-    cs_cents = np.array(
-        [
-            X_sc[computed_states == cs][:, shared_sc_idx].mean(axis=0)
-            for cs in unique_cs_arr
-        ]
-    )  # (K, n_shared)
-
-    unique_ld = np.unique(leiden_labels)
-    ld_cents = np.array(
-        [X_sc[leiden_labels == ld][:, shared_sc_idx].mean(axis=0) for ld in unique_ld]
-    )  # (L, n_shared)
-
-    if cs_cents.shape[0] >= 2:
-        sim_cs = cosine_similarity(X_st_shared, cs_cents)
-        margin_computed_mean = float(_margin(sim_cs).mean())
-    else:
-        margin_computed_mean = float("nan")
-
-    if ld_cents.shape[0] >= 2:
-        sim_ld = cosine_similarity(X_st_shared, ld_cents)
-        margin_leiden_mean = float(_margin(sim_ld).mean())
-    else:
-        margin_leiden_mean = float("nan")
-
     # ── Weighted average perm_p (spot-weighted, mapped states only) ───────────
     total_spots = 0
     weighted_sum = 0.0
     for m in per_state.values():
         n_spots = m["n_spots"]
         p = m["perm_p_value"]
-        if n_spots > 0 and p == p:  # n_spots >= 1 and p is not NaN
+        if n_spots > 0 and m["n_leiden_sub"] > 1 and p == p:  # exclude trivial/NaN
             weighted_sum += p * n_spots
             total_spots += n_spots
     weighted_perm_p = weighted_sum / total_spots if total_spots > 0 else float("nan")
 
     logger.info(
-        "Substate analysis done: %d states  |  margin computed=%.4f  leiden=%.4f"
-        "  |  weighted_perm_p=%.4f",
+        "Substate analysis done: %d states  |  weighted_perm_p=%.4f",
         len(per_state),
-        margin_computed_mean,
-        margin_leiden_mean,
         weighted_perm_p,
     )
 
     return {
         "per_state": per_state,
-        "margin_computed_mean": margin_computed_mean,
-        "margin_leiden_mean": margin_leiden_mean,
         "weighted_perm_p": weighted_perm_p,
     }

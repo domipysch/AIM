@@ -38,6 +38,7 @@ from .matching import (
     plot_contingency_heatmap,
 )
 from .plots import (
+    _build_state_palette,
     plot_umap_comparison,
     plot_state_profiles,
     plot_state_fractions,
@@ -107,6 +108,7 @@ def run_analysis(
     # ── Hard assignments ──────────────────────────────────────────────────────
     cell_states = hard_assignments(B)
     spot_states = hard_assignments(C)
+    state_palette = _build_state_palette(sorted(np.unique(cell_states).tolist()))
 
     n_computed_states = int(len(np.unique(cell_states)))
     n_mapped_states = int(len(np.unique(spot_states)))
@@ -176,13 +178,7 @@ def run_analysis(
         [_fmt_row(cs, m) for cs, m in sorted(substate["per_state"].items())]
     ).to_csv(data_dir / "substate_metrics.csv", index=False)
 
-    logger.info(
-        "Sub-cluster metrics → %s/substate_metrics.csv  "
-        "(margin computed=%.4f | leiden=%.4f)",
-        data_dir,
-        substate["margin_computed_mean"],
-        substate["margin_leiden_mean"],
-    )
+    logger.info("Sub-cluster metrics → %s/substate_metrics.csv", data_dir)
 
     # ── Combined UMAP comparison ──────────────────────────────────────────────
     plot_umap_comparison(
@@ -196,6 +192,9 @@ def run_analysis(
             ),
         ],
         output_path=plots_dir / "umap_comparison.png",
+        cell_fractions=cell_fractions,
+        spot_fractions=spot_fractions,
+        state_palette=state_palette,
     )
 
     # ── Spatial cell-state plot ───────────────────────────────────────────────
@@ -203,6 +202,9 @@ def run_analysis(
         adata_st,
         spot_states,
         output_path=plots_dir / "spatial_cell_states.png",
+        state_palette=state_palette,
+        cell_fractions=cell_fractions,
+        spot_fractions=spot_fractions,
     )
 
     # ── Cell-state profiles ───────────────────────────────────────────────────
@@ -214,12 +216,14 @@ def run_analysis(
         plots_dir / "cell_state_profiles.png",
         cell_fractions=cell_fractions,
         spot_fractions=spot_fractions,
+        state_palette=state_palette,
     )
     plot_state_fractions(
         cell_fractions=cell_fractions,
         spot_fractions=spot_fractions,
         unique_states=sorted(np.unique(cell_states).tolist()),
         output_path=plots_dir / "cell_state_fractions.png",
+        state_palette=state_palette,
     )
 
     # ── Contingency matching (Leiden, all genes) ─────────────────────────────

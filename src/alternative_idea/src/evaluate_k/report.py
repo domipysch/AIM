@@ -163,8 +163,26 @@ def _substate_metrics_table(csv_path: Path) -> str:
     # Header row
     lines.append("  " + ", ".join(f"[*{_esc(h)}*]" for h in header) + ",")
 
+    cells_col = header.index("cells") if "cells" in header else -1
+    spots_col = header.index("spots") if "spots" in header else -1
+    n_ls_col = header.index("n_LS") if "n_LS" in header else -1
+
+    def _keep(row: list[str]) -> bool:
+        try:
+            if cells_col >= 0 and int(float(row[cells_col])) <= 0:
+                return False
+            if spots_col >= 0 and int(float(row[spots_col])) <= 0:
+                return False
+            if n_ls_col >= 0 and int(float(row[n_ls_col])) <= 1:
+                return False
+        except (ValueError, IndexError):
+            pass
+        return True
+
     # Data rows
     for row in rows[1:]:
+        if not _keep(row):
+            continue
         col_fill: dict[int, str] = {}
 
         if perm_p_col >= 0 and perm_p_col < len(row):
@@ -271,12 +289,24 @@ def generate_per_k_report(
 
     base = analysis_dir  # .typ lives here; image paths are relative to it
 
-    # UMAP comparison
+    _frac_note = (
+        "#text(size: 8pt, fill: luma(140))"
+        "[_Only states with cell-fraction > 1.0 % and spot-fraction > 1.0 % are shown._]\n"
+    )
+
+    # 1. UMAP comparison
     parts.append(
         _section_img(plots_dir / "umap_comparison.png", "UMAP Comparison", base)
     )
 
-    # Spatial cell-state plot
+    # 2. Cell- and Spot-State Fractions (moved here, below UMAPs)
+    sec = _section_img(
+        plots_dir / "cell_state_fractions.png", "Cell- and Spot-State Fractions", base
+    )
+    if sec:
+        parts.append(sec + _frac_note)
+
+    # 3. Spatial cell-state plot
     parts.append(
         _section_img(
             plots_dir / "spatial_cell_states.png",
@@ -285,19 +315,12 @@ def generate_per_k_report(
         )
     )
 
-    # Cell-state profiles (combined heatmap + bars)
-    parts.append(
-        _section_img(plots_dir / "cell_state_profiles.png", "Cell-State Profiles", base)
+    # 4. Cell-state profiles
+    sec = _section_img(
+        plots_dir / "cell_state_profiles.png", "Cell-State Profiles", base
     )
-
-    # Fraction bar charts standalone
-    parts.append(
-        _section_img(
-            plots_dir / "cell_state_fractions.png",
-            "Cell- and Spot-State Fractions",
-            base,
-        )
-    )
+    if sec:
+        parts.append(sec + _frac_note)
 
     # Contingency heatmap
     parts.append(
@@ -335,7 +358,14 @@ _SUMMARY_EXCLUDE_ROWS = {
     "silhouette__computed",
     "dunn_index__computed",
 }
-_SUMMARY_MIN_BOLD_ROWS = {"per_state_perm_p"}
+_SUMMARY_ROW_LABELS = {
+    "per_state_perm_p": "Substate p-value",
+    "modularity__computed": "Modularity",
+    "contingency_score": "Contingency",
+    "median_cossim_gene": "Cossim (genewise)",
+    "median_cossim_spot": "Cossim (spotwise)",
+}
+_SUMMARY_MIN_BOLD_ROWS = {"per_state_perm_p", "Substate p-value"}
 
 
 def _overview_table(overview_csv: Path) -> str:
@@ -365,6 +395,7 @@ def _overview_table(overview_csv: Path) -> str:
 
     for row in data_rows:
         metric = row[0] if row else ""
+        label = _SUMMARY_ROW_LABELS.get(metric, metric)
         values = row[1:] if len(row) > 1 else []
         is_int_row = metric in _SUMMARY_INT_ROWS
 
@@ -379,7 +410,7 @@ def _overview_table(overview_csv: Path) -> str:
             except ValueError:
                 pass
 
-        cells = [f"[{_esc(metric)}]"]
+        cells = [f"[{_esc(label)}]"]
         for i, v in enumerate(values):
             if is_int_row:
                 try:
