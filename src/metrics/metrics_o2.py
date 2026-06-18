@@ -40,7 +40,6 @@ def compute_metrics_per_gene(
     # Collect cossim values for optional export
     cossim_dict = {}
 
-    counter = 0
     for gene in adata_predicted_z.var_names:
 
         # Retrieve vectors (AnnData slicing may return 2D arrays)
@@ -82,10 +81,6 @@ def compute_metrics_per_gene(
         # Collect for export
         cossim_dict[gene] = val_cossim
 
-        counter += 1
-        if counter % 1000 == 0:
-            logging.info(f"Processed {counter}/{adata_predicted_z.n_vars} genes.")
-
     # Optional: save cossim per gene as JSON
     if save_cossim_json is not None:
         save_cossim_json.parent.mkdir(parents=True, exist_ok=True)
@@ -125,7 +120,6 @@ def compute_metrics_per_spot(
     # Collect cossim values for optional export
     cossim_dict = {}
 
-    counter = 0
     for spot in adata_predicted_z.obs_names:
         # Retrieve vectors (AnnData slicing may return 2D arrays)
         vec_z = adata_z[spot, :].X.toarray().ravel()
@@ -148,10 +142,6 @@ def compute_metrics_per_spot(
         # adata_predicted_z.obs.at[spot, 'bhat'] = bhattacharyya_distance(vec_z, vec_pred)
         # adata_predicted_z.obs.at[spot, 'tv'] = total_variation(vec_z, vec_pred)
         cossim_dict[spot] = val_cossim
-
-        counter += 1
-        if counter % 1000 == 0:
-            logging.info(f"Processed {counter}/{adata_predicted_z.n_obs} spots.")
 
     # Optional: save cossim per spot as JSON
     if save_cossim_json is not None:

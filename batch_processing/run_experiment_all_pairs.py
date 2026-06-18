@@ -40,9 +40,12 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+# Ensure the repo root is on sys.path when this script is run from a subfolder
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 logger = logging.getLogger(__name__)
 
-_TEMPLATE_CONFIG = Path(__file__).parent / "experiment_config.yaml"
+_TEMPLATE_CONFIG = Path(__file__).resolve().parents[1] / "experiment_config.yaml"
 
 
 def _count_runs(node) -> int:
@@ -80,8 +83,10 @@ def _load_template() -> dict:
 def _run_pair_worker(
     pair_id: int,
     config_path: Path,
+    sc_path: Path,
+    st_path: Path,
+    pair_output: Path,
     gpu_id: int,
-    run_permutation_tests: bool,
     gpu_limit_gb: int,
     cpu_mode: bool = False,
 ) -> list[str]:
@@ -108,7 +113,9 @@ def _run_pair_worker(
     try:
         run_experiment_main(
             config_path,
-            run_permutation_tests=run_permutation_tests,
+            sc_path=sc_path,
+            st_path=st_path,
+            output_folder=pair_output,
             gpu_limit_gb=gpu_limit_gb,
             force_cpu=cpu_mode,
         )
@@ -127,7 +134,6 @@ def main(
     st_dir: Path,
     output_dir: Path,
     gpus: list[int],
-    run_permutation_tests: bool = False,
     gpu_limit_gb: int = 6,
     cpu_mode: bool = False,
     workers: int = 1,
@@ -164,6 +170,9 @@ def main(
 
     pair_ids: list[int] = []
     config_paths: list[Path] = []
+    sc_paths: list[Path] = []
+    st_paths: list[Path] = []
+    pair_outputs: list[Path] = []
 
     # --- generate one config per pair ---
     for _, row in pairs.iterrows():
@@ -184,24 +193,16 @@ def main(
             logger.info("Pair %d already complete — skipping.", pair_id)
             continue
 
-        cfg = {
-            "data": {
-                "sc_path": str(sc_path.resolve()),
-                "st_path": str(st_path.resolve()),
-            },
-            "output": {
-                "output_folder": str(pair_output.resolve()),
-            },
-            **template,
-        }
-
         config_path = config_dir / f"pair_{pair_id}.yaml"
         with open(config_path, "w") as f:
-            yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+            yaml.safe_dump(template, f, sort_keys=False, allow_unicode=True)
         logger.info("Config written → %s", config_path)
 
         pair_ids.append(pair_id)
         config_paths.append(config_path)
+        sc_paths.append(sc_path.resolve())
+        st_paths.append(st_path.resolve())
+        pair_outputs.append(pair_output.resolve())
 
     if not config_paths:
         logger.error("No valid pairs found — aborting.")
@@ -227,12 +228,16 @@ def main(
                 _run_pair_worker,
                 pair_id,
                 cfg_path,
+                sc_path,
+                st_path,
+                pair_output,
                 0 if cpu_mode else gpus[i % len(gpus)],
-                run_permutation_tests,
                 gpu_limit_gb,
                 cpu_mode,
             ): pair_id
-            for i, (pair_id, cfg_path) in enumerate(zip(pair_ids, config_paths))
+            for i, (pair_id, cfg_path, sc_path, st_path, pair_output) in enumerate(
+                zip(pair_ids, config_paths, sc_paths, st_paths, pair_outputs)
+            )
         }
         errors: list[str] = []
         for future in as_completed(futures):
@@ -290,12 +295,6 @@ if __name__ == "__main__":
         help="Root folder for all pair outputs",
     )
     parser.add_argument(
-        "--run_permutation_tests",
-        action="store_true",
-        default=False,
-        help="Run permutation tests (passed through to run_experiment).",
-    )
-    parser.add_argument(
         "--gpus",
         type=int,
         nargs="+",
@@ -332,7 +331,6 @@ if __name__ == "__main__":
         st_dir=args.st_dir,
         output_dir=args.output_dir,
         gpus=args.gpus,
-        run_permutation_tests=args.run_permutation_tests,
         gpu_limit_gb=args.gpu_limit_gb,
         cpu_mode=args.cpu_mode,
         workers=args.workers,

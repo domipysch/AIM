@@ -1,8 +1,3 @@
-data:
-  sc_path: C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\scRNA\01_mouse-ssp.h5ad
-  st_path: C:\Users\zi69hebi\Dev\10_Alignment\Data\01_Datasets\ST\01_mouse-ssp.h5ad
-output:
-  output_folder: C:\Users\zi69hebi\Dev\10_Alignment\Data\MouseSSP-AltIdea-Temp
 model:
   K:
     - 10

@@ -123,7 +123,7 @@ def permutation_test(
     C_st: np.ndarray,
     X_st: np.ndarray,
     labels_st: np.ndarray,
-    n_permutations: int = 200,
+    n_permutations: int = 100,
     seed: int = 42,
 ) -> dict:
     """

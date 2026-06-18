@@ -52,8 +52,6 @@ def run_pre_check(
     st_adata: AnnData,
     output_dir: Path,
     leiden_resolution: float = 0.5,
-    run_permutation_test: bool = False,
-    n_permutations: int = 200,
 ) -> dict:
     """
     Run the full pre-alignment compatibility check and save all outputs.
@@ -63,8 +61,6 @@ def run_pre_check(
     sc_adata, st_adata       : AnnData — shared genes are detected automatically
     output_dir               : directory to write summary, gene table, and plots
     leiden_resolution        : Leiden resolution for clustering both modalities
-    run_permutation_test     : if True, validate metric against gene-shuffle null
-    n_permutations           : number of permutations for the null distribution
 
     Returns
     -------
@@ -132,10 +128,8 @@ def run_pre_check(
     greedy_score, greedy_sim, best_sc_per_st = greedy_cosine_sim(C_sc, C_st)
     logger.info(f"Greedy best-match cosine sim: {greedy_score:.4f}")
 
-    perm_results = None
-    if run_permutation_test:
-        logger.info(f"Running permutation test ({n_permutations} permutations) ...")
-        perm_results = permutation_test(C_sc, C_st, X_st, labels_st, n_permutations)
+    logger.info(f"Running permutation test (100 permutations) ...")
+    perm_results = permutation_test(C_sc, C_st, X_st, labels_st, 100)
 
     save_all_plots(
         sc_adata=sc_adata,

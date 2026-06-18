@@ -49,7 +49,6 @@ def create_shared_boxplots(
     metric_dirs: list[Path],
     labels: list[str],
     output_folder: Path,
-    run_permutation_tests: bool = False,
 ):
 
     # Run shared metrics
@@ -60,12 +59,11 @@ def create_shared_boxplots(
     )
 
     # Run shared permutation test boxplots
-    if run_permutation_tests:
-        run_all_permutation_boxplots.main(
-            metric_dirs,
-            labels,
-            output_folder,
-        )
+    run_all_permutation_boxplots.main(
+        metric_dirs,
+        labels,
+        output_folder,
+    )
 
 
 def run_config(
@@ -74,7 +72,6 @@ def run_config(
     run_config_path: Path,
     output_path: Path,
     metrics_folder: Path,
-    run_permutation_tests: bool = False,
     gpu_limit_gb: int = 6,
     force_cpu: bool = False,
 ) -> dict:
@@ -101,7 +98,6 @@ def run_config(
         st_path,
         metrics_folder,
         result_gep=predicted_gep,
-        run_permutation_tests=run_permutation_tests,
     )
 
     # Run individual metrics (deterministic)
@@ -110,7 +106,6 @@ def run_config(
         st_path,
         metrics_folder,
         result_gep=predicted_gep_det,
-        run_permutation_tests=run_permutation_tests,
         name_suffix="-det",
     )
 
@@ -119,7 +114,9 @@ def run_config(
 
 def main(
     experiment_config: Path,
-    run_permutation_tests: bool = False,
+    sc_path: Path,
+    st_path: Path,
+    output_folder: Path,
     gpu_limit_gb: int = 6,
     force_cpu: bool = False,
 ):
@@ -133,17 +130,9 @@ def main(
     if not isinstance(base_cfg, dict):
         raise ValueError("Top-level experiment_config must be a mapping/dict.")
 
-    # Extract and validate data/output sections (not part of the grid search)
-    if "data" not in base_cfg:
-        raise ValueError("experiment_config must contain a 'data' section.")
-    if "output" not in base_cfg:
-        raise ValueError("experiment_config must contain an 'output' section.")
-    data_cfg = base_cfg.pop("data")
-    output_cfg = base_cfg.pop("output")
-
-    sc_path = Path(data_cfg["sc_path"])
-    st_path = Path(data_cfg["st_path"])
-    output_folder = Path(output_cfg["output_folder"])
+    # Remove data/output sections if present in the YAML (ignored — CLI args take precedence)
+    base_cfg.pop("data", None)
+    base_cfg.pop("output", None)
 
     if not sc_path.exists():
         raise FileNotFoundError(f"sc.h5ad not found: {sc_path}")
@@ -315,7 +304,6 @@ def main(
                     run_config_path,
                     run_dir / "gep.h5ad",
                     metric_dir,
-                    run_permutation_tests=run_permutation_tests,
                     gpu_limit_gb=gpu_limit_gb,
                     force_cpu=force_cpu,
                 )
@@ -427,7 +415,6 @@ def main(
         [ds_folder / str(i) / "metrics" for i in range(run_id)],
         [str(i) for i in range(run_id)],
         shared_dir,
-        run_permutation_tests=run_permutation_tests,
     )
 
 
@@ -435,7 +422,7 @@ if __name__ == "__main__":
 
     # 1. Parse Arguments
     parser = argparse.ArgumentParser(
-        description="Run AlternativeIdea alignment. Dataset paths and output folders are configured in the experiment YAML."
+        description="Run AlternativeIdea alignment. Hyperparameters come from the experiment YAML; data paths are passed as arguments."
     )
     parser.add_argument(
         "-c",
@@ -446,10 +433,22 @@ if __name__ == "__main__":
         help="Path(s) to experiment config YAML. Multiple configs are run sequentially.",
     )
     parser.add_argument(
-        "--run_permutation_tests",
-        dest="run_permutation_tests",
-        action="store_true",
-        help="Whether to run permutation tests or not.",
+        "--sc",
+        type=Path,
+        required=True,
+        help="Path to the scRNA-seq .h5ad file.",
+    )
+    parser.add_argument(
+        "--st",
+        type=Path,
+        required=True,
+        help="Path to the spatial transcriptomics .h5ad file.",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="Output folder for results.",
     )
     parser.add_argument(
         "--logging",
@@ -473,5 +472,7 @@ if __name__ == "__main__":
     for cfg_path in args.experiment_config:
         main(
             cfg_path,
-            run_permutation_tests=args.run_permutation_tests,
+            sc_path=args.sc,
+            st_path=args.st,
+            output_folder=args.output,
         )

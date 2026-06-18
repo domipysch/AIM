@@ -17,7 +17,6 @@ def main(
     st_path: Path,
     metrics: Path,
     result_gep: AnnData,
-    run_permutation_tests: bool = False,
     name_suffix: str = "",
 ):
     """
@@ -38,9 +37,8 @@ def main(
     # main4(sc_path, st_path, result_gep, metrics)
 
     # Run permutation tests
-    if run_permutation_tests:
-        main2permutation(sc_path, st_path, result_gep, metrics)
-        main4permutation(sc_path, st_path, result_gep, metrics)
+    # main2permutation(sc_path, st_path, result_gep, metrics)
+    # main4permutation(sc_path, st_path, result_gep, metrics)
 
 
 if __name__ == "__main__":
@@ -71,6 +69,4 @@ if __name__ == "__main__":
     logger.info("Metrics output folder: %s", args.metrics)
 
     result_gep = ad.read_h5ad(args.result)
-    main(
-        args.scdata, args.stdata, args.metrics, result_gep, run_permutation_tests=False
-    )
+    main(args.scdata, args.stdata, args.metrics, result_gep)

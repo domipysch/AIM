@@ -12,11 +12,8 @@ import argparse
 import concurrent.futures
 import csv
 import logging
-import os
 from pathlib import Path
-
 import scanpy as sc
-
 from src.pre_check import run_pre_check
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -39,13 +36,6 @@ def process_pair(
     st_name = pair["stName"]
 
     out_dir = args.output_dir / f"{pair_id:03d}_{sc_name}__{st_name}"
-
-    if not args.no_skip and (out_dir / "pre_check_report.pdf").exists():
-        logger.info(
-            f"[Pair {pair_id:>3}] Skipping — pre_check_report.pdf already exists"
-        )
-        return None
-
     sc_path = args.sc_dir / f"{sc_name}.h5ad"
     st_path = args.st_dir / f"{st_name}.h5ad"
 
@@ -68,8 +58,6 @@ def process_pair(
             st_adata=st_adata,
             output_dir=out_dir,
             leiden_resolution=args.leiden_resolution,
-            run_permutation_test=args.permutation_test,
-            n_permutations=args.n_permutations,
         )
         logger.info(f"[Pair {pair_id:>3}] Done → {out_dir}")
         return None
@@ -119,37 +107,9 @@ def main() -> None:
         help="Leiden clustering resolution  (default: %(default)s)",
     )
     parser.add_argument(
-        "--permutation_test",
-        action="store_true",
-        help="Run the permutation test (slow)",
-    )
-    parser.add_argument(
-        "--n_permutations",
-        type=int,
-        default=200,
-        help="Number of permutations  (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--no_skip",
-        action="store_true",
-        help="Re-run pairs that already have a pre_check_report.pdf (default: skip them)",
-    )
-    parser.add_argument(
-        "--pair_ids",
-        type=int,
-        nargs="+",
-        metavar="ID",
-        help="Only run these PairIDs (space-separated); omit to run all",
-    )
-    parser.add_argument(
-        "--parallel",
-        action="store_true",
-        help="Run pairs concurrently using a thread pool",
-    )
-    parser.add_argument(
         "--workers",
         type=int,
-        default=os.cpu_count(),
+        default=1,
         metavar="N",
         help="Number of parallel workers (default: cpu count)",
     )
@@ -161,13 +121,9 @@ def main() -> None:
 
     logger.info(f"Loaded {len(all_pairs)} pairs from {args.pairs_csv}")
 
-    pairs_to_run = [
-        p for p in all_pairs if not args.pair_ids or int(p["PairID"]) in args.pair_ids
-    ]
-
     # Pre-load scRNA cache sequentially so the cache is read-only during parallel execution
     sc_cache: dict[str, sc.AnnData] = {}
-    for pair in pairs_to_run:
+    for pair in all_pairs:
         sc_name = pair["scName"]
         if sc_name not in sc_cache:
             sc_path = args.sc_dir / f"{sc_name}.h5ad"
@@ -176,23 +132,23 @@ def main() -> None:
 
     errors: list[str] = []
 
-    if args.parallel:
+    if args.workers > 1:
         logger.info(
-            f"Running {len(pairs_to_run)} pairs in parallel (workers={args.workers})"
+            f"Running {len(all_pairs)} pairs in parallel (workers={args.workers})"
         )
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=args.workers
         ) as executor:
             futs = {
                 executor.submit(process_pair, pair, args, sc_cache): pair
-                for pair in pairs_to_run
+                for pair in all_pairs
             }
             for fut in concurrent.futures.as_completed(futs):
                 result = fut.result()
                 if result:
                     errors.append(result)
     else:
-        for pair in pairs_to_run:
+        for pair in all_pairs:
             result = process_pair(pair, args, sc_cache)
             if result:
                 errors.append(result)
