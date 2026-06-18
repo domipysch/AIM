@@ -294,6 +294,8 @@ def main(
             losses_after_last_epoch = {}
             status = "error"
             error_msg = ""
+
+            """ todo. comment in again after temp run.
             try:
                 logger.info(
                     f"Starting run {run_id}/{total_runs - 1} -> writing to {run_dir}"
@@ -318,6 +320,7 @@ def main(
                 logger.info(f"Run {run_id} completed in {duration:.2f}s")
             else:
                 logger.error(f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}")
+            """
 
             # ── Per-run analysis & report ─────────────────────────────────
             if exc is None and analysis_ready:
@@ -377,6 +380,7 @@ def main(
                         "Analysis failed for run %s: %s", run_id, _analysis_exc
                     )
 
+            """ todo. comment in again after temp run.
             row = {
                 "id": run_id,
                 "config_path": str(run_config_path),
@@ -394,6 +398,7 @@ def main(
                 writer.writeheader()
             writer.writerow(row)
             summary_file.flush()
+            """
 
             if exc is not None:
                 raise exc

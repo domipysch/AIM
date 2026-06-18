@@ -20,11 +20,6 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Per-pair worker
-# ---------------------------------------------------------------------------
-
-
 def process_pair(
     pair: dict,
     args: argparse.Namespace,
@@ -65,11 +60,6 @@ def process_pair(
         msg = f"[Pair {pair_id:>3}] FAILED: {exc}"
         logger.error(msg)
         return msg
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 
 def main() -> None:

@@ -189,9 +189,11 @@ def main(
 
         pair_output = output_dir / f"pair_{pair_id}"
 
+        """ todo. comment in again after temp run.
         if _pair_is_complete(pair_output, expected_runs):
             logger.info("Pair %d already complete — skipping.", pair_id)
             continue
+        """
 
         config_path = config_dir / f"pair_{pair_id}.yaml"
         with open(config_path, "w") as f:
