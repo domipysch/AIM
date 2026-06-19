@@ -14,7 +14,7 @@ import csv
 import logging
 from pathlib import Path
 import scanpy as sc
-from src.pre_check import run_pre_check
+from pre_check.pre_check import run_pre_check
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)

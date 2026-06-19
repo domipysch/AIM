@@ -23,4 +23,91 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: mypy src/alternative_idea src/metrics src/data_preparation src/utils
+        run: mypy src data_preparation reference_aligners
+
+  sample-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (alternative_idea_env)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install anndata scanpy pandas scipy matplotlib pyyaml leidenalg igraph typst
+
+      - name: Pre-check – single pair
+        run: |
+          python -m pre_check \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/pre_check/sample
+
+      - name: Pre-check – all pairs
+        run: |
+          python -m batch_processing.run_pre_check_all_pairs \
+            --pairs_csv sample_dataset/pairs.csv \
+            --sc_dir    sample_dataset/scRNA \
+            --st_dir    sample_dataset/ST \
+            --output_dir sample_output/pre_check/sample_batch
+
+      - name: Novel method – single pair
+        run: |
+          python main.py \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/novel/sample \
+            --K 3 \
+            --epochs 5
+
+      - name: Grid search – single pair
+        run: |
+          python -m batch_processing.grid_search.grid_search \
+            -c              batch_processing/grid_search/grid_search_config_ci.yaml \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/grid_search/sample
+
+      - name: Grid search – all pairs
+        run: |
+          python -m batch_processing.grid_search.run_grid_search_all_pairs \
+            -c           batch_processing/grid_search/grid_search_config_ci.yaml \
+            --pairs_csv  sample_dataset/pairs.csv \
+            --sc_dir     sample_dataset/scRNA \
+            --st_dir     sample_dataset/ST \
+            --output_dir sample_output/grid_search/sample_batch \
+            --gpus 0
+
+  sample-reference-aligners:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies (tangram_env)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install anndata scanpy pandas scipy numpy tangram-sc
+
+      - name: Tangram – single pair
+        run: |
+          python -m reference_aligners.run_tangram \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/tangram/sample \
+            --cell_type_key cellType
+
+      - name: Tangram – all pairs
+        run: |
+          python -m batch_processing.run_reference_aligner_all_pairs \
+            --aligner    tangram \
+            --pairs_csv  sample_dataset/pairs.csv \
+            --sc_dir     sample_dataset/scRNA \
+            --st_dir     sample_dataset/ST \
+            --output_dir sample_output/tangram/sample_batch

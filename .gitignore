@@ -1,9 +1,10 @@
 
 # Playground
-src/00_Playground/
+00_Playground/
 **/.DS_Store
 CLAUDE.md
 .claude/
+sample_output/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

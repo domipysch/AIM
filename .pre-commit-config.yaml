@@ -18,4 +18,4 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        args: [src/alternative_idea, src/metrics, src/data_preparation]
+        args: [src, data_preparation, reference_aligners]
