@@ -27,17 +27,21 @@ jobs:
 
   sample-smoke-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: "3.13"
-
-      - name: Install dependencies (alternative_idea_env)
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install anndata scanpy pandas scipy matplotlib pyyaml leidenalg igraph typst
+          activate-environment: alternative_idea_env
+          environment-file: environment.yml
+          auto-activate-base: false
+          miniforge-version: latest
+          cache-environment: true
 
       - name: Pre-check – single pair
         run: |
@@ -83,17 +87,19 @@ jobs:
 
   sample-reference-aligners:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: conda-incubator/setup-miniconda@v3
         with:
-          python-version: "3.13"
-
-      - name: Install dependencies (tangram_env)
-        run: |
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install anndata scanpy pandas scipy numpy tangram-sc
+          activate-environment: tangram_env
+          environment-file: reference_aligners/environment_tangram.yml
+          auto-activate-base: false
+          miniforge-version: latest
+          cache-environment: true
 
       - name: Tangram – single pair
         run: |
