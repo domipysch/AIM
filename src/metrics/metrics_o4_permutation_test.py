@@ -106,7 +106,7 @@ def add_p_value_to_json(json_path):
     print(f"Added p_value={p_value:.6f} to {json_path}")
 
 
-def main(dataset_folder: Path, result_gep: AnnData, metrics_folder_name: Path):
+def main(sc_path: Path, st_path: Path, result_gep: AnnData, metrics_folder_name: Path):
     logger.info("Run permutation test for objective o4")
 
     output_folder = metrics_folder_name / "o4" / "knn"
@@ -114,7 +114,7 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_folder_name: Path):
 
     # S x shared_genes
     adata_z, adata_predicted_z = get_z_real_and_predicted_data_only_shared_genes(
-        dataset_folder, result_gep
+        sc_path, st_path, result_gep
     )
     # Assert that both DataFrames have the same shape of genes and spots
     assert (
@@ -123,9 +123,7 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_folder_name: Path):
     assert adata_z.n_obs == result_gep.n_vars
 
     # KNN
-    graph = create_spatial_graph(
-        dataset_folder, neighborhood_type=NeighborhoodType.KNN, k=4
-    )
+    graph = create_spatial_graph(st_path, neighborhood_type=NeighborhoodType.KNN, k=4)
     graph = add_own_metrics_to_edges(
         adata_z,
         adata_predicted_z,
@@ -158,11 +156,16 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run permutation test on custom metric 4"
     )
-    parser.add_argument("-d", "--dataset", type=Path, help="Path to dataset folder")
+    parser.add_argument(
+        "--scdata", type=Path, required=True, help="Full path to sc.h5ad"
+    )
+    parser.add_argument(
+        "--stdata", type=Path, required=True, help="Full path to st.h5ad"
+    )
     parser.add_argument("-r", "--result", type=Path, help="Path to result file")
     parser.add_argument(
         "-m", "--metrics", type=Path, help="Path to output metric folder"
     )
     args = parser.parse_args()
 
-    main(args.dataset, args.result, args.metrics)
+    main(args.scdata, args.stdata, args.result, args.metrics)

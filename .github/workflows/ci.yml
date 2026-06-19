@@ -23,4 +23,87 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: mypy src/alternative_idea src/metrics src/data_preparation src/utils
+        run: mypy src data_preparation reference_aligners
+
+  sample-smoke-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: alternative_idea_env
+          environment-file: environment.yml
+          auto-activate-base: false
+          miniforge-version: latest
+          cache-environment: true
+
+      - name: Pre-check – single pair
+        run: |
+          python -m pre_check \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/pre_check/sample
+
+      - name: Pre-check – all pairs
+        run: |
+          python -m batch_processing.run_pre_check_all_pairs \
+            --pairs_csv sample_dataset/pairs.csv \
+            --sc_dir    sample_dataset/scRNA \
+            --st_dir    sample_dataset/ST \
+            --output_dir sample_output/pre_check/sample_batch
+
+      - name: Novel method – single pair
+        run: |
+          python main.py \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/novel/sample \
+            --K 3 \
+            --epochs 5
+
+      - name: Grid search – single pair
+        run: |
+          python -m batch_processing.grid_search.grid_search \
+            -c              batch_processing/grid_search/grid_search_config_ci.yaml \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/grid_search/sample
+
+  sample-reference-aligners:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: tangram_env
+          environment-file: reference_aligners/environment_tangram.yml
+          auto-activate-base: false
+          miniforge-version: latest
+          cache-environment: true
+
+      - name: Tangram – single pair
+        run: |
+          python -m reference_aligners.run_tangram \
+            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata        sample_dataset/ST/sample_st.h5ad \
+            --output_folder sample_output/tangram/sample \
+            --cell_type_key cellType
+
+      - name: Tangram – all pairs
+        run: |
+          python -m batch_processing.run_reference_aligner_all_pairs \
+            --aligner    tangram \
+            --pairs_csv  sample_dataset/pairs.csv \
+            --sc_dir     sample_dataset/scRNA \
+            --st_dir     sample_dataset/ST \
+            --output_dir sample_output/tangram/sample_batch

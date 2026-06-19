@@ -2,83 +2,85 @@ from typing import List, Tuple
 from pathlib import Path
 import pandas as pd
 from anndata import AnnData
-from ...utils.io import load_sc_adata, load_st_adata
+import anndata
 
 
-def get_sc_genes(dataset_folder: Path) -> List[str]:
+def get_sc_genes(sc_path: Path) -> List[str]:
     """
-    Get the list of all genes in the scRNA data of a given dataset.
+    Get the list of all genes in the scRNA data.
 
     Args:
-        dataset_folder: Path to the dataset folder containing sc.h5ad.
+        sc_path: Full path to sc.h5ad.
 
     Returns:
         List of gene ID strings in file order.
     """
-    return load_sc_adata(dataset_folder).var_names.tolist()
+    return anndata.read_h5ad(sc_path).var_names.tolist()
 
 
-def get_st_genes(dataset_folder: Path) -> List[str]:
+def get_st_genes(st_path: Path) -> List[str]:
     """
-    Get the list of all genes in the ST data of a given dataset.
+    Get the list of all genes in the ST data.
 
     Args:
-        dataset_folder: Path to the dataset folder containing st.h5ad.
+        st_path: Full path to st.h5ad.
 
     Returns:
         List of gene ID strings in file order.
     """
-    return load_st_adata(dataset_folder).var_names.tolist()
+    return anndata.read_h5ad(st_path).var_names.tolist()
 
 
-def get_shared_genes(dataset_folder: Path) -> List[str]:
+def get_shared_genes(sc_path: Path, st_path: Path) -> List[str]:
     """
-    Get the list of genes shared between scRNA and ST data of a given dataset.
+    Get the list of genes shared between scRNA and ST data.
 
     Args:
-        dataset_folder: Path to the dataset folder.
+        sc_path: Full path to sc.h5ad.
+        st_path: Full path to st.h5ad.
 
     Returns:
         List of gene ID strings present in both scRNA and ST data (order not guaranteed).
     """
-    sc_genes = set(get_sc_genes(dataset_folder))
-    st_genes = set(get_st_genes(dataset_folder))
+    sc_genes = set(get_sc_genes(sc_path))
+    st_genes = set(get_st_genes(st_path))
     shared_genes = list(sc_genes.intersection(st_genes))
     return shared_genes
 
 
-def get_cell_annotations(dataset_folder: Path) -> pd.DataFrame:
+def get_cell_annotations(sc_path: Path) -> pd.DataFrame:
     """
-    Load cell annotations from sc.h5ad of a given dataset.
+    Load cell annotations from sc.h5ad.
 
     Args:
-        dataset_folder: Path to the dataset folder containing sc.h5ad.
+        sc_path: Full path to sc.h5ad.
 
     Returns:
         DataFrame of cell annotations with cell IDs as index.
     """
-    return load_sc_adata(dataset_folder).obs
+    return anndata.read_h5ad(sc_path).obs
 
 
 def get_z_real_and_predicted_data_only_shared_genes(
-    dataset_folder: Path, result_gep: AnnData
+    sc_path: Path, st_path: Path, result_gep: AnnData
 ) -> Tuple[AnnData, AnnData]:
     """
     Load input ST data and predicted Z', filtered to shared marker genes only.
 
     Args:
-        dataset_folder: Path to the dataset folder containing st.h5ad.
+        sc_path: Full path to sc.h5ad.
+        st_path: Full path to st.h5ad.
         result_gep: Predicted gene expression as AnnData (G x S).
 
     Returns:
         Tuple (st_shared, result_shared): both AnnData objects of shape (S x shared_G),
         aligned to the same set of shared genes in the same order.
     """
-    st_ad = load_st_adata(dataset_folder)
+    st_ad = anndata.read_h5ad(st_path)
     result_gep = result_gep.transpose()
 
     # Filter to shared marker genes, preserving the order from st_ad
-    marker_genes = set(get_shared_genes(dataset_folder))
+    marker_genes = set(get_shared_genes(sc_path, st_path))
     common_genes = [
         g for g in st_ad.var_names if g in marker_genes and g in result_gep.var_names
     ]

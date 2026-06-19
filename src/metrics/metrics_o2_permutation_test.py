@@ -223,7 +223,7 @@ def add_p_value_to_json(json_path):
     logging.info(f"Added p_value={p_value:.6f} to {json_path}")
 
 
-def main(dataset_folder: Path, result_gep: AnnData, metrics_folder_name: Path):
+def main(sc_path: Path, st_path: Path, result_gep: AnnData, metrics_folder_name: Path):
     logger.info("Run permutation test for objective o2")
 
     result_folder_permutation = metrics_folder_name / "o2" / "permutation_test"
@@ -231,7 +231,7 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_folder_name: Path):
 
     # Load data (S x shared G)
     adata_z, adata_predicted_z = get_z_real_and_predicted_data_only_shared_genes(
-        dataset_folder, result_gep
+        sc_path, st_path, result_gep
     )
 
     # Assert that both DataFrames have the same shape of genes and spots

@@ -2,6 +2,8 @@ import enum
 from typing import Any
 import os
 from pathlib import Path
+
+import anndata
 import pandas as pd
 import networkx as nx
 import numpy as np
@@ -9,7 +11,6 @@ from anndata import AnnData
 from scipy.spatial import cKDTree, Delaunay
 from scipy.spatial.distance import cdist
 from .utils.dataset_query import get_z_real_and_predicted_data_only_shared_genes
-from ..utils.io import load_st_adata
 import warnings
 from .utils.distance_metrics import (
     cosine_similarity,
@@ -44,13 +45,13 @@ class NeighborhoodType(enum.Enum):
 
 
 def create_spatial_graph(
-    dataset_folder: Path,
+    st_path: Path,
     neighborhood_type: NeighborhoodType = NeighborhoodType.KNN,
     k: int = 4,
     radius: float | None = None,
 ) -> nx.Graph:
     """
-    Read stData_Spots.csv and build a networkx.Graph with one node per spot (node attribute 'pos').
+    Read st.h5ad and build a networkx.Graph with one node per spot (node attribute 'pos').
 
     Additional parameters:
     - neighborhood_type: NeighborhoodType (KNN, DELAUNEY, RADIUS, ...)
@@ -60,7 +61,7 @@ def create_spatial_graph(
     Edges get an attribute 'weight' with the euclidean distance.
     """
 
-    adata_st = load_st_adata(dataset_folder)
+    adata_st = anndata.read_h5ad(st_path)
 
     # Get spot ids
     spot_ids = adata_st.obs_names.astype(str).tolist()
@@ -198,18 +199,15 @@ def create_spatial_graph(
 
 
 # In Tangram Refined: L_
-def binary_adjacency_matrix_from_graph(
-    dataset_folder: Path, G: nx.Graph
-) -> pd.DataFrame:
+def binary_adjacency_matrix_from_graph(st_path: Path, G: nx.Graph) -> pd.DataFrame:
     """
     Create a binary (0/1) adjacency matrix as a pandas.DataFrame from the given networkx Graph G.
-    The row/column order matches exactly the order of spots in stData_Spots.csv
-    (the CSV index is used as spot IDs).
+    The row/column order matches exactly the order of spots in st.h5ad.
 
     Returns:
     - A: pandas.DataFrame, shape (n_spots, n_spots), values 0/1, Index/Columns = spot_ids
     """
-    adata_st = load_st_adata(dataset_folder)
+    adata_st = anndata.read_h5ad(st_path)
     spot_ids = adata_st.obs_names.astype(str).tolist()
     n = len(spot_ids)
     idx_map = {sid: i for i, sid in enumerate(spot_ids)}
@@ -240,20 +238,20 @@ def binary_adjacency_matrix_from_graph(
 
 # In Tangram Refined: L
 def locality_matrix(
-    dataset_folder: Path,
+    st_path: Path,
     method: str = "rbf",  # "rbf", "linear", "inverse"
     sigma: float | None = None,  # used for 'rbf'; if None inferred from data
     dtype=np.float32,
 ) -> pd.DataFrame:
     """
     Create a symmetric neighborhood/similarity matrix as a pandas.DataFrame
-    (n x n, values in [0,1]) for the spots in stData_Spots.csv. The row/column
-    ordering matches exactly the order of spots (CSV index).
+    (n x n, values in [0,1]) for the spots in st.h5ad. The row/column
+    ordering matches exactly the order of spots.
 
     Returns: pandas.DataFrame with Index/Columns = spot_ids (as strings) and dtype dtype.
     """
 
-    adata_st = load_st_adata(dataset_folder)
+    adata_st = anndata.read_h5ad(st_path)
     spot_ids = adata_st.obs_names.astype(str).tolist()
     n = len(spot_ids)
 
@@ -550,7 +548,12 @@ def add_own_metrics_to_edges(
     # helper to get dense 1D numpy array for a given spot id (obs_name)
     def _get_spot_vector(adata: AnnData, spot_id: str) -> np.ndarray:
         row_idx = int(np.where(np.asarray(adata.obs_names) == spot_id)[0][0])
-        return np.asarray(adata.X[row_idx]).ravel().astype(float)
+        row = adata.X[row_idx]
+        return (
+            (row.toarray() if hasattr(row, "toarray") else np.asarray(row))
+            .ravel()
+            .astype(float)
+        )
 
     # metrics to compute (name, function)
     metrics = [
@@ -810,7 +813,9 @@ def plot_edge_cossim_spatial(
     plt.close(fig)
 
 
-def main(dataset_folder: Path, result_gep: AnnData, metrics_output_folder: Path):
+def main(
+    sc_path: Path, st_path: Path, result_gep: AnnData, metrics_output_folder: Path
+):
     """
     Compute metrics for objective 4 and save results as JSON files / diagrams.
 
@@ -819,7 +824,8 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_output_folder: Path)
     - Compute own locality-based metrics on graph edges
 
     Args:
-        dataset_folder: Path to dataset folder
+        sc_path: Full path to sc.h5ad.
+        st_path: Full path to st.h5ad.
         result_gep: G x S
         metrics_output_folder:
 
@@ -839,7 +845,7 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_output_folder: Path)
 
     # S x shared G
     adata_z, adata_predicted_z = get_z_real_and_predicted_data_only_shared_genes(
-        dataset_folder, result_gep
+        sc_path, st_path, result_gep
     )
     # Assert that both DataFrames have the same shape of genes and spots
     assert (
@@ -848,9 +854,7 @@ def main(dataset_folder: Path, result_gep: AnnData, metrics_output_folder: Path)
     assert adata_z.n_obs == result_gep.n_vars
 
     # KNN
-    graph = create_spatial_graph(
-        dataset_folder, neighborhood_type=NeighborhoodType.KNN, k=4
-    )
+    graph = create_spatial_graph(st_path, neighborhood_type=NeighborhoodType.KNN, k=4)
     graph = add_own_metrics_to_edges(
         adata_z,
         adata_predicted_z,

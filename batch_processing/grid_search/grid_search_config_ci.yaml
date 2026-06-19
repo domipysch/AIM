@@ -1,0 +1,17 @@
+model:
+  K:
+    - 3
+training:
+  lr:
+    - 0.008
+  epochs:
+    - 5
+  normalize_and_log:
+    - false
+  reference_leiden_clustering_resolution: 3.0
+loss_weights:
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
+    lambda_state_entropy: 0.1
+    lambda_spot_entropy: 0.08
+    lambda_soft_contingency: 1

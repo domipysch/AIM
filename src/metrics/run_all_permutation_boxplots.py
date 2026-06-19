@@ -81,13 +81,13 @@ def main(metrics_paths, labels, output_folder):
     )
 
     # Create shared boxplot for permutation test o4
-    combined_boxplot(
-        [path / "o4" / "knn" / "permutation_test.json" for path in metrics_paths],
-        labels,
-        "T = Sum of custom locality metric",
-        "o4 permutation test across runs",
-        output_folder / "o4_permutation.pdf",
-    )
+    # combined_boxplot(
+    #     [path / "o4" / "knn" / "permutation_test.json" for path in metrics_paths],
+    #     labels,
+    #     "T = Sum of custom locality metric",
+    #     "o4 permutation test across runs",
+    #     output_folder / "o4_permutation.pdf",
+    # )
 
 
 if __name__ == "__main__":

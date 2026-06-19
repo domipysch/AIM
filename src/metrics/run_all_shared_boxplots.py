@@ -9,6 +9,17 @@ import argparse
 logger = logging.getLogger(__name__)
 
 
+def _extract_values(data) -> list:
+    """Extract flat list of float values from both old (flat dict) and new (structured) cossim.json formats."""
+    if isinstance(data, dict) and "values" in data:
+        data = data["values"]
+    if isinstance(data, dict):
+        return list(data.values())
+    if isinstance(data, list):
+        return data
+    return []
+
+
 def compute_medians(paths_to_jsons: list[Path], labels: list[str]) -> dict:
     """
     Compute the median of numeric values contained in each JSON file.
@@ -18,15 +29,7 @@ def compute_medians(paths_to_jsons: list[Path], labels: list[str]) -> dict:
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # Support dict (key->value) or list
-            if isinstance(data, dict):
-                raw_values = list(data.values())
-            elif isinstance(data, list):
-                raw_values = data
-            else:
-                medians[label] = None
-                continue
-
+            raw_values = _extract_values(data)
             nums = []
             for v in raw_values:
                 if v is None:
@@ -62,8 +65,7 @@ def create_shared_boxplot(
     for path in paths_to_jsons:
         with open(path, "r") as f:
             data = json.load(f)
-            values = list(data.values())
-            all_data.append(values)
+            all_data.append(_extract_values(data))
 
     # --- Modified/additional lines: increase font sizes ---
     # Increase global default font size
@@ -96,7 +98,7 @@ def main(metrics_paths: list[Path], labels: list[str], output_folder: Path):
 
     # Create shared boxplot for o2, genewise
     create_shared_boxplot(
-        [path / "o2" / "boxplots_per_gene" / "cossim.json" for path in metrics_paths],
+        [path / "cossim-per-gene.json" for path in metrics_paths],
         labels,
         "Metric for objective O2",
         "Genewise cosine similarity",
@@ -105,7 +107,7 @@ def main(metrics_paths: list[Path], labels: list[str], output_folder: Path):
 
     # Create shared boxplot for o2, spotwise
     create_shared_boxplot(
-        [path / "o2" / "boxplots_per_spot" / "cossim.json" for path in metrics_paths],
+        [path / "cossim-per-spot.json" for path in metrics_paths],
         labels,
         "Metric for objective O2",
         "Spotwise cosine similarity",
@@ -113,13 +115,13 @@ def main(metrics_paths: list[Path], labels: list[str], output_folder: Path):
     )
 
     # Create shared boxplot for o4
-    create_shared_boxplot(
-        [path / "o4" / "knn" / "cossim.json" for path in metrics_paths],
-        labels,
-        "Metric for objective O4",
-        "Custom locality metric",
-        output_path=output_folder / "o4_overall.pdf",
-    )
+    # create_shared_boxplot(
+    #     [path / "o4" / "knn" / "cossim.json" for path in metrics_paths],
+    #     labels,
+    #     "Metric for objective O4",
+    #     "Custom locality metric",
+    #     output_path=output_folder / "o4_overall.pdf",
+    # )
 
 
 if __name__ == "__main__":
