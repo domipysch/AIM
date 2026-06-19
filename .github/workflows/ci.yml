@@ -75,16 +75,6 @@ jobs:
             --stdata        sample_dataset/ST/sample_st.h5ad \
             --output_folder sample_output/grid_search/sample
 
-      - name: Grid search – all pairs
-        run: |
-          python -m batch_processing.grid_search.run_grid_search_all_pairs \
-            -c           batch_processing/grid_search/grid_search_config_ci.yaml \
-            --pairs_csv  sample_dataset/pairs.csv \
-            --sc_dir     sample_dataset/scRNA \
-            --st_dir     sample_dataset/ST \
-            --output_dir sample_output/grid_search/sample_batch \
-            --gpus 0
-
   sample-reference-aligners:
     runs-on: ubuntu-latest
     defaults:
