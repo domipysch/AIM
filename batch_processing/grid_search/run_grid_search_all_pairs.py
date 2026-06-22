@@ -44,18 +44,6 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
-def _pair_is_complete(pair_output: Path, expected_runs: int) -> bool:
-    """Return True if summary.csv exists with exactly expected_runs ok rows."""
-    summary_path = pair_output / "summary.csv"
-    if not summary_path.exists():
-        return False
-    try:
-        df = pd.read_csv(summary_path)
-        return len(df) == expected_runs and (df["status"] == "ok").all()
-    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError, KeyError):
-        return False
-
-
 def _load_template(config_path: Path) -> dict:
     with open(config_path) as f:
         cfg = yaml.safe_load(f) or {}
@@ -158,12 +146,6 @@ def main(
             continue
 
         pair_output = output_dir / f"pair_{pair_id}"
-
-        """ todo. comment in again after temp run.
-        if _pair_is_complete(pair_output, expected_runs):
-            logger.info("Pair %d already complete — skipping.", pair_id)
-            continue
-        """
 
         config_path = config_dir / f"pair_{pair_id}.yaml"
         with open(config_path, "w") as f:
