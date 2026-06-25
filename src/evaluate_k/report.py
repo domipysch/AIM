@@ -137,11 +137,15 @@ _GREEN = 'rgb("#d4f5d4")'
 _RED = 'rgb("#f5d4d4")'
 
 
-def _substate_metrics_table(csv_path: Path) -> str:
+def _substate_metrics_table(csv_path: Path, threshold: float = 0.01) -> str:
     """
     Typst table for substate_metrics.csv with conditional cell colouring:
       - perm_p  : green < 0.33, red >= 0.33
-      - var_act / var_null : green when var_act < var_null, red otherwise (both cells)
+
+    Only states whose cell-fraction OR spot-fraction exceeds `threshold` are
+    shown, so the displayed states match the other report plots (small cell
+    states that are mapped to many spots are kept).  Fractions are derived from
+    the table's own ``cells`` / ``spots`` columns.
     """
     with open(csv_path, newline="", encoding="utf-8") as fh:
         rows = list(csv.reader(fh))
@@ -166,19 +170,34 @@ def _substate_metrics_table(csv_path: Path) -> str:
 
     cells_col = header.index("cells") if "cells" in header else -1
     spots_col = header.index("spots") if "spots" in header else -1
-    n_ls_col = header.index("n_LS") if "n_LS" in header else -1
+
+    def _col_total(col: int) -> float:
+        if col < 0:
+            return 0.0
+        tot = 0.0
+        for r in rows[1:]:
+            try:
+                tot += float(r[col])
+            except (ValueError, IndexError):
+                pass
+        return tot
+
+    total_cells = _col_total(cells_col)
+    total_spots = _col_total(spots_col)
 
     def _keep(row: list[str]) -> bool:
+        """Keep states with cell- OR spot-fraction above the display threshold."""
+        if cells_col < 0 and spots_col < 0:
+            return True
+        cell_frac = spot_frac = 0.0
         try:
-            if cells_col >= 0 and int(float(row[cells_col])) <= 0:
-                return False
-            if spots_col >= 0 and int(float(row[spots_col])) <= 0:
-                return False
-            if n_ls_col >= 0 and int(float(row[n_ls_col])) <= 1:
-                return False
+            if cells_col >= 0 and total_cells > 0:
+                cell_frac = float(row[cells_col]) / total_cells
+            if spots_col >= 0 and total_spots > 0:
+                spot_frac = float(row[spots_col]) / total_spots
         except (ValueError, IndexError):
-            pass
-        return True
+            return True
+        return cell_frac > threshold or spot_frac > threshold
 
     # Data rows
     for row in rows[1:]:
@@ -286,13 +305,22 @@ def generate_per_k_report(
 
     _frac_note = (
         "#text(size: 8pt, fill: luma(140))"
-        "[_Only states with cell-fraction > 1.0 % and spot-fraction > 1.0 % are shown._]\n"
+        "[_Only states with cell-fraction > 1.0 % or spot-fraction > 1.0 % are shown._]\n"
     )
 
     # 1. UMAP comparison
     parts.append(
         _section_img(plots_dir / "umap_comparison.png", "UMAP Comparison", base)
     )
+
+    # 1b. Computed states on the all-gene vs shared-gene embedding
+    sec = _section_img(
+        plots_dir / "umap_allgenes_vs_shared.png",
+        "Computed States — All-gene vs Shared-gene UMAP",
+        base,
+    )
+    if sec:
+        parts.append(sec + _frac_note)
 
     # 2. Cell- and Spot-State Fractions (moved here, below UMAPs)
     sec = _section_img(
@@ -301,14 +329,21 @@ def generate_per_k_report(
     if sec:
         parts.append(sec + _frac_note)
 
-    # 3. Spatial cell-state plot
-    parts.append(
-        _section_img(
-            plots_dir / "spatial_cell_states.png",
-            "Spatial Distribution of Cell States",
-            base,
+    # 3. Spatial cell-state plot, with the computed-state UMAP beside it
+    spatial_png = plots_dir / "spatial_cell_states.png"
+    umap_cs_png = plots_dir / "umap_computed_state.png"
+    if spatial_png.exists() and umap_cs_png.exists():
+        parts.append(
+            "\n= Spatial Distribution of Cell States\n\n"
+            "#grid(columns: 2, column-gutter: 8pt, align: horizon,\n"
+            f"  [{_img(umap_cs_png, base)}],\n"
+            f"  [{_img(spatial_png, base)}],\n"
+            ")\n" + _frac_note
         )
-    )
+    else:
+        sec = _section_img(spatial_png, "Spatial Distribution of Cell States", base)
+        if sec:
+            parts.append(sec + _frac_note)
 
     # 4. Cell-state profiles
     sec = _section_img(
@@ -317,12 +352,14 @@ def generate_per_k_report(
     if sec:
         parts.append(sec + _frac_note)
 
-    # Contingency heatmap
-    parts.append(
-        _section_img(plots_dir / "contingency_heatmap.png", "Contingency Heatmap", base)
+    # 5. Contingency heatmap
+    sec = _section_img(
+        plots_dir / "contingency_heatmap.png", "Contingency Heatmap", base
     )
+    if sec:
+        parts.append(sec + _frac_note)
 
-    # Per-state sub-cluster analysis
+    # 6. Per-state sub-cluster analysis
     substate_csv = data_dir / "substate_metrics.csv"
     if substate_csv.exists():
         parts.append(f"""
@@ -331,7 +368,7 @@ def generate_per_k_report(
 #set text(size: 7pt)
 {_substate_metrics_table(substate_csv)}
 #set text(size: 11pt)
-""")
+{_frac_note}""")
 
     # Optional ground-truth crosstab
     parts.append(
@@ -346,16 +383,17 @@ def generate_per_k_report(
 
 # ─── Summary report ───────────────────────────────────────────────────────────
 
-_SUMMARY_INT_ROWS = {"K", "Computed states", "Computed states > 1%", "Mapped states"}
-_SUMMARY_EXCLUDE_ROWS = {
-    "modularity_spatial_hvg__computed",
-    "centroid_cosim__computed",
-    "silhouette__computed",
-    "dunn_index__computed",
+_SUMMARY_INT_ROWS = {
+    "K",
+    "Computed states",
+    "Computed states > 1%",
+    "Mapped states",
+    "Mapped states > 1%",
 }
 _SUMMARY_ROW_LABELS = {
     "per_state_perm_p": "Substate p-value",
     "modularity__computed": "Modularity",
+    "modularity_shared__computed": "Modularity (shared genes)",
     "contingency_score": "Contingency",
     "median_cossim_gene": "Cossim (genewise)",
     "median_cossim_spot": "Cossim (spotwise)",
@@ -367,7 +405,6 @@ def _overview_table(overview_csv: Path) -> str:
     """
     Typst table for analysis_overview.csv with:
       - Integer rows (K, Computed States, …) printed without decimals
-      - modularity_spatial_hvg__computed and centroid_cosim__computed rows omitted
       - All metric rows: maximum value per row printed bold
     """
     with open(overview_csv, newline="", encoding="utf-8") as fh:
@@ -377,7 +414,7 @@ def _overview_table(overview_csv: Path) -> str:
 
     header = rows[0]
     n = len(header)
-    data_rows = [r for r in rows[1:] if r and r[0] not in _SUMMARY_EXCLUDE_ROWS]
+    data_rows = [r for r in rows[1:] if r]
 
     lines = [
         "#table(",
