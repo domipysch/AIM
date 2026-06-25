@@ -39,6 +39,24 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+
+def _ensure_paths() -> None:
+    """Put the repo root and ``src/`` on sys.path so the package modules
+    (``utils``, ``evaluate_k``, ``metrics``, ``main``) resolve.
+
+    Needed because ``multiprocessing`` spawn re-imports modules in fresh
+    worker processes that don't necessarily inherit ``src/`` on the path
+    (otherwise: "No module named 'utils'").
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    for p in (repo_root, repo_root / "src"):
+        sp = str(p)
+        if sp not in sys.path:
+            sys.path.insert(0, sp)
+
+
+_ensure_paths()
+
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -52,6 +70,7 @@ def _run_pair_analyses_worker(
     pair_output: Path,
 ) -> list[str]:
     tag = f"[Pair {pair_id:>3}]"
+    _ensure_paths()  # spawned worker: re-add src/ before importing the package
     # Analyses are CPU-only — hide CUDA so importing torch never grabs a GPU.
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
     from batch_processing.grid_search.grid_search import run_analyses_only
