@@ -37,7 +37,7 @@ jobs:
 
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          activate-environment: alternative_idea_env
+          activate-environment: aim_env
           environment-file: environment.yml
           auto-activate-base: false
           miniforge-version: latest

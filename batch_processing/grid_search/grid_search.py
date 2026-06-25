@@ -13,7 +13,7 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 import yaml
-import main as alternative_idea_main
+import main as aim_main
 from evaluate_k.analysis import run_analysis
 from evaluate_k.clustering import run_leiden_shared_genes
 from evaluate_k.report import (
@@ -65,7 +65,7 @@ def run_config(
 
     # Run alignment (G x S)
     predicted_gep, predicted_gep_det, cell_to_celltype, losses_after_last_epoch = (
-        alternative_idea_main.main(
+        aim_main.main(
             sc_path,
             st_path,
             output_folder=output_folder,
@@ -423,7 +423,7 @@ if __name__ == "__main__":
 
     # 1. Parse Arguments
     parser = argparse.ArgumentParser(
-        description="Run AlternativeIdea alignment. Hyperparameters come from the experiment YAML; data paths are passed as arguments."
+        description="Run AIM alignment. Hyperparameters come from the experiment YAML; data paths are passed as arguments."
     )
     parser.add_argument(
         "--scdata",

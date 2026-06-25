@@ -25,7 +25,7 @@ def compute_state_centroids(B: Tensor, Y: Tensor, eps: float = 1e-8) -> Tensor:
     return B_norm.T @ Y  # (K x d)
 
 
-class AlternativeIdeaLoss(nn.Module):
+class AIMLoss(nn.Module):
     """
     Multi-term loss for the alignment model.
 
@@ -75,7 +75,7 @@ class AlternativeIdeaLoss(nn.Module):
             # Y_scale:                Mean per-dimension variance of the cell embedding Y,
             #                         used to normalize the clust_intra term.
         """
-        super(AlternativeIdeaLoss, self).__init__()
+        super(AIMLoss, self).__init__()
         self.lambda_rec_spot = lambda_rec_spot
         self.lambda_rec_gene = lambda_rec_gene
         self.lambda_state_entropy = lambda_state_entropy
@@ -89,7 +89,7 @@ class AlternativeIdeaLoss(nn.Module):
         self.leiden_labels = leiden_labels  # integer (C,) or None
         self.leiden_n_clusters = leiden_n_clusters  # scalar int
         # self.Y_scale = max(Y_scale, 1e-8)
-        logger.debug("AlternativeIdeaLoss initialized")
+        logger.debug("AIMLoss initialized")
 
     def get_rec_spot_loss(
         self, A: Tensor, B: Tensor, X_shared: Tensor, Z_shared: Tensor

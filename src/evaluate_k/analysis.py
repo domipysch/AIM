@@ -1,5 +1,5 @@
 """
-Post-mapping analysis for AlternativeIdea.
+Post-mapping analysis for AIM.
 
 Standalone entry point; call run_analysis() after mapping:
 

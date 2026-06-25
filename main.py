@@ -19,8 +19,8 @@ from utils import (
     estimate_gpu_memory_gb,
     arr_to_h5ad,
 )
-from model import AlternativeIdeaModel
-from loss import AlternativeIdeaLoss
+from model import AIMModel
+from loss import AIMLoss
 from dataset import prepare_tensors_from_input
 from evaluate_k.clustering import run_leiden_clustering
 from evaluate_k.analysis import run_analysis
@@ -31,7 +31,7 @@ from evaluate_k.report import generate_per_k_report
 logger = logging.getLogger(__name__)
 
 
-def alternative_idea_compute_mapping(
+def aim_compute_mapping(
     adata_sc: AnnData,
     adata_st: AnnData,
     output_folder: Path,
@@ -141,14 +141,14 @@ def alternative_idea_compute_mapping(
         )
         sys.exit(1)
 
-    model = AlternativeIdeaModel(
+    model = AIMModel(
         num_spots_st=num_spots,
         num_cells_sc=num_cells,
         k=K,
     ).to(device)
 
     # Initialize Loss and Optimizer
-    loss = AlternativeIdeaLoss(
+    loss = AIMLoss(
         lambda_rec_spot=lambda_rec_spot,
         lambda_rec_gene=lambda_rec_gene,
         # lambda_clust_intra=lambda_clust_intra,
@@ -518,8 +518,8 @@ def main(
     adata_st = anndata.read_h5ad(st_path)  # S x G
     logger.info("Loaded input scRNA and ST data.")
 
-    # Step 2: Map data using AlternativeIdea
-    spot_to_cell_map, cell_to_cell_type, losses = alternative_idea_compute_mapping(
+    # Step 2: Map data using AIM
+    spot_to_cell_map, cell_to_cell_type, losses = aim_compute_mapping(
         adata_sc=adata_sc.copy(),
         adata_st=adata_st.copy(),
         output_folder=output_folder,
@@ -640,7 +640,7 @@ def main(
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(
-        description="Run AlternativeIdea alignment on a dataset folder"
+        description="Run AIM alignment on a dataset folder"
     )
     parser.add_argument(
         "--scdata", type=Path, required=True, help="Full path to sc.h5ad"

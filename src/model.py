@@ -6,7 +6,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class AlternativeIdeaModel(nn.Module):
+class AIMModel(nn.Module):
     """
     Alignment model with two learnable mapping matrices.
 
@@ -29,7 +29,7 @@ class AlternativeIdeaModel(nn.Module):
             num_cells_sc: Number of scRNA cells (C).
             k: Upper bound on the number of cell states (K).
         """
-        super(AlternativeIdeaModel, self).__init__()
+        super(AIMModel, self).__init__()
         self.num_cells_sc = num_cells_sc
 
         # U: Spot to cell mapping (S x C)

@@ -4,11 +4,11 @@ Pre-alignment compatibility check for SC / ST dataset pairs.
 Usage
 -----
 Programmatic:
-    from src.alternative_idea.src.pre_check import run_pre_check
+    from pre_check.pre_check import run_pre_check
     results = run_pre_check(sc_adata, st_adata, output_dir=Path("pre_check_out"))
 
 CLI:
-    python -m src.alternative_idea.src.pre_check \
+    python -m pre_check \
         --scdata sc.h5ad --stdata st.h5ad --output_dir out/pre_check
 
 The function runs three steps in order:
