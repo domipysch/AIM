@@ -8,7 +8,7 @@ Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) 
 main.py                          # Novel method — single-pair entry point
 environment.yml                  # Conda env for the novel method
 src/
-├── model.py                     # AlternativeIdeaModel (learnable A, B matrices)
+├── model.py                     # AIMModel (learnable A, B matrices)
 ├── loss.py                      # Multi-term loss (rec_spot, rec_gene, entropy, …)
 ├── dataset.py                   # h5ad → tensor preparation
 ├── spatial_graph.py             # KNN / Delaunay / Radius graph builders
@@ -77,7 +77,7 @@ Each method requires its own conda environment.
 
 | Method | Environment | Create |
 |--------|-------------|--------|
-| Novel method | `alternative_idea_env` | `conda env create -f environment.yml` |
+| Novel method | `aim_env` | `conda env create -f environment.yml` |
 | Tangram | `tangram_env` | `conda env create -f reference_aligners/environment_tangram.yml` |
 | TACCO | `tacco_env` | `conda env create -f reference_aligners/environment_tacco.yml` |
 | DOT | `dot_env` | `conda env create -f reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
@@ -95,7 +95,7 @@ Computes statistics as cell, spot and gene counts, cell/spot library sizes, etc.
 Writes a full PDF report (generated with `typst`) about your dataset pair to the output folder.
 
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m pre_check \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
@@ -105,7 +105,7 @@ python -m pre_check \
 
 **Example with sample dataset:**
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m pre_check \
     --scdata        sample_dataset/scRNA/sample_sc.h5ad \
     --stdata        sample_dataset/ST/sample_st.h5ad \
@@ -119,7 +119,7 @@ python -m pre_check \
 Runs the pre-check for every row in `pairs.csv` in parallel.
 
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.run_pre_check_all_pairs \
     --pairs_csv <path/to/pairs.csv> \
     --sc_dir    <path/to/scRNA> \
@@ -131,7 +131,7 @@ python -m batch_processing.run_pre_check_all_pairs \
 
 **Example with sample dataset:**
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.run_pre_check_all_pairs \
     --pairs_csv sample_dataset/pairs.csv \
     --sc_dir    sample_dataset/scRNA \
@@ -216,7 +216,7 @@ python -m batch_processing.run_reference_aligner_all_pairs \
 ### 5. Run the novel method (single pair)
 
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
@@ -245,7 +245,7 @@ Writes to `output_folder/`:
 
 **Example with sample dataset:**
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python main.py \
     --scdata        sample_dataset/scRNA/sample_sc.h5ad \
     --stdata        sample_dataset/ST/sample_st.h5ad \
@@ -264,7 +264,7 @@ Hyperparameters are defined in a YAML config. List values create grid axes;
 all combinations are executed sequentially.
 
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.grid_search.grid_search \
     -c              batch_processing/grid_search/grid_search_config.yaml \
     --scdata        <path/to/sc.h5ad> \
@@ -278,7 +278,7 @@ Results are written to numbered subdirectories (`0/`, `1/`, …) with a `summary
 
 **Example with sample dataset:**
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.grid_search.grid_search \
     -c              batch_processing/grid_search/grid_search_config.yaml \
     --scdata        sample_dataset/scRNA/sample_sc.h5ad \
@@ -313,7 +313,7 @@ loss_weights:
 Runs the full grid search for every pair in `pairs.csv`. One pair runs per GPU in parallel.
 
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.grid_search.run_grid_search_all_pairs \
     -c              batch_processing/grid_search/grid_search_config.yaml \
     --pairs_csv     <path/to/pairs.csv> \
@@ -339,7 +339,7 @@ Output layout:
 
 **Example with sample dataset:**
 ```bash
-conda activate alternative_idea_env
+conda activate aim_env
 python -m batch_processing.grid_search.run_grid_search_all_pairs \
     -c           batch_processing/grid_search/grid_search_config.yaml \
     --pairs_csv  sample_dataset/pairs.csv \

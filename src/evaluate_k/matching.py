@@ -79,27 +79,61 @@ def plot_contingency_heatmap(
     match_results: dict,
     output_path: Path,
     spot_fractions: dict[int, float] | None = None,
+    cell_fractions: dict[int, float] | None = None,
 ) -> None:
     """
     Heatmap of the contingency matrix (counts, log-scaled colour), with the
     argmax assignment for each fine-side cluster marked by a star.
+
+    When `cell_fractions`/`spot_fractions` are supplied, only computed states
+    with cell- OR spot-fraction above the display threshold are shown as rows
+    (consistent with the other report plots); the score in the title is still
+    the global value over all states.
     """
+    from .plots import select_displayed_states
+
     ct = match_results["contingency_matrix"]
     score = match_results["score"]
     K, L = ct.shape
     unique_computed = match_results.get("unique_computed", list(range(K)))
     unique_leiden = match_results.get("unique_leiden", list(range(L)))
 
-    if match_results["best_computed_per_leiden"] is not None:
-        marker_rows = match_results["best_computed_per_leiden"]  # (L,)
-        marker_cols = np.arange(L)
-    else:
-        marker_rows = np.arange(K)
-        marker_cols = match_results["best_leiden_per_computed"]  # (K,)
-
+    # Per-computed-state fractions over the *global* total (before any row drop)
     total = ct.sum()
     cell_fracs_computed = ct.sum(axis=1) / total if total > 0 else np.zeros(K)
     cell_fracs_leiden = ct.sum(axis=0) / total if total > 0 else np.zeros(L)
+
+    if match_results["best_computed_per_leiden"] is not None:
+        marker_rows = np.asarray(match_results["best_computed_per_leiden"])  # (L,)
+        marker_cols = np.arange(L)
+    else:
+        marker_rows = np.arange(K)
+        marker_cols = np.asarray(match_results["best_leiden_per_computed"])  # (K,)
+
+    # ── Restrict displayed rows to the OR-active set of computed states ───────
+    keep = list(range(K))
+    if cell_fractions is not None or spot_fractions is not None:
+        active = set(
+            select_displayed_states(unique_computed, cell_fractions, spot_fractions)
+        )
+        keep = [i for i, s in enumerate(unique_computed) if s in active] or list(
+            range(K)
+        )
+
+    if len(keep) != K:
+        pos_map = {orig: new for new, orig in enumerate(keep)}
+        ct = ct[keep, :]
+        unique_computed = [unique_computed[i] for i in keep]
+        cell_fracs_computed = cell_fracs_computed[keep]
+        # Remap argmax markers to the surviving rows; drop markers on hidden rows
+        new_rows, new_cols = [], []
+        for r, c in zip(marker_rows.tolist(), marker_cols.tolist()):
+            if r in pos_map:
+                new_rows.append(pos_map[r])
+                new_cols.append(c)
+        marker_rows = np.asarray(new_rows, dtype=int)
+        marker_cols = np.asarray(new_cols, dtype=int)
+        K = len(keep)
 
     fig, ax = plt.subplots(figsize=(max(6, L * 0.6 + 1), max(4, K * 0.6 + 1)))
 

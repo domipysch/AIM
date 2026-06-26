@@ -1,7 +1,7 @@
 """Batch runner: runs pre_check for every pair in pairs.csv.
 
-Run from the repository root with the alternative_idea_env active:
-    conda activate alternative_idea_env
+Run from the repository root with the aim_env active:
+    conda activate aim_env
     python run_pre_check_all_pairs.py [options]
 
 scRNA AnnData objects are cached in memory — each dataset is loaded only once

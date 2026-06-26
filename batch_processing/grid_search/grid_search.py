@@ -13,7 +13,7 @@ import anndata as ad
 import pandas as pd
 import scanpy as sc
 import yaml
-import main as alternative_idea_main
+import main as aim_main
 from evaluate_k.analysis import run_analysis
 from evaluate_k.clustering import run_leiden_shared_genes
 from evaluate_k.report import (
@@ -45,6 +45,108 @@ def _read_median_cossim(run_dir: Path) -> tuple[float | None, float | None]:
     return gene_median, spot_median
 
 
+def _precompute_analysis_artifacts(
+    sc_path: Path, st_path: Path, leiden_resolution: float
+):
+    """Pre-compute the per-dataset analysis artifacts shared across all K runs.
+
+    Returns (adata_sc, adata_st, adata_processed_base, leiden_labels_precomp,
+    leiden_shared_labels_precomp, shared_genes).
+    """
+    logger.info("Pre-computing analysis artifacts (PCA, UMAP, Leiden)…")
+    adata_sc = ad.read_h5ad(sc_path)
+    adata_st = ad.read_h5ad(st_path)
+    shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
+
+    adata_processed_base = adata_sc.copy()
+    run_pca_neighbors_umap(adata_processed_base)
+    sc.tl.leiden(
+        adata_processed_base, resolution=leiden_resolution, key_added="_leiden_ref"
+    )
+    leiden_labels_precomp = adata_processed_base.obs["_leiden_ref"].astype(int).values
+
+    leiden_shared_labels_precomp, _ = run_leiden_shared_genes(
+        adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+    )
+    logger.info("Analysis pre-computation done.")
+    return (
+        adata_sc,
+        adata_st,
+        adata_processed_base,
+        leiden_labels_precomp,
+        leiden_shared_labels_precomp,
+        shared_genes,
+    )
+
+
+def _analyze_run(
+    run_dir: Path,
+    run_id,
+    K: int,
+    adata_sc,
+    adata_st,
+    leiden_resolution: float,
+    adata_processed_base,
+    leiden_labels_precomp,
+    leiden_shared_labels_precomp,
+) -> dict | None:
+    """Run post-mapping analysis + per-K report for one existing run.
+
+    Reads the stored B/C assignment matrices (no mapping recompute). Returns the
+    analysis-overview row dict, or None when the intermediate files are missing.
+    """
+    b_path = run_dir / "intermediate" / "B_thresh.h5ad"
+    c_path = run_dir / "intermediate" / "C_thresh.h5ad"
+    if not (b_path.exists() and c_path.exists()):
+        logger.warning(
+            "Run %s: B/C intermediate files missing — skipping analysis", run_id
+        )
+        return None
+
+    B = ad.read_h5ad(b_path).X
+    C = ad.read_h5ad(c_path).X
+    analysis_dir = run_dir / "analysis"
+    results = run_analysis(
+        adata_sc=adata_sc,
+        adata_st=adata_st,
+        B=B,
+        C=C,
+        output_dir=analysis_dir,
+        K=K,
+        leiden_resolution=leiden_resolution,
+        adata_processed_base=adata_processed_base,
+        leiden_labels=leiden_labels_precomp,
+        leiden_shared_labels=leiden_shared_labels_precomp,
+    )
+    generate_per_k_report(analysis_dir, K, str(run_id))
+
+    gene_median, spot_median = _read_median_cossim(run_dir)
+    analysis_row: dict = {"run": str(run_id), "K": K}
+    analysis_row["Computed states"] = results["n_computed_states"]
+    analysis_row["Computed states > 1%"] = results["n_computed_states_above_1pct"]
+    analysis_row["Mapped states"] = results["n_mapped_states"]
+    analysis_row["Mapped states > 1%"] = results["n_mapped_states_above_1pct"]
+    analysis_row["per_state_perm_p"] = results["substate_metrics"]["weighted_perm_p"]
+    for metric, value in results["metrics_computed"].items():
+        analysis_row[f"{metric}__computed"] = value
+    analysis_row["contingency_score"] = results["contingency_matching"]["score"]
+    analysis_row["median_cossim_gene"] = gene_median
+    analysis_row["median_cossim_spot"] = spot_median
+    return analysis_row
+
+
+def _write_summary_analysis(ds_folder: Path, analysis_summary_rows: list[dict]) -> None:
+    """Write analysis_overview.csv and the cross-K summary report PDF."""
+    if not analysis_summary_rows:
+        logger.warning("No analysis rows — skipping summary analysis report.")
+        return
+    overview_path = ds_folder / "analysis_overview.csv"
+    df = pd.DataFrame(analysis_summary_rows).set_index("run").T
+    df.to_csv(overview_path, index=True)
+    logger.info("Analysis overview → %s", overview_path)
+    generate_summary_report(ds_folder)
+
+
 def run_config(
     sc_path: Path,
     st_path: Path,
@@ -65,7 +167,7 @@ def run_config(
 
     # Run alignment (G x S)
     predicted_gep, predicted_gep_det, cell_to_celltype, losses_after_last_epoch = (
-        alternative_idea_main.main(
+        aim_main.main(
             sc_path,
             st_path,
             output_folder=output_folder,
@@ -227,25 +329,15 @@ def main(
     analysis_ready = False
     analysis_summary_rows: list[dict] = []
     try:
-        logger.info("Pre-computing analysis artifacts (PCA, UMAP, Leiden)…")
-        adata_sc = ad.read_h5ad(sc_path)
-        adata_st = ad.read_h5ad(st_path)
-        shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
-
-        adata_processed_base = adata_sc.copy()
-        run_pca_neighbors_umap(adata_processed_base)
-        sc.tl.leiden(
-            adata_processed_base, resolution=leiden_resolution, key_added="_leiden_ref"
-        )
-        leiden_labels_precomp = (
-            adata_processed_base.obs["_leiden_ref"].astype(int).values
-        )
-
-        leiden_shared_labels_precomp, _ = run_leiden_shared_genes(
-            adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
-        )
+        (
+            adata_sc,
+            adata_st,
+            adata_processed_base,
+            leiden_labels_precomp,
+            leiden_shared_labels_precomp,
+            shared_genes,
+        ) = _precompute_analysis_artifacts(sc_path, st_path, leiden_resolution)
         analysis_ready = True
-        logger.info("Analysis pre-computation done.")
     except Exception as _pre_exc:
         logger.warning(
             "Analysis pre-computation failed — reports will be skipped: %s", _pre_exc
@@ -319,50 +411,19 @@ def main(
             # ── Per-run analysis & report ─────────────────────────────────
             if exc is None and analysis_ready:
                 try:
-                    b_path = run_dir / "intermediate" / "B_thresh.h5ad"
-                    c_path = run_dir / "intermediate" / "C_thresh.h5ad"
-                    if b_path.exists() and c_path.exists():
-                        K = cfg_copy["model"]["K"]
-                        B = ad.read_h5ad(b_path).X
-                        C = ad.read_h5ad(c_path).X
-                        analysis_dir = run_dir / "analysis"
-                        results = run_analysis(
-                            adata_sc=adata_sc,
-                            adata_st=adata_st,
-                            B=B,
-                            C=C,
-                            output_dir=analysis_dir,
-                            K=K,
-                            leiden_resolution=leiden_resolution,
-                            adata_processed_base=adata_processed_base,
-                            leiden_labels=leiden_labels_precomp,
-                            leiden_shared_labels=leiden_shared_labels_precomp,
-                        )
-                        generate_per_k_report(analysis_dir, K, str(run_id))
-
-                        gene_median, spot_median = _read_median_cossim(run_dir)
-                        analysis_row: dict = {"run": str(run_id), "K": K}
-                        analysis_row["Computed states"] = results["n_computed_states"]
-                        analysis_row["Computed states > 1%"] = results[
-                            "n_computed_states_above_1pct"
-                        ]
-                        analysis_row["Mapped states"] = results["n_mapped_states"]
-                        analysis_row["per_state_perm_p"] = results["substate_metrics"][
-                            "weighted_perm_p"
-                        ]
-                        for metric, value in results["metrics_computed"].items():
-                            analysis_row[f"{metric}__computed"] = value
-                        analysis_row["contingency_score"] = results[
-                            "contingency_matching"
-                        ]["score"]
-                        analysis_row["median_cossim_gene"] = gene_median
-                        analysis_row["median_cossim_spot"] = spot_median
+                    analysis_row = _analyze_run(
+                        run_dir,
+                        run_id,
+                        cfg_copy["model"]["K"],
+                        adata_sc,
+                        adata_st,
+                        leiden_resolution,
+                        adata_processed_base,
+                        leiden_labels_precomp,
+                        leiden_shared_labels_precomp,
+                    )
+                    if analysis_row is not None:
                         analysis_summary_rows.append(analysis_row)
-                    else:
-                        logger.warning(
-                            "Run %s: B/C intermediate files missing — skipping analysis",
-                            run_id,
-                        )
                 except Exception as _analysis_exc:
                     logger.error(
                         "Analysis failed for run %s: %s", run_id, _analysis_exc
@@ -411,19 +472,99 @@ def main(
     # )
 
     # ── Summary analysis report ───────────────────────────────────────────
-    if analysis_summary_rows:
-        overview_path = ds_folder / "analysis_overview.csv"
-        df = pd.DataFrame(analysis_summary_rows).set_index("run").T
-        df.to_csv(overview_path, index=True)
-        logger.info("Analysis overview → %s", overview_path)
-        generate_summary_report(ds_folder)
+    _write_summary_analysis(ds_folder, analysis_summary_rows)
+
+
+def run_analyses_only(
+    experiment_config: Path,
+    sc_path: Path,
+    st_path: Path,
+    output_folder: Path,
+) -> None:
+    """Re-run only the post-mapping analyses for an already-computed dataset.
+
+    Reuses each run's stored B/C assignment matrices (``<run>/intermediate/``) —
+    no mapping/training is recomputed. For every numeric run sub-folder it reruns
+    ``run_analysis`` + the per-K report, then rewrites ``analysis_overview.csv``
+    and the summary report. Mapping outputs, metrics and shared boxplots are left
+    untouched. The per-run ``K`` is read from each ``<run>/config.yml``; the Leiden
+    resolution is read from ``experiment_config`` (matching the original run).
+    """
+    experiment_config = Path(experiment_config)
+    ds_folder = Path(output_folder)
+    if not ds_folder.is_dir():
+        raise FileNotFoundError(
+            f"Output folder not found (run the mapping first): {ds_folder}"
+        )
+    if not experiment_config.exists():
+        raise FileNotFoundError(f"experiment_config not found: {experiment_config}")
+
+    with open(experiment_config, "r") as f:
+        base_cfg = yaml.safe_load(f) or {}
+    leiden_resolution = float(
+        base_cfg.get("training", {}).get("reference_leiden_clustering_resolution", 3.0)
+    )
+
+    logger.info(f"=== Analyses-only: SC: {sc_path.stem}  ST: {st_path.stem} ===")
+
+    (
+        adata_sc,
+        adata_st,
+        adata_processed_base,
+        leiden_labels_precomp,
+        leiden_shared_labels_precomp,
+        shared_genes,
+    ) = _precompute_analysis_artifacts(sc_path, st_path, leiden_resolution)
+
+    run_dirs = sorted(
+        (d for d in ds_folder.iterdir() if d.is_dir() and d.name.isdigit()),
+        key=lambda d: int(d.name),
+    )
+    if not run_dirs:
+        logger.warning(
+            "No run sub-folders found in %s — nothing to analyse.", ds_folder
+        )
+        return
+
+    analysis_summary_rows: list[dict] = []
+    for run_dir in run_dirs:
+        run_id = int(run_dir.name)
+        run_config_path = run_dir / "config.yml"
+        if not run_config_path.exists():
+            logger.warning("Run %s: config.yml missing — skipping.", run_id)
+            continue
+        with open(run_config_path, "r") as cf:
+            run_cfg = yaml.safe_load(cf) or {}
+        K = run_cfg.get("model", {}).get("K")
+        if K is None:
+            logger.warning("Run %s: model.K missing in config — skipping.", run_id)
+            continue
+        try:
+            analysis_row = _analyze_run(
+                run_dir,
+                run_id,
+                K,
+                adata_sc,
+                adata_st,
+                leiden_resolution,
+                adata_processed_base,
+                leiden_labels_precomp,
+                leiden_shared_labels_precomp,
+            )
+            if analysis_row is not None:
+                analysis_summary_rows.append(analysis_row)
+                logger.info("Run %s analysed (K=%s).", run_id, K)
+        except Exception as _analysis_exc:
+            logger.error("Analysis failed for run %s: %s", run_id, _analysis_exc)
+
+    _write_summary_analysis(ds_folder, analysis_summary_rows)
 
 
 if __name__ == "__main__":
 
     # 1. Parse Arguments
     parser = argparse.ArgumentParser(
-        description="Run AlternativeIdea alignment. Hyperparameters come from the experiment YAML; data paths are passed as arguments."
+        description="Run AIM alignment. Hyperparameters come from the experiment YAML; data paths are passed as arguments."
     )
     parser.add_argument(
         "--scdata",

@@ -16,7 +16,30 @@ from utils import _dense_X
 
 logger = logging.getLogger(__name__)
 
-_FRAC_THRESHOLD = 0.01  # states with cell- or spot-fraction below this are hidden
+_FRAC_THRESHOLD = 0.01  # states kept when cell- OR spot-fraction exceeds this
+
+
+def select_displayed_states(
+    unique_states: list[int],
+    cell_fractions: dict[int, float] | None,
+    spot_fractions: dict[int, float] | None,
+    threshold: float = _FRAC_THRESHOLD,
+) -> list[int]:
+    """States kept for display: cell-fraction OR spot-fraction above `threshold`.
+
+    Using OR (rather than AND) keeps small cell states that are nonetheless
+    mapped to many spots, and vice versa.  When neither fraction dict is given
+    the input list is returned unchanged.
+    """
+    if not cell_fractions and not spot_fractions:
+        return list(unique_states)
+    cf = cell_fractions or {}
+    sf = spot_fractions or {}
+    return [
+        s
+        for s in unique_states
+        if cf.get(s, 0.0) > threshold or sf.get(s, 0.0) > threshold
+    ]
 
 
 def _build_state_palette(unique_states: list[int]) -> dict[int, tuple]:
@@ -40,6 +63,55 @@ def plot_umap(
     logger.info("UMAP → %s", output_path)
 
 
+_GREY = (0.82, 0.82, 0.82, 1.0)  # sub-threshold computed states in the UMAP
+
+
+def _assign_computed_state_colors(
+    adata: AnnData,
+    cell_fractions: dict[int, float] | None,
+    spot_fractions: dict[int, float] | None,
+    state_palette: dict[int, tuple] | None,
+) -> None:
+    """Pre-assign adata.uns['computed_state_colors'] so scanpy uses our palette;
+    states below the display threshold (cell OR spot fraction) are greyed out."""
+    if state_palette is None or "computed_state" not in adata.obs:
+        return
+    cats = adata.obs["computed_state"].cat.categories.tolist()
+    if cell_fractions is not None and spot_fractions is not None:
+        active = set(
+            select_displayed_states(
+                [int(c) for c in cats], cell_fractions, spot_fractions
+            )
+        )
+    else:
+        active = {int(c) for c in cats}
+    adata.uns["computed_state_colors"] = [
+        mcolors.to_hex(
+            state_palette.get(int(c), (0.7, 0.7, 0.7, 1.0))
+            if int(c) in active
+            else _GREY
+        )
+        for c in cats
+    ]
+
+
+def _computed_state_count_line(
+    adata: AnnData,
+    cell_fractions: dict[int, float] | None,
+    spot_fractions: dict[int, float] | None,
+) -> str:
+    """Annotation like '9 states  (6 > 1 %, rest grey)' for the computed_state panel."""
+    n_total = int(adata.obs["computed_state"].nunique())
+    if cell_fractions is not None and spot_fractions is not None:
+        n_above = len(
+            select_displayed_states(
+                sorted(cell_fractions.keys()), cell_fractions, spot_fractions
+            )
+        )
+        return f"{n_total} states  ({n_above} > 1 %, rest grey)"
+    return f"{n_total} states"
+
+
 def plot_umap_comparison(
     adata: AnnData,
     panels: list[tuple[str, str]],
@@ -54,39 +126,28 @@ def plot_umap_comparison(
     Parameters
     ----------
     panels           : list of (color_key, title) pairs — all keys must exist in adata.obs.
-    cell_fractions   : if provided, used to annotate the computed_state panel with
-                       the number of states above _FRAC_THRESHOLD.
+    cell_fractions   : if provided, the computed_state panel keeps the palette
+                       colour only for states above _FRAC_THRESHOLD (cell OR spot
+                       fraction); sub-threshold states are greyed out, and the
+                       panel is annotated with the number of states above it.
     spot_fractions   : same purpose as cell_fractions.
     state_palette    : if provided, pre-assigned to adata.uns for the computed_state panel
                        so colours stay consistent with the spatial plot.
     """
-    # Pre-assign palette so scanpy uses our colours for computed_state
-    if state_palette is not None and "computed_state" in adata.obs:
-        cats = adata.obs["computed_state"].cat.categories.tolist()
-        adata.uns["computed_state_colors"] = [
-            mcolors.to_hex(state_palette.get(int(c), (0.7, 0.7, 0.7, 1.0)))
-            for c in cats
-        ]
+    # Grey out sub-threshold computed states (consistent with plots 2–6).
+    _assign_computed_state_colors(adata, cell_fractions, spot_fractions, state_palette)
 
     n = len(panels)
     fig, axes = plt.subplots(1, n, figsize=(8 * n, 6))
     if n == 1:
         axes = [axes]
     for ax, (color_key, title) in zip(axes, panels):
-        n_total = int(adata.obs[color_key].nunique())
-        if (
-            color_key == "computed_state"
-            and cell_fractions is not None
-            and spot_fractions is not None
-        ):
-            n_above = sum(
-                1
-                for k, cf in cell_fractions.items()
-                if cf > _FRAC_THRESHOLD and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
+        if color_key == "computed_state":
+            count_line = _computed_state_count_line(
+                adata, cell_fractions, spot_fractions
             )
-            count_line = f"{n_total} states  ({n_above} > 1 %)"
         else:
-            count_line = f"{n_total} clusters"
+            count_line = f"{int(adata.obs[color_key].nunique())} clusters"
         sc.pl.umap(
             adata,
             color=color_key,
@@ -103,6 +164,68 @@ def plot_umap_comparison(
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     logger.info("UMAP comparison → %s", output_path)
+
+
+def plot_computed_state_umaps(
+    adata_all: AnnData,
+    adata_shared: AnnData,
+    output_path: Path,
+    cell_fractions: dict[int, float] | None = None,
+    spot_fractions: dict[int, float] | None = None,
+    state_palette: dict[int, tuple] | None = None,
+    modularity_all: float | None = None,
+    modularity_shared: float | None = None,
+) -> None:
+    """
+    Side-by-side computed-state UMAPs: all-gene embedding vs shared-gene embedding.
+
+    Both panels colour the same computed cell states (same palette, sub-threshold
+    states greyed out).  The shared-gene embedding uses only the genes also present
+    in the ST data — the space the method actually operates in — so a state that is
+    well separated on all genes but collapses on shared genes becomes visible.
+
+    `modularity_all` / `modularity_shared`, if given, are annotated in the matching
+    panel's caption — each is the modularity of the computed partition on the *same*
+    KNN graph that its UMAP is projected from, so the number and picture correspond.
+
+    Both AnnData objects must share the same cell order and carry
+    obs['computed_state'] and obsm['X_umap'].
+    """
+
+    def _mod(m: float | None) -> str:
+        return f"modularity = {m:.3f}" if m is not None and m == m else ""
+
+    panels = [
+        (adata_all, "Computed states — all genes", _mod(modularity_all)),
+        (
+            adata_shared,
+            "Computed states — shared genes (ST overlap)",
+            _mod(modularity_shared),
+        ),
+    ]
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+    for ax, (adata, title, mod_line) in zip(axes, panels):
+        _assign_computed_state_colors(
+            adata, cell_fractions, spot_fractions, state_palette
+        )
+        count_line = _computed_state_count_line(adata, cell_fractions, spot_fractions)
+        caption = f"{title}\n{count_line}" + (f"\n{mod_line}" if mod_line else "")
+        sc.pl.umap(
+            adata,
+            color="computed_state",
+            title=caption,
+            ax=ax,
+            show=False,
+            save=False,
+            legend_loc=None,
+        )
+        legend = ax.get_legend()
+        if legend is not None:
+            legend.remove()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Computed-state UMAPs (all vs shared) → %s", output_path)
 
 
 def plot_crosstab_heatmap(
@@ -198,12 +321,9 @@ def plot_state_profiles(
 
     unique_states = sorted(np.unique(cell_states))
     if cell_fractions is not None and spot_fractions is not None:
-        unique_states = [
-            k
-            for k in unique_states
-            if cell_fractions.get(k, 0.0) > _FRAC_THRESHOLD
-            and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
-        ]
+        unique_states = select_displayed_states(
+            unique_states, cell_fractions, spot_fractions
+        )
     if not unique_states:
         logger.warning(
             "No states above fraction threshold — skipping state-profile plot."
@@ -302,12 +422,9 @@ def plot_state_fractions(
         return
 
     if cell_fractions and spot_fractions:
-        unique_states = [
-            k
-            for k in unique_states
-            if cell_fractions.get(k, 0.0) > _FRAC_THRESHOLD
-            and spot_fractions.get(k, 0.0) > _FRAC_THRESHOLD
-        ]
+        unique_states = select_displayed_states(
+            unique_states, cell_fractions, spot_fractions
+        )
     if not unique_states:
         logger.warning("No states above fraction threshold — skipping fractions plot.")
         return
@@ -358,7 +475,7 @@ def plot_spatial_cell_states(
     Scatter plot of ST spots in physical space, coloured by computed cell-state.
 
     Coordinates are read from adata_st.obsm["spatial"].
-    Only states with cell- and spot-fraction > _FRAC_THRESHOLD are shown when
+    Only states with cell- OR spot-fraction > _FRAC_THRESHOLD are shown when
     fractions are supplied.  state_palette syncs colours with the UMAP.
     """
     if "spatial" not in adata_st.obsm:
@@ -368,14 +485,11 @@ def plot_spatial_cell_states(
     coords = np.asarray(adata_st.obsm["spatial"])
     unique_states = sorted(np.unique(spot_states).tolist())
 
-    # Filter to states above the fraction threshold
+    # Filter to states above the fraction threshold (cell OR spot fraction)
     if cell_fractions is not None and spot_fractions is not None:
-        unique_states = [
-            s
-            for s in unique_states
-            if cell_fractions.get(s, 0.0) > _FRAC_THRESHOLD
-            and spot_fractions.get(s, 0.0) > _FRAC_THRESHOLD
-        ]
+        unique_states = select_displayed_states(
+            unique_states, cell_fractions, spot_fractions
+        )
     if not unique_states:
         logger.warning("No states above fraction threshold — skipping spatial plot.")
         return
