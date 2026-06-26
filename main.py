@@ -35,7 +35,7 @@ def aim_compute_mapping(
     adata_sc: AnnData,
     adata_st: AnnData,
     output_folder: Path,
-    K: int,
+    K: int | None,
     lr: float,
     epochs: int,
     normalize_and_log: bool,
@@ -80,12 +80,18 @@ def aim_compute_mapping(
     # Leiden over-clustering for soft contingency loss (once, before training)
     # Must happen before prepare_tensors_from_input so adata_sc is still available
     leiden_labels_tensor, leiden_n_clusters = None, 0
-    if lambda_soft_contingency > 0.0:
+    if lambda_soft_contingency > 0.0 or K is None:
         logger.info("Computing Leiden over-clustering for soft contingency loss...")
         labels_np, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
         leiden_n_clusters = int(labels_np.max()) + 1
         leiden_labels_tensor = torch.tensor(labels_np, dtype=torch.long, device=device)
         logger.info(f"Computed {leiden_n_clusters} clusters.")
+
+    # Dynamic K: when K is not provided, use the number of reference Leiden clusters
+    # (the over-clustering granularity itself sets the upper bound on cell states).
+    if K is None:
+        K = leiden_n_clusters
+        logger.info(f"Dynamic K mode: K set to {K} (reference Leiden clusters).")
 
     # (Optional) Preprocess data: Normalize & Log-transform
     if normalize_and_log:
@@ -463,7 +469,7 @@ def main(
     sc_path: Path,
     st_path: Path,
     output_folder: Path,
-    K: int = 20,
+    K: int | None = 20,
     lr: float = 0.008,
     epochs: int = 1000,
     normalize_and_log: bool = False,
