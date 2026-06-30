@@ -1,12 +1,11 @@
-training:
-  lr:
-    - 0.008
-  epochs:
-    - 5
-  normalize_and_log:
-    - false
-  reference_leiden_clustering_resolution:
-    - 3.0
+lr:
+  - 0.008
+epochs:
+  - 5
+normalize_and_log:
+  - false
+reference_leiden_clustering_resolution:
+  - 3.0
 loss_weights:
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5

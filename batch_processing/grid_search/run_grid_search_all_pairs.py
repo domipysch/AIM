@@ -62,11 +62,13 @@ def _run_pair_worker(
     gpu_limit_gb: int,
 ) -> list[str]:
     tag = f"[Pair {pair_id:>3} | GPU {gpu_id}]"
-    # Spawned processes start with a clean sys.path — re-add the repo root so that
-    # bare imports like `from utils import ...` in main.py / grid_search.py resolve.
-    repo_root = str(Path(__file__).resolve().parents[2])
-    if repo_root not in sys.path:
-        sys.path.insert(0, repo_root)
+    # Spawned processes start with a clean sys.path — re-add the repo root and src/
+    # so that bare imports like `from utils import ...` in main.py / grid_search.py
+    # resolve (utils.py lives under src/, not the repo root).
+    repo_root = Path(__file__).resolve().parents[2]
+    for p in [str(repo_root / "src"), str(repo_root)]:
+        if p not in sys.path:
+            sys.path.insert(0, p)
     os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
     # Import AFTER setting CUDA_VISIBLE_DEVICES so torch sees the correct device(s)
     from batch_processing.grid_search.grid_search import main as run_experiment_main
