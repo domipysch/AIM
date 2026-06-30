@@ -82,7 +82,6 @@ def _precompute_analysis_artifacts(
 def _analyze_run(
     run_dir: Path,
     run_id,
-    K: int,
     adata_sc,
     adata_st,
     leiden_resolution: float,
@@ -92,8 +91,9 @@ def _analyze_run(
 ) -> dict | None:
     """Run post-mapping analysis + per-K report for one existing run.
 
-    Reads the stored B/C assignment matrices (no mapping recompute). Returns the
-    analysis-overview row dict, or None when the intermediate files are missing.
+    Reads the stored B/C assignment matrices (no mapping recompute). K is always
+    derived from B.shape[1]. Returns the analysis-overview row dict, or None when
+    the intermediate files are missing.
     """
     b_path = run_dir / "intermediate" / "B_thresh.h5ad"
     c_path = run_dir / "intermediate" / "C_thresh.h5ad"
@@ -105,10 +105,7 @@ def _analyze_run(
 
     B = ad.read_h5ad(b_path).X
     C = ad.read_h5ad(c_path).X
-    # Dynamic-K runs have no model.K in their config; the authoritative K is the
-    # number of state columns the model actually produced.
-    if K is None:
-        K = int(B.shape[1])
+    K = int(B.shape[1])
     analysis_dir = run_dir / "analysis"
     results = run_analysis(
         adata_sc=adata_sc,
@@ -175,7 +172,6 @@ def run_config(
             sc_path,
             st_path,
             output_folder=output_folder,
-            K=model_cfg.get("K"),  # None -> aim_main derives K = #Leiden clusters
             lr=training_cfg["lr"],
             epochs=training_cfg["epochs"],
             normalize_and_log=training_cfg.get("normalize_and_log", False),
@@ -423,7 +419,6 @@ def main(
                     analysis_row = _analyze_run(
                         run_dir,
                         run_id,
-                        cfg_copy.get("model", {}).get("K"),
                         adata_sc,
                         adata_st,
                         run_res,
@@ -542,17 +537,10 @@ def run_analyses_only(
         if not run_config_path.exists():
             logger.warning("Run %s: config.yml missing — skipping.", run_id)
             continue
-        with open(run_config_path, "r") as cf:
-            run_cfg = yaml.safe_load(cf) or {}
-        K = run_cfg.get("model", {}).get("K")
-        if K is None:
-            logger.warning("Run %s: model.K missing in config — skipping.", run_id)
-            continue
         try:
             analysis_row = _analyze_run(
                 run_dir,
                 run_id,
-                K,
                 adata_sc,
                 adata_st,
                 leiden_resolution,
@@ -562,7 +550,7 @@ def run_analyses_only(
             )
             if analysis_row is not None:
                 analysis_summary_rows.append(analysis_row)
-                logger.info("Run %s analysed (K=%s).", run_id, K)
+                logger.info("Run %s analysed.", run_id)
         except Exception as _analysis_exc:
             logger.error("Analysis failed for run %s: %s", run_id, _analysis_exc)
 
