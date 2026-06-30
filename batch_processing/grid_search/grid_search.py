@@ -82,7 +82,6 @@ def _precompute_analysis_artifacts(
 def _analyze_run(
     run_dir: Path,
     run_id,
-    K: int,
     adata_sc,
     adata_st,
     leiden_resolution: float,
@@ -92,8 +91,9 @@ def _analyze_run(
 ) -> dict | None:
     """Run post-mapping analysis + per-K report for one existing run.
 
-    Reads the stored B/C assignment matrices (no mapping recompute). Returns the
-    analysis-overview row dict, or None when the intermediate files are missing.
+    Reads the stored B/C assignment matrices (no mapping recompute). K is always
+    derived from B.shape[1]. Returns the analysis-overview row dict, or None when
+    the intermediate files are missing.
     """
     b_path = run_dir / "intermediate" / "B_thresh.h5ad"
     c_path = run_dir / "intermediate" / "C_thresh.h5ad"
@@ -105,6 +105,7 @@ def _analyze_run(
 
     B = ad.read_h5ad(b_path).X
     C = ad.read_h5ad(c_path).X
+    K = int(B.shape[1])
     analysis_dir = run_dir / "analysis"
     results = run_analysis(
         adata_sc=adata_sc,
@@ -171,7 +172,6 @@ def run_config(
             sc_path,
             st_path,
             output_folder=output_folder,
-            K=model_cfg["K"],
             lr=training_cfg["lr"],
             epochs=training_cfg["epochs"],
             normalize_and_log=training_cfg.get("normalize_and_log", False),
@@ -322,26 +322,18 @@ def main(
     # Copy experiment config to output folder for reference
     shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
 
-    # ── Analysis pre-computation (shared across all K runs for this dataset) ──
-    leiden_resolution = float(
-        base_cfg.get("training", {}).get("reference_leiden_clustering_resolution", 3.0)
-    )
-    analysis_ready = False
+    # ── Analysis artifacts (PCA/UMAP/Leiden) are precomputed lazily per Leiden
+    # resolution and cached. The resolution can be a grid axis, so a single
+    # up-front precompute would be wrong for runs at other resolutions. ──
     analysis_summary_rows: list[dict] = []
-    try:
-        (
-            adata_sc,
-            adata_st,
-            adata_processed_base,
-            leiden_labels_precomp,
-            leiden_shared_labels_precomp,
-            shared_genes,
-        ) = _precompute_analysis_artifacts(sc_path, st_path, leiden_resolution)
-        analysis_ready = True
-    except Exception as _pre_exc:
-        logger.warning(
-            "Analysis pre-computation failed — reports will be skipped: %s", _pre_exc
-        )
+    _analysis_cache: dict[float, tuple] = {}
+
+    def _get_analysis_artifacts(resolution: float):
+        if resolution not in _analysis_cache:
+            _analysis_cache[resolution] = _precompute_analysis_artifacts(
+                sc_path, st_path, resolution
+            )
+        return _analysis_cache[resolution]
 
     # Prepare summary CSV
     summary_path = ds_folder / "summary.csv"
@@ -409,15 +401,27 @@ def main(
                 logger.error(f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}")
 
             # ── Per-run analysis & report ─────────────────────────────────
-            if exc is None and analysis_ready:
+            if exc is None:
                 try:
+                    run_res = float(
+                        cfg_copy.get("training", {}).get(
+                            "reference_leiden_clustering_resolution", 3.0
+                        )
+                    )
+                    (
+                        adata_sc,
+                        adata_st,
+                        adata_processed_base,
+                        leiden_labels_precomp,
+                        leiden_shared_labels_precomp,
+                        shared_genes,
+                    ) = _get_analysis_artifacts(run_res)
                     analysis_row = _analyze_run(
                         run_dir,
                         run_id,
-                        cfg_copy["model"]["K"],
                         adata_sc,
                         adata_st,
-                        leiden_resolution,
+                        run_res,
                         adata_processed_base,
                         leiden_labels_precomp,
                         leiden_shared_labels_precomp,
@@ -533,17 +537,10 @@ def run_analyses_only(
         if not run_config_path.exists():
             logger.warning("Run %s: config.yml missing — skipping.", run_id)
             continue
-        with open(run_config_path, "r") as cf:
-            run_cfg = yaml.safe_load(cf) or {}
-        K = run_cfg.get("model", {}).get("K")
-        if K is None:
-            logger.warning("Run %s: model.K missing in config — skipping.", run_id)
-            continue
         try:
             analysis_row = _analyze_run(
                 run_dir,
                 run_id,
-                K,
                 adata_sc,
                 adata_st,
                 leiden_resolution,
@@ -553,7 +550,7 @@ def run_analyses_only(
             )
             if analysis_row is not None:
                 analysis_summary_rows.append(analysis_row)
-                logger.info("Run %s analysed (K=%s).", run_id, K)
+                logger.info("Run %s analysed.", run_id)
         except Exception as _analysis_exc:
             logger.error("Analysis failed for run %s: %s", run_id, _analysis_exc)
 

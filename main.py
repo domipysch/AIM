@@ -35,7 +35,6 @@ def aim_compute_mapping(
     adata_sc: AnnData,
     adata_st: AnnData,
     output_folder: Path,
-    K: int,
     lr: float,
     epochs: int,
     normalize_and_log: bool,
@@ -58,8 +57,11 @@ def aim_compute_mapping(
     """
     Run the full optimization loop and return the learned mappings.
 
-    Leiden over-clustering is computed once before training (when
-    lambda_soft_contingency > 0) and used as a fixed supervision signal.
+    K (number of cell states) is always derived dynamically from the Leiden
+    over-clustering: K = number of reference Leiden clusters at leiden_resolution.
+
+    Leiden over-clustering is computed once before training and used as a fixed
+    supervision signal for the soft-contingency loss.
 
     When save_intermediate=True, the following are written to output_folder/intermediate/:
         B_thresh.h5ad, C_thresh.h5ad  — thresholded soft assignments (entries < 0.1 → 0)
@@ -77,15 +79,13 @@ def aim_compute_mapping(
 
     logger.info(f"Using device: {device}")
 
-    # Leiden over-clustering for soft contingency loss (once, before training)
-    # Must happen before prepare_tensors_from_input so adata_sc is still available
-    leiden_labels_tensor, leiden_n_clusters = None, 0
-    if lambda_soft_contingency > 0.0:
-        logger.info("Computing Leiden over-clustering for soft contingency loss...")
-        labels_np, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
-        leiden_n_clusters = int(labels_np.max()) + 1
-        leiden_labels_tensor = torch.tensor(labels_np, dtype=torch.long, device=device)
-        logger.info(f"Computed {leiden_n_clusters} clusters.")
+    # Leiden over-clustering — always computed; K is derived from the cluster count.
+    logger.info("Computing Leiden over-clustering...")
+    labels_np, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
+    leiden_n_clusters = int(labels_np.max()) + 1
+    leiden_labels_tensor = torch.tensor(labels_np, dtype=torch.long, device=device)
+    K = leiden_n_clusters
+    logger.info(f"Leiden clusters: {K}  →  K set to {K}.")
 
     # (Optional) Preprocess data: Normalize & Log-transform
     if normalize_and_log:
@@ -463,7 +463,6 @@ def main(
     sc_path: Path,
     st_path: Path,
     output_folder: Path,
-    K: int = 20,
     lr: float = 0.008,
     epochs: int = 1000,
     normalize_and_log: bool = False,
@@ -523,7 +522,6 @@ def main(
         adata_sc=adata_sc.copy(),
         adata_st=adata_st.copy(),
         output_folder=output_folder,
-        K=K,
         lr=lr,
         epochs=epochs,
         normalize_and_log=normalize_and_log,
@@ -614,6 +612,7 @@ def main(
             C_np = spot_to_cell_map.detach().cpu().numpy() @ B_np  # S×K
             B_np[B_np < 0.1] = 0.0
             C_np[C_np < 0.1] = 0.0
+            K_analysis = B_np.shape[1]
             analysis_dir = output_folder / "analysis"
             run_analysis(
                 adata_sc=adata_sc,
@@ -621,10 +620,10 @@ def main(
                 B=B_np,
                 C=C_np,
                 output_dir=analysis_dir,
-                K=K,
+                K=K_analysis,
                 leiden_resolution=leiden_resolution,
             )
-            generate_per_k_report(analysis_dir, K, run_id="0")
+            generate_per_k_report(analysis_dir, K_analysis, run_id="0")
             logger.info("Analysis report written to %s", analysis_dir)
         except Exception as _analysis_exc:
             logger.error("Analysis failed (outputs already saved): %s", _analysis_exc)
@@ -665,10 +664,6 @@ if __name__ == "__main__":
         type=int,
         default=48,
         help="GPU memory limit in GB. Abort if estimated usage exceeds this value.",
-    )
-    # model
-    parser.add_argument(
-        "--K", type=int, default=20, help="Number of cell-type clusters (model.K)"
     )
     # training
     parser.add_argument("--lr", type=float, default=0.008, help="Learning rate")
@@ -723,7 +718,6 @@ if __name__ == "__main__":
     with open(args.output_folder / "config.yaml", "w") as f:
         yaml.safe_dump(
             {
-                "model": {"K": args.K},
                 "training": {
                     "lr": args.lr,
                     "epochs": args.epochs,
@@ -752,7 +746,6 @@ if __name__ == "__main__":
         args.scdata,
         args.stdata,
         output_folder=args.output_folder,
-        K=args.K,
         lr=args.lr,
         epochs=args.epochs,
         normalize_and_log=args.normalize_and_log,

@@ -101,6 +101,7 @@ def main(
     output_dir: Path,
     gpus: list[int],
     gpu_limit_gb: int = 6,
+    first_st_per_sc: bool = False,
 ) -> None:
     experiment_config = Path(experiment_config)
     pairs_csv = Path(pairs_csv)
@@ -121,6 +122,16 @@ def main(
     n_workers = len(gpus)
 
     pairs = pd.read_csv(pairs_csv)
+    if first_st_per_sc:
+        # Keep only the first ST slice per scRNA dataset (min PairID per scName).
+        pairs = pairs.loc[pairs.groupby("scName")["PairID"].idxmin()].reset_index(
+            drop=True
+        )
+        logger.info(
+            "--first_st_per_sc: restricted to %d pair(s) (one per scRNA): %s",
+            len(pairs),
+            pairs["PairID"].tolist(),
+        )
     template = _load_template(experiment_config)
 
     config_dir = output_dir / "configs"
@@ -263,6 +274,12 @@ if __name__ == "__main__":
         default=48,
         help="GPU memory limit in GB. Abort if estimated usage exceeds this value (default: 6).",
     )
+    parser.add_argument(
+        "--first_st_per_sc",
+        action="store_true",
+        help="Run only the first ST slice per scRNA dataset (min PairID per scName). "
+        "Reduces the 213 pairs to one per reference (10).",
+    )
     args = parser.parse_args()
 
     main(
@@ -273,4 +290,5 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         gpus=args.gpus,
         gpu_limit_gb=args.gpu_limit_gb,
+        first_st_per_sc=args.first_st_per_sc,
     )
