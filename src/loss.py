@@ -38,8 +38,6 @@ class AIMLoss(nn.Module):
         rec_gene          — gene-level cosine reconstruction
         state_entropy     — minimize number of used cell-states
         spot_entropy      — minimize uncertainty of per-spot state assignments
-        clust_intra       — pull cells of the same state together in embedding space
-        clust_inter       — push state centroids apart in embedding space
         soft_contingency  — align model states with Leiden over-clustering
     """
 
@@ -49,13 +47,10 @@ class AIMLoss(nn.Module):
         lambda_rec_gene: float = 0.0,
         lambda_state_entropy: float = 1.0,
         lambda_spot_entropy: float = 1.0,
-        # lambda_clust_intra: float = 0.0,
-        # lambda_clust_inter: float = 0.0,
         eps: float = 1e-8,
         n_states: int = 1,
         lambda_soft_contingency: float = 0.0,
         leiden_labels: Tensor | None = None,
-        leiden_n_clusters: int = 0,
         # Y_scale: float = 1.0,
     ):
         """
@@ -64,31 +59,22 @@ class AIMLoss(nn.Module):
             lambda_rec_gene:        Weight for gene-level reconstruction loss.
             lambda_state_entropy:   Weight for cell-state entropy loss.
             lambda_spot_entropy:    Weight for spot-state entropy loss.
-            # lambda_clust_intra:     Weight for intra-cluster cohesion loss.
-            # lambda_clust_inter:     Weight for inter-cluster separation loss.
             eps:                    Numerical stability constant.
-            n_states:               Number of cell states (K = #Leiden clusters); used to normalize entropy terms.
+            n_states:               Number of cell states (= #Leiden clusters); used to normalize entropy terms.
             lambda_soft_contingency: Weight for soft contingency loss (0 disables it).
             leiden_labels:          Integer tensor of shape (C,) with Leiden cluster IDs.
                                     Required when lambda_soft_contingency > 0.
-            leiden_n_clusters:      Number of distinct Leiden clusters (L).
-            # Y_scale:                Mean per-dimension variance of the cell embedding Y,
-            #                         used to normalize the clust_intra term.
         """
         super(AIMLoss, self).__init__()
         self.lambda_rec_spot = lambda_rec_spot
         self.lambda_rec_gene = lambda_rec_gene
         self.lambda_state_entropy = lambda_state_entropy
-        # self.lambda_clust_intra = lambda_clust_intra
-        # self.lambda_clust_inter = lambda_clust_inter
         self.lambda_spot_entropy = lambda_spot_entropy
         self.eps = eps
         self.lnK = torch.log(torch.tensor(n_states, dtype=torch.float32))
         # Leiden over-clustering components for soft contingency (precomputed, fixed)
         self.lambda_soft_contingency = lambda_soft_contingency
         self.leiden_labels = leiden_labels  # integer (C,) or None
-        self.leiden_n_clusters = leiden_n_clusters  # scalar int
-        # self.Y_scale = max(Y_scale, 1e-8)
         logger.debug("AIMLoss initialized")
 
     def get_rec_spot_loss(
@@ -215,45 +201,6 @@ class AIMLoss(nn.Module):
         # 3. Return the mean across all spots multiplied by lambda
         return torch.mean(spot_entropies)
 
-    # def get_clust_intra_loss(self, A: Tensor, B: Tensor, Y: Tensor) -> Tensor:
-    #     """
-    #     Soft within-cluster variance in embedding space, weighted by cell usage.
-    #
-    #     L = (sum_c w_c)^{-1} sum_c w_c * sum_k B[c,k] * ||Y[c] - S[k]||^2
-    #     where w_c = sum_s A[s,c]  (how much cell c is used across all spots).
-    #
-    #     Args:
-    #         A: (S x C) spot-to-cell alignment matrix.
-    #         B: (C x K) cell-to-state soft assignment matrix.
-    #         Y: (C x d) precomputed cell embeddings.
-    #     """
-    #     w = A.sum(dim=0)  # (C,) — 1^T A, total assignment weight per cell
-    #     S = compute_state_centroids(B, Y, self.eps)  # (K x d)
-    #     diff = Y.unsqueeze(1) - S.unsqueeze(0)  # (C x K x d)
-    #     sq_dist = (diff**2).sum(dim=2)  # (C x K)
-    #     return (w.unsqueeze(1) * B * sq_dist).sum() / (
-    #         w.sum() * Y.shape[1] * self.Y_scale
-    #     )
-    #
-    # def get_clust_inter_loss(self, B: Tensor, Y: Tensor) -> Tensor:
-    #     """
-    #     Mean pairwise squared distance between cell-state centroids, negated.
-    #
-    #     L = -1/(K*(K-1)) * sum_{k != k'} ||S_k - S_k'||^2
-    #
-    #     Args:
-    #         B: (C x K) cell-to-state soft assignment matrix.
-    #         Y: (C x d) precomputed cell embeddings.
-    #     """
-    #     S = compute_state_centroids(B, Y, self.eps)  # (K x d)
-    #     K = S.shape[0]
-    #     if K < 2:
-    #         return torch.tensor(0.0, device=S.device)
-    #     diff = S.unsqueeze(1) - S.unsqueeze(0)  # (K x K x d)
-    #     sq_dist = (diff**2).sum(dim=2)  # (K x K)
-    #     mask = 1.0 - torch.eye(K, device=S.device, dtype=S.dtype)
-    #     return -(sq_dist * mask).sum() / (K * (K - 1))
-
     def get_soft_contingency_loss(self, B: Tensor) -> Tensor:
         """
         Cluster-size-weighted entropy of the soft contingency matrix.
@@ -266,17 +213,17 @@ class AIMLoss(nn.Module):
         Args:
             B: Cell-to-state assignment matrix (C x K).
         """
+        # n_states == n_leiden_clusters by construction → T is square
         K = B.shape[1]
-        L = self.leiden_n_clusters
 
-        # Soft contingency matrix (L x K) via scatter_add — no one-hot matrix needed
-        T = torch.zeros(L, K, device=B.device)
+        # Soft contingency matrix (K x K) via scatter_add — no one-hot matrix needed
+        T = torch.zeros(K, K, device=B.device)
         assert self.leiden_labels is not None
         idx = self.leiden_labels.to(B.device).unsqueeze(1).expand(-1, K)  # (C x K)
         T.scatter_add_(0, idx, B)
 
         # Cluster sizes: B rows sum to 1, so T[l,:].sum() = n_cells in cluster l
-        sizes = T.sum(dim=1)  # (L,)
+        sizes = T.sum(dim=1)  # (K,)
         weights = sizes / (
             sizes.sum() + self.eps
         )  # (L,) normalised cluster-size weights
@@ -313,8 +260,6 @@ class AIMLoss(nn.Module):
                 "rec_gene"         — unweighted gene reconstruction term.
                 "state_entropy"    — unweighted state entropy term (normalised by log K).
                 "spot_entropy"     — unweighted spot entropy term (normalised by log K).
-                "clust_intra"      — unweighted intra-cluster cohesion term.
-                "clust_inter"      — unweighted inter-cluster separation term.
                 "soft_contingency" — unweighted soft contingency term (0 if disabled).
         """
         # 1. Individual terms (unweighted)
@@ -322,8 +267,6 @@ class AIMLoss(nn.Module):
         l_rec_gene = self.get_rec_gene_loss(A, B, X_shared, Z_shared)
         l_state_entropy = self.get_state_entropy_loss(B)
         l_spot_entropy = self.get_spot_entropy_loss(A, B)
-        # l_clust_intra = self.get_clust_intra_loss(A, B, Y)
-        # l_clust_inter = self.get_clust_inter_loss(B, Y)
         l_soft_contingency = (
             self.get_soft_contingency_loss(B)
             if self.lambda_soft_contingency > 0.0 and self.leiden_labels is not None
@@ -341,8 +284,6 @@ class AIMLoss(nn.Module):
             + self.lambda_rec_gene * l_rec_gene
             + self.lambda_state_entropy * l_state_entropy
             + self.lambda_spot_entropy * l_spot_entropy
-            # + self.lambda_clust_intra * l_clust_intra
-            # + self.lambda_clust_inter * l_clust_inter
             + self.lambda_soft_contingency * l_soft_contingency
         )
 
@@ -352,7 +293,5 @@ class AIMLoss(nn.Module):
             "rec_gene": l_rec_gene,
             "state_entropy": l_state_entropy,
             "spot_entropy": l_spot_entropy,
-            # "clust_intra": l_clust_intra,
-            # "clust_inter": l_clust_inter,
             "soft_contingency": l_soft_contingency,
         }

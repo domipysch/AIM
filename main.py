@@ -2,7 +2,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 import anndata
 import pandas as pd
 import yaml
@@ -25,8 +25,6 @@ from dataset import prepare_tensors_from_input
 from evaluate_k.clustering import run_leiden_clustering
 from evaluate_k.analysis import run_analysis
 from evaluate_k.report import generate_per_k_report
-
-# from sc_embedding import compute_sc_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +155,6 @@ def aim_compute_mapping(
         lambda_soft_contingency=lambda_soft_contingency,
         n_states=leiden_n_clusters,
         leiden_labels=leiden_labels_tensor,
-        leiden_n_clusters=leiden_n_clusters,
         # Y_scale=Y_scale,
     )
 
