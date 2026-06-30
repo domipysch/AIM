@@ -159,10 +159,7 @@ def run_config(
     # Load config from the per-run YAML written by the grid-search loop
     with open(run_config_path) as f:
         cfg = yaml.safe_load(f) or {}
-    model_cfg = cfg.get("model", {})
-    training_cfg = cfg.get("training", {})
     loss_cfg = cfg.get("loss_weights", {})
-    emb_cfg = cfg.get("sc_embedding", {})
 
     verbose_flag = logger.getEffectiveLevel() == logging.DEBUG
 
@@ -172,14 +169,10 @@ def run_config(
             sc_path,
             st_path,
             output_folder=output_folder,
-            lr=training_cfg["lr"],
-            epochs=training_cfg["epochs"],
-            normalize_and_log=training_cfg.get("normalize_and_log", False),
-            leiden_resolution=training_cfg.get(
-                "reference_leiden_clustering_resolution", 3.0
-            ),
-            # sc_embedding_method=emb_cfg.get("method", "pca"),
-            # sc_embedding_d=emb_cfg.get("d", 32),
+            lr=cfg["lr"],
+            epochs=cfg["epochs"],
+            normalize_and_log=cfg.get("normalize_and_log", False),
+            leiden_resolution=cfg.get("reference_leiden_clustering_resolution", 3.0),
             lambda_rec_spot=loss_cfg.get("lambda_rec_spot", 0.5),
             lambda_rec_gene=loss_cfg.get("lambda_rec_gene", 0.5),
             # lambda_clust_intra=loss_cfg.get("lambda_clust_intra", 0.0),
@@ -404,9 +397,7 @@ def main(
             if exc is None:
                 try:
                     run_res = float(
-                        cfg_copy.get("training", {}).get(
-                            "reference_leiden_clustering_resolution", 3.0
-                        )
+                        cfg_copy.get("reference_leiden_clustering_resolution", 3.0)
                     )
                     (
                         adata_sc,
@@ -506,7 +497,7 @@ def run_analyses_only(
     with open(experiment_config, "r") as f:
         base_cfg = yaml.safe_load(f) or {}
     leiden_resolution = float(
-        base_cfg.get("training", {}).get("reference_leiden_clustering_resolution", 3.0)
+        base_cfg.get("reference_leiden_clustering_resolution", 3.0)
     )
 
     logger.info(f"=== Analyses-only: SC: {sc_path.stem}  ST: {st_path.stem} ===")
