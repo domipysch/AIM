@@ -221,12 +221,9 @@ python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
     --output_folder <output/pair_0> \
-    [--K 20] \
     [--lr 0.008] \
     [--epochs 1000] \
     [--leiden_resolution 3.0] \
-#    [--sc_embedding_method pca] \
-#    [--sc_embedding_d 32] \
     [--lambda_rec_spot 0.5] \
     [--lambda_rec_gene 0.5] \
     [--lambda_state_entropy 0.1] \
@@ -235,6 +232,8 @@ python main.py \
     [--gpu_limit_gb 48] \
     [--logging verbose]
 ```
+
+> `K` (number of cell states) is derived automatically from the Leiden over-clustering: `K = number of Leiden clusters` at the given `--leiden_resolution`. There is no `--K` argument.
 
 Writes to `output_folder/`:
 - `gep_prob.h5ad` / `gep_det.h5ad` — probabilistic and deterministic predicted GEPs (G × S)
@@ -289,22 +288,24 @@ python -m batch_processing.grid_search.grid_search \
 **Config format** (`grid_search_config.yaml`):
 
 ```yaml
-model:
-  K: [10, 20, 40]          # list → grid axis
 training:
   lr: 0.008
   epochs: 1000
-  reference_leiden_clustering_resolution: 3.0
-#sc_embedding:
-#  method: pca
-#  d: 32
+  reference_leiden_clustering_resolution: [1.0, 3.0, 5.0]   # list → grid axis; controls K implicitly
 loss_weights:
-  lambda_rec_spot: 0.5
-  lambda_rec_gene: 0.5
-  lambda_state_entropy: 0.1
-  lambda_spot_entropy: 0.08
-  lambda_soft_contingency: 1.0
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
+    lambda_state_entropy: 0.01
+    lambda_spot_entropy: 0.08
+    lambda_soft_contingency: 1.0
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
+    lambda_state_entropy: 0.3
+    lambda_spot_entropy: 0.08
+    lambda_soft_contingency: 1.0
 ```
+
+> `K` is **not** a config key. It is always derived dynamically from `reference_leiden_clustering_resolution`. Use a list of resolutions as the grid axis to search over the number of cell states.
 
 ---
 
