@@ -6,25 +6,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def compute_state_centroids(B: Tensor, Y: Tensor, eps: float = 1e-8) -> Tensor:
-    """
-    Compute soft cell-state centroids in embedding space.
-
-    S[k] = weighted mean of Y over cells assigned to state k,
-    i.e. S = (B / colsum(B))^T @ Y.
-
-    Args:
-        B: (C x K) cell-to-state soft assignment matrix.
-        Y: (C x d) cell embeddings (precomputed, fixed).
-        eps: Stability term to avoid division by zero for empty states.
-
-    Returns:
-        S: (K x d) state centroids in embedding space.
-    """
-    B_norm = B / (B.sum(dim=0, keepdim=True) + eps)  # (C x K), columns sum to 1
-    return B_norm.T @ Y  # (K x d)
-
-
 class AIMLoss(nn.Module):
     """
     Multi-term loss for the alignment model.
@@ -51,7 +32,6 @@ class AIMLoss(nn.Module):
         n_states: int = 1,
         lambda_soft_contingency: float = 0.0,
         leiden_labels: Tensor | None = None,
-        # Y_scale: float = 1.0,
     ):
         """
         Args:
@@ -243,7 +223,6 @@ class AIMLoss(nn.Module):
         B: Tensor,
         X_shared: Tensor,
         Z_shared: Tensor,
-        # Y: Tensor,
     ) -> dict[str, Tensor]:
         """
         Args:
@@ -251,7 +230,6 @@ class AIMLoss(nn.Module):
             B: Cell-to-state mapping (C × K), rows sum to 1.
             X_shared: scRNA-seq reference restricted to shared genes (C × G_shared).
             Z_shared: ST data restricted to shared genes (S × G_shared).
-            Y: Precomputed cell embeddings (C × d).
 
         Returns:
             Dict with keys:

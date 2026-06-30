@@ -37,12 +37,8 @@ def aim_compute_mapping(
     epochs: int,
     normalize_and_log: bool,
     leiden_resolution: float,
-    # sc_embedding_method: str,
-    # sc_embedding_d: int,
     lambda_rec_spot: float,
     lambda_rec_gene: float,
-    # lambda_clust_intra: float,
-    # lambda_clust_inter: float,
     lambda_state_entropy: float,
     lambda_spot_entropy: float,
     lambda_soft_contingency: float,
@@ -50,7 +46,6 @@ def aim_compute_mapping(
     device: torch.device,
     save_intermediate: bool = False,
     gpu_limit_gb: int = 6,
-    # sc_data_dir: Optional[Path] = None,
 ) -> tuple[torch.Tensor, torch.Tensor, dict]:
     """
     Run the full optimization loop and return the learned mappings.
@@ -94,19 +89,6 @@ def aim_compute_mapping(
     else:
         logger.info("Skipping normalize_and_log")
 
-    # Compute a priori sc embedding Y (C x d)
-    # logger.info(f"Computing sc embedding Y (method={sc_embedding_method}, d={sc_embedding_d})")
-    # Y = compute_sc_embedding(
-    #     adata_sc,
-    #     method=sc_embedding_method,
-    #     d=sc_embedding_d,
-    #     device=device,
-    #     cache_dir=sc_data_dir,
-    # )
-    # logger.info(f"Y shape: {Y.shape}")
-    # Y_scale = Y.var(dim=0, unbiased=False).mean().item()
-    # logger.info(f"Y_scale (mean per-dim variance, used to normalise clust_intra loss): {Y_scale:.4f}")
-
     # Convert input anndata to tensors
     logger.debug("Prepare input tensors for model...")
     X, Z, X_shared, Z_shared = prepare_tensors_from_input(adata_sc, adata_st, device)
@@ -148,14 +130,11 @@ def aim_compute_mapping(
     loss = AIMLoss(
         lambda_rec_spot=lambda_rec_spot,
         lambda_rec_gene=lambda_rec_gene,
-        # lambda_clust_intra=lambda_clust_intra,
-        # lambda_clust_inter=lambda_clust_inter,
         lambda_state_entropy=lambda_state_entropy,
         lambda_spot_entropy=lambda_spot_entropy,
         lambda_soft_contingency=lambda_soft_contingency,
         n_states=leiden_n_clusters,
         leiden_labels=leiden_labels_tensor,
-        # Y_scale=Y_scale,
     )
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -169,8 +148,6 @@ def aim_compute_mapping(
         "total-weighted": list(),
         "rec_spot": {"weight": lambda_rec_spot, "values": list()},
         "rec_gene": {"weight": lambda_rec_gene, "values": list()},
-        # "clust_intra": {"weight": lambda_clust_intra, "values": list()},
-        # "clust_inter": {"weight": lambda_clust_inter, "values": list()},
         "state_entropy": {"weight": lambda_state_entropy, "values": list()},
         "spot_entropy": {"weight": lambda_spot_entropy, "values": list()},
         **(
@@ -235,8 +212,6 @@ def aim_compute_mapping(
         losses["total-weighted"].append(to_scalar(total_loss))
         losses["rec_spot"]["values"].append(to_scalar(loss_dict.get("rec_spot")))
         losses["rec_gene"]["values"].append(to_scalar(loss_dict.get("rec_gene")))
-        # losses["clust_intra"]["values"].append(to_scalar(loss_dict.get("clust_intra")))
-        # losses["clust_inter"]["values"].append(to_scalar(loss_dict.get("clust_inter")))
         losses["state_entropy"]["values"].append(
             to_scalar(loss_dict.get("state_entropy"))
         )
@@ -463,12 +438,8 @@ def main(
     epochs: int = 1000,
     normalize_and_log: bool = False,
     leiden_resolution: float = 3.0,
-    # sc_embedding_method: str = "pca",
-    # sc_embedding_d: int = 32,
     lambda_rec_spot: float = 0.5,
     lambda_rec_gene: float = 0.5,
-    # lambda_clust_intra: float = 0.0,
-    # lambda_clust_inter: float = 0.0,
     lambda_state_entropy: float = 0.1,
     lambda_spot_entropy: float = 0.08,
     lambda_soft_contingency: float = 1.0,
@@ -522,12 +493,8 @@ def main(
         epochs=epochs,
         normalize_and_log=normalize_and_log,
         leiden_resolution=leiden_resolution,
-        # sc_embedding_method=sc_embedding_method,
-        # sc_embedding_d=sc_embedding_d,
         lambda_rec_spot=lambda_rec_spot,
         lambda_rec_gene=lambda_rec_gene,
-        # lambda_clust_intra=lambda_clust_intra,
-        # lambda_clust_inter=lambda_clust_inter,
         lambda_state_entropy=lambda_state_entropy,
         lambda_spot_entropy=lambda_spot_entropy,
         lambda_soft_contingency=lambda_soft_contingency,
@@ -535,7 +502,6 @@ def main(
         device=device,
         save_intermediate=store_intermediate,
         gpu_limit_gb=gpu_limit_gb,
-        # sc_data_dir=sc_path.parent,
     )
     logger.info("Obtained spot-to-cell mapping.")
     assert spot_to_cell_map.shape == (
@@ -678,24 +644,9 @@ if __name__ == "__main__":
         default=3.0,
         help="Leiden clustering resolution for soft-contingency loss (training.reference_leiden_clustering_resolution)",
     )
-    # sc_embedding
-    # parser.add_argument(
-    #     "--sc_embedding_method",
-    #     choices=["pca", "scvi"],
-    #     default="pca",
-    #     help="SC embedding method (sc_embedding.method)",
-    # )
-    # parser.add_argument(
-    #     "--sc_embedding_d",
-    #     type=int,
-    #     default=32,
-    #     help="SC embedding dimensionality (sc_embedding.d)",
-    # )
     # loss weights
     parser.add_argument("--lambda_rec_spot", type=float, default=0.5)
     parser.add_argument("--lambda_rec_gene", type=float, default=0.5)
-    # parser.add_argument("--lambda_clust_intra", type=float, default=0.0)
-    # parser.add_argument("--lambda_clust_inter", type=float, default=0.0)
     parser.add_argument("--lambda_state_entropy", type=float, default=0.1)
     parser.add_argument("--lambda_spot_entropy", type=float, default=0.08)
     parser.add_argument("--lambda_soft_contingency", type=float, default=1.0)
@@ -720,15 +671,9 @@ if __name__ == "__main__":
                     "normalize_and_log": args.normalize_and_log,
                     "reference_leiden_clustering_resolution": args.leiden_resolution,
                 },
-                # "sc_embedding": {
-                #     "method": args.sc_embedding_method,
-                #     "d": args.sc_embedding_d,
-                # },
                 "loss_weights": {
                     "lambda_rec_spot": args.lambda_rec_spot,
                     "lambda_rec_gene": args.lambda_rec_gene,
-                    # "lambda_clust_intra": args.lambda_clust_intra,
-                    # "lambda_clust_inter": args.lambda_clust_inter,
                     "lambda_state_entropy": args.lambda_state_entropy,
                     "lambda_spot_entropy": args.lambda_spot_entropy,
                     "lambda_soft_contingency": args.lambda_soft_contingency,
@@ -746,12 +691,8 @@ if __name__ == "__main__":
         epochs=args.epochs,
         normalize_and_log=args.normalize_and_log,
         leiden_resolution=args.leiden_resolution,
-        # sc_embedding_method=args.sc_embedding_method,
-        # sc_embedding_d=args.sc_embedding_d,
         lambda_rec_spot=args.lambda_rec_spot,
         lambda_rec_gene=args.lambda_rec_gene,
-        # lambda_clust_intra=args.lambda_clust_intra,
-        # lambda_clust_inter=args.lambda_clust_inter,
         lambda_state_entropy=args.lambda_state_entropy,
         lambda_spot_entropy=args.lambda_spot_entropy,
         lambda_soft_contingency=args.lambda_soft_contingency,
