@@ -21,13 +21,13 @@ class AIMModel(nn.Module):
         self,
         num_spots_st: int,
         num_cells_sc: int,
-        k: int = 20,
+        n_states: int,
     ):
         """
         Args:
             num_spots_st: Number of ST spots (S).
             num_cells_sc: Number of scRNA cells (C).
-            k: Upper bound on the number of cell states (K).
+            n_states: Number of cell states (K), derived from Leiden clustering.
         """
         super(AIMModel, self).__init__()
         self.num_cells_sc = num_cells_sc
@@ -38,7 +38,7 @@ class AIMModel(nn.Module):
 
         # V: Cell to cell state mapping (C x K)
         # This will become B after Softmax
-        self.V = nn.Parameter(torch.randn(num_cells_sc, k))
+        self.V = nn.Parameter(torch.randn(num_cells_sc, n_states))
 
     def forward(self) -> tuple[Tensor, Tensor]:
         """

@@ -17,7 +17,7 @@ def estimate_gpu_memory_gb(
     g_sc: int,
     g_st: int,
     num_genes_shared: int,
-    K: int,
+    n_states: int,
 ) -> float:
     """Rough upper-bound estimate of GPU memory required (in GB)."""
     B32 = 4  # bytes per float32
@@ -32,7 +32,7 @@ def estimate_gpu_memory_gb(
 
     # Trainable parameters + their gradients (factor ×2) + Adam moment estimates (factor ×2)
     A_bytes = num_spots * num_cells * B32 * 4
-    B_bytes = num_cells * K * B32 * 4
+    B_bytes = num_cells * n_states * B32 * 4
 
     # 50 % overhead for activations, edge index, misc buffers
     total = (data + A_bytes + B_bytes) * 1.5

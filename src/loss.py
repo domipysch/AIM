@@ -52,7 +52,7 @@ class AIMLoss(nn.Module):
         # lambda_clust_intra: float = 0.0,
         # lambda_clust_inter: float = 0.0,
         eps: float = 1e-8,
-        k: int = 20,
+        n_states: int = 1,
         lambda_soft_contingency: float = 0.0,
         leiden_labels: Tensor | None = None,
         leiden_n_clusters: int = 0,
@@ -67,7 +67,7 @@ class AIMLoss(nn.Module):
             # lambda_clust_intra:     Weight for intra-cluster cohesion loss.
             # lambda_clust_inter:     Weight for inter-cluster separation loss.
             eps:                    Numerical stability constant.
-            k:                      Upper bound for number of cell states (K); used to normalize entropy terms.
+            n_states:               Number of cell states (K = #Leiden clusters); used to normalize entropy terms.
             lambda_soft_contingency: Weight for soft contingency loss (0 disables it).
             leiden_labels:          Integer tensor of shape (C,) with Leiden cluster IDs.
                                     Required when lambda_soft_contingency > 0.
@@ -83,7 +83,7 @@ class AIMLoss(nn.Module):
         # self.lambda_clust_inter = lambda_clust_inter
         self.lambda_spot_entropy = lambda_spot_entropy
         self.eps = eps
-        self.lnK = torch.log(torch.tensor(k, dtype=torch.float32))
+        self.lnK = torch.log(torch.tensor(n_states, dtype=torch.float32))
         # Leiden over-clustering components for soft contingency (precomputed, fixed)
         self.lambda_soft_contingency = lambda_soft_contingency
         self.leiden_labels = leiden_labels  # integer (C,) or None

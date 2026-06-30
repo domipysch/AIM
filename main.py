@@ -84,8 +84,7 @@ def aim_compute_mapping(
     labels_np, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
     leiden_n_clusters = int(labels_np.max()) + 1
     leiden_labels_tensor = torch.tensor(labels_np, dtype=torch.long, device=device)
-    K = leiden_n_clusters
-    logger.info(f"Leiden clusters: {K}  →  K set to {K}.")
+    logger.info(f"Leiden clusters: {leiden_n_clusters}")
 
     # (Optional) Preprocess data: Normalize & Log-transform
     if normalize_and_log:
@@ -131,7 +130,7 @@ def aim_compute_mapping(
         g_sc=g_sc,
         g_st=g_st,
         num_genes_shared=num_genes_shared,
-        K=K,
+        n_states=leiden_n_clusters,
     )
     logger.info(f"Estimated GPU memory requirement: {estimated_gb:.2f} GB")
     if estimated_gb > gpu_limit_gb:
@@ -144,7 +143,7 @@ def aim_compute_mapping(
     model = AIMModel(
         num_spots_st=num_spots,
         num_cells_sc=num_cells,
-        k=K,
+        n_states=leiden_n_clusters,
     ).to(device)
 
     # Initialize Loss and Optimizer
@@ -156,7 +155,7 @@ def aim_compute_mapping(
         lambda_state_entropy=lambda_state_entropy,
         lambda_spot_entropy=lambda_spot_entropy,
         lambda_soft_contingency=lambda_soft_contingency,
-        k=K,
+        n_states=leiden_n_clusters,
         leiden_labels=leiden_labels_tensor,
         leiden_n_clusters=leiden_n_clusters,
         # Y_scale=Y_scale,
