@@ -91,20 +91,23 @@ def _analyze_run(
 ) -> dict | None:
     """Run post-mapping analysis + per-K report for one existing run.
 
-    Reads the stored B/C assignment matrices (no mapping recompute). K is always
-    derived from B.shape[1]. Returns the analysis-overview row dict, or None when
-    the intermediate files are missing.
+    Reads the stored cell->state matrix B (intermediate/B_thresh.h5ad) and the
+    spot->state matrix C from mapping_prob.h5ad (transposed; run_analysis only
+    argmaxes C). No mapping recompute. K is always derived from B.shape[1].
+    Returns the analysis-overview row dict, or None when the files are missing.
     """
     b_path = run_dir / "intermediate" / "B_thresh.h5ad"
-    c_path = run_dir / "intermediate" / "C_thresh.h5ad"
-    if not (b_path.exists() and c_path.exists()):
+    mapping_path = run_dir / "mapping_prob.h5ad"
+    if not (b_path.exists() and mapping_path.exists()):
         logger.warning(
-            "Run %s: B/C intermediate files missing — skipping analysis", run_id
+            "Run %s: B_thresh / mapping_prob files missing — skipping analysis",
+            run_id,
         )
         return None
 
     B = ad.read_h5ad(b_path).X
-    C = ad.read_h5ad(c_path).X
+    # mapping_prob is (states x spots) = H.T; transpose back to (spots x states)
+    C = ad.read_h5ad(mapping_path).X.T
     K = int(B.shape[1])
     analysis_dir = run_dir / "analysis"
     results = run_analysis(
@@ -179,7 +182,8 @@ def run_config(
             # lambda_clust_inter=loss_cfg.get("lambda_clust_inter", 0.0),
             lambda_state_entropy=loss_cfg.get("lambda_state_entropy", 0.1),
             lambda_spot_entropy=loss_cfg.get("lambda_spot_entropy", 0.08),
-            lambda_soft_contingency=loss_cfg.get("lambda_soft_contingency", 1.0),
+            lambda_merge_entropy=loss_cfg.get("lambda_merge_entropy", 1.0),
+            lambda_merge_coherence=loss_cfg.get("lambda_merge_coherence", 0.5),
             verbose_logging=verbose_flag,
             store_intermediate=True,
             skip_analysis=True,

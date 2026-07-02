@@ -228,7 +228,8 @@ python main.py \
     [--lambda_rec_gene 0.5] \
     [--lambda_state_entropy 0.1] \
     [--lambda_spot_entropy 0.08] \
-    [--lambda_soft_contingency 1.0] \
+    [--lambda_merge_entropy 1.0] \
+    [--lambda_merge_coherence 0.5] \
     [--gpu_limit_gb 48] \
     [--logging verbose]
 ```
@@ -237,9 +238,9 @@ python main.py \
 
 Writes to `output_folder/`:
 - `gep_prob.h5ad` / `gep_det.h5ad` — probabilistic and deterministic predicted GEPs (G × S)
-- `mapping_prob.h5ad` / `mapping_det.h5ad` — spot-to-cell assignment matrices (C × S)
+- `mapping_prob.h5ad` / `mapping_det.h5ad` — spot-to-state assignment matrices (L × S), soft and one-hot
 - `loss/` — per-epoch loss curves and final values CSV
-- `intermediate/` — B, C, M matrices and state usage JSON (only when `--store_intermediate` is set)
+- `intermediate/` — G merge matrix, B cell→state assignment, M state profiles, and state usage JSON/CSV (only when `--store_intermediate` is set). The spot→state matrix C is not duplicated here — it is `mapping_prob.h5ad` transposed.
 - `analysis/` — post-mapping analysis: UMAP comparison, spatial cell-state plot, state profiles, substate metrics, contingency heatmap in a PDF report (generated with `typst`)
 
 **Example with sample dataset:**
@@ -297,12 +298,14 @@ loss_weights:
     lambda_rec_gene: 0.5
     lambda_state_entropy: 0.01
     lambda_spot_entropy: 0.08
-    lambda_soft_contingency: 1.0
+    lambda_merge_entropy: 1.0
+    lambda_merge_coherence: 0.5
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
     lambda_state_entropy: 0.3
     lambda_spot_entropy: 0.08
-    lambda_soft_contingency: 1.0
+    lambda_merge_entropy: 1.0
+    lambda_merge_coherence: 0.5
 ```
 
 > `K` is **not** a config key. It is always derived dynamically from `reference_leiden_clustering_resolution`. Use a list of resolutions as the grid axis to search over the number of cell states.

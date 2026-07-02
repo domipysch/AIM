@@ -9,6 +9,14 @@ reference_leiden_clustering_resolution:
 loss_weights:
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
-    lambda_soft_contingency: 1
+    lambda_state_entropy: 0.4
+    lambda_spot_entropy: 0.5
+    lambda_merge_entropy: 0.5
+    lambda_merge_coherence: 0.2
+  - lambda_rec_spot: 0.5
+    lambda_rec_gene: 0.5
+    lambda_state_entropy: 0.4
+    lambda_spot_entropy: 0.5
+    lambda_merge_entropy: 0.5
+    lambda_merge_coherence: 0.1
+

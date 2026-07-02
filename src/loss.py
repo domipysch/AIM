@@ -8,261 +8,238 @@ logger = logging.getLogger(__name__)
 
 class AIMLoss(nn.Module):
     """
-    Multi-term loss for the alignment model.
+    Multi-term loss for the two-level (W, G) alignment model.
 
-    Combines up to seven terms, each controlled by a scalar weight (lambda).
-    Setting a weight to 0 disables that term at no extra compute cost (except
-    soft_contingency, which is skipped entirely when its lambda is 0).
+    The model produces:
+        G (L x L) — Leiden-subcluster -> computed-state merge
+        W (S x L) — spot -> Leiden-subcluster deconvolution
+        P (S x L) — spot -> computed-state = W @ G
 
-    Active terms and their roles:
-        rec_spot          — spot-level cosine reconstruction
-        rec_gene          — gene-level cosine reconstruction
-        state_entropy     — minimize number of used cell-states
-        spot_entropy      — minimize uncertainty of per-spot state assignments
-        soft_contingency  — align model states with Leiden over-clustering
+    State gene-expression profiles are assembled from the FIXED, precomputed
+    per-Leiden-cluster expression sums P_sums (L x G_shared) and sizes n (L,):
+
+        M[k] = ( sum_l G[l,k] * P_sums[l] ) / ( sum_l G[l,k] * n_l )
+
+    Reconstructed spot expression is  Z' = P @ M. Because P = W @ G, the spot's
+    profile is built from the states its subclusters map to; merging subclusters
+    that spots need to keep apart therefore hurts reconstruction, which is what
+    lets the spatial data drive the merge G.
+
+    Terms (each with a scalar lambda):
+        rec_spot       — spot-level cosine reconstruction of Z' vs Z
+        rec_gene       — gene-level cosine reconstruction of Z' vs Z
+        state_entropy  — entropy of state-usage marginal (few states used -> merging)
+        spot_entropy   — mean row-entropy of P (each spot -> one state)
+        merge_entropy  — size-weighted mean row-entropy of G (each subcluster -> one state)
+        merge_coherence— penalizes co-assigning subclusters that are far apart in
+                         shared-gene expression (directs *which* subclusters merge)
     """
+
+    # Registered buffers (declared for type checkers; set via register_buffer).
+    P_sums: Tensor
+    n: Tensor
+    dist: Tensor
 
     def __init__(
         self,
-        lambda_rec_spot: float = 1.0,
-        lambda_rec_gene: float = 0.0,
-        lambda_state_entropy: float = 1.0,
-        lambda_spot_entropy: float = 1.0,
+        leiden_expr_sums: Tensor,  # (L x G_shared): summed shared-gene expression per cluster
+        leiden_sizes: Tensor,  # (L,): number of cells per Leiden cluster
+        leiden_dist: Tensor,  # (L x L): pairwise shared-gene distance between centroids
+        lambda_rec_spot: float = 0.5,
+        lambda_rec_gene: float = 0.5,
+        lambda_state_entropy: float = 0.1,
+        lambda_spot_entropy: float = 0.08,
+        lambda_merge_entropy: float = 1.0,
+        lambda_merge_coherence: float = 0.5,
         eps: float = 1e-8,
-        n_states: int = 1,
-        lambda_soft_contingency: float = 0.0,
-        leiden_labels: Tensor | None = None,
     ):
         """
         Args:
+            leiden_expr_sums:       Summed shared-gene expression per Leiden cluster (L x G_shared).
+            leiden_sizes:           Number of cells per Leiden cluster (L,).
+            leiden_dist:            Pairwise shared-gene distance between Leiden centroids (L x L).
             lambda_rec_spot:        Weight for spot-level reconstruction loss.
             lambda_rec_gene:        Weight for gene-level reconstruction loss.
-            lambda_state_entropy:   Weight for cell-state entropy loss.
+            lambda_state_entropy:   Weight for state-usage entropy loss.
             lambda_spot_entropy:    Weight for spot-state entropy loss.
+            lambda_merge_entropy:   Weight for Leiden-cluster merge entropy loss.
+            lambda_merge_coherence: Weight for the shared-gene merge coherence loss.
             eps:                    Numerical stability constant.
-            n_states:               Number of cell states (= #Leiden clusters); used to normalize entropy terms.
-            lambda_soft_contingency: Weight for soft contingency loss (0 disables it).
-            leiden_labels:          Integer tensor of shape (C,) with Leiden cluster IDs.
-                                    Required when lambda_soft_contingency > 0.
         """
         super(AIMLoss, self).__init__()
+        self.register_buffer("P_sums", leiden_expr_sums)  # (L x G_shared)
+        self.register_buffer("n", leiden_sizes.float())  # (L,)
+        self.register_buffer(
+            "dist", leiden_dist
+        )  # (L x L) shared-gene centroid distances
         self.lambda_rec_spot = lambda_rec_spot
         self.lambda_rec_gene = lambda_rec_gene
         self.lambda_state_entropy = lambda_state_entropy
         self.lambda_spot_entropy = lambda_spot_entropy
+        self.lambda_merge_entropy = lambda_merge_entropy
+        self.lambda_merge_coherence = lambda_merge_coherence
         self.eps = eps
-        self.lnK = torch.log(torch.tensor(n_states, dtype=torch.float32))
-        # Leiden over-clustering components for soft contingency (precomputed, fixed)
-        self.lambda_soft_contingency = lambda_soft_contingency
-        self.leiden_labels = leiden_labels  # integer (C,) or None
+        n_leiden = int(leiden_sizes.shape[0])
+        self.lnL = torch.log(torch.tensor(n_leiden, dtype=torch.float32))
         logger.debug("AIMLoss initialized")
 
-    def get_rec_spot_loss(
-        self, A: Tensor, B: Tensor, X_shared: Tensor, Z_shared: Tensor
-    ) -> Tensor:
+    def get_state_gep(self, G: Tensor) -> Tensor:
         """
-        Scale-invariant reconstruction loss (Z' vs Z on shared genes).
+        Assemble state gene-expression profiles M (L x G_shared) from the merge
+        matrix G and the fixed Leiden cluster sums/sizes.
+
+            M[k] = (sum_l G[l,k] P_sums[l]) / (sum_l G[l,k] n_l)
 
         Args:
-            A: Alignment matrix (S x C)
-            X_shared: scRNA-seq reference restricted to shared genes (C x G_shared)
-            Z_shared: Empirical HSO data restricted to shared genes (S x G_shared)
+            G: Leiden-subcluster -> computed-state matrix (L x L), rows sum to 1.
         """
-        # --- Safety Check ---
-        # Ensure that the number of genes (columns) matches
-        if X_shared.shape[1] != Z_shared.shape[1]:
-            raise ValueError(
-                f"Gene dimension mismatch! X has {X_shared.shape[1]} genes, "
-                f"but Z_marker has {Z_shared.shape[1]} genes."
-            )
+        weighted_sum = torch.matmul(G.t(), self.P_sums)  # (L x G_shared)
+        state_sizes = torch.matmul(G.t(), self.n)  # (L,)
+        return weighted_sum / (state_sizes.unsqueeze(1) + self.eps)
 
-        # 1. Create Z_prime (The augmented spot data reconstructed from the scRNA-seq reference)
-        C = torch.matmul(A, B)  # (S x K)
+    def _cosine_rec(self, Z_shared: Tensor, Z_prime: Tensor, dim: int) -> Tensor:
+        """
+        Scale-invariant cosine reconstruction loss along the given dimension.
 
-        # Compute B_normalized: Normalize B^T by the number of cells assigned to each state to prevent scale issues
-        B_normalized_sum_over_types_1 = B / (torch.sum(B, dim=0) + self.eps)  # (K x C)
+        dim=1 -> per spot (over genes); dim=0 -> per gene (over spots).
+        """
+        dot_product = torch.sum(Z_shared * Z_prime, dim=dim)
+        norm_Z = torch.norm(Z_shared, p=2, dim=dim)
+        norm_Z_prime = torch.norm(Z_prime, p=2, dim=dim)
 
-        M = torch.matmul(B_normalized_sum_over_types_1.t(), X_shared)  # (K x G_shared)
-        # M = torch.matmul(B.t(), X_shared)  # (K x G_shared)
-        Z_prime = torch.matmul(C, M)  # (S x G_shared)
-
-        # 2. Compute Cosine Similarity Components
-        # Dot product across the gene dimension for each spot
-        dot_product = torch.sum(Z_shared * Z_prime, dim=1)  # (S,)
-
-        # L2 Norms for each spot
-        norm_Z = torch.norm(Z_shared, p=2, dim=1)  # (S,)
-        norm_Z_prime = torch.norm(Z_prime, p=2, dim=1)  # (S,)
-
-        # 3. Calculate Scale-Invariant Loss
-        # We add eps to the denominator for numerical stability
         cosine_sim = dot_product / (norm_Z * norm_Z_prime + self.eps)
-
-        # Clip to range [-1, 1] to avoid nan due to float precision before distance calc
         cosine_sim = torch.clamp(cosine_sim, -1.0, 1.0)
 
-        # Distance = sqrt(1 - similarity)
-        # loss_per_spot = torch.sqrt(1.0 - cosine_sim)  # (S,)
-        # sic. mit sqrt gabs nan-probleme im traning mit den gradienten
-        loss_per_spot = torch.clamp(1.0 - cosine_sim, min=0.0)
+        # 1 - cos (not sqrt(1 - cos)); sqrt caused nan gradients in training
+        return torch.mean(torch.clamp(1.0 - cosine_sim, min=0.0))
 
-        return torch.mean(loss_per_spot)
-
-    def get_rec_gene_loss(
-        self, A: Tensor, B: Tensor, X_shared: Tensor, Z_shared: Tensor
-    ) -> Tensor:
+    def get_rec_spot_loss(self, P: Tensor, M: Tensor, Z_shared: Tensor) -> Tensor:
         """
-        Gene-wise scale-invariant reconstruction loss (Z' vs Z on shared genes).
+        Spot-level scale-invariant reconstruction loss (Z' vs Z on shared genes).
 
-        Equivalent to get_rec_spot_loss but the cosine similarity is computed
-        per gene (over the spots dimension) instead of per spot (over the genes
+        Args:
+            P: Spot -> computed-state matrix (S x L).
+            M: State gene expression profiles (L x G_shared).
+            Z_shared: ST data restricted to shared genes (S x G_shared).
+        """
+        Z_prime = torch.matmul(P, M)  # (S x G_shared)
+        return self._cosine_rec(Z_shared, Z_prime, dim=1)
+
+    def get_rec_gene_loss(self, P: Tensor, M: Tensor, Z_shared: Tensor) -> Tensor:
+        """
+        Gene-level scale-invariant reconstruction loss (Z' vs Z on shared genes).
+
+        Equivalent to get_rec_spot_loss but cosine similarity is computed per
+        gene (over the spot dimension) instead of per spot (over the genes
         dimension).
 
         Args:
-            A: Alignment matrix (S x C)
-            B: Cell-to-state matrix (C x K)
-            X_shared: scRNA-seq reference restricted to shared genes (C x G_shared)
-            Z_shared: Empirical ST data restricted to shared genes (S x G_shared)
+            P: Spot -> computed-state matrix (S x L).
+            M: State gene expression profiles (L x G_shared).
+            Z_shared: ST data restricted to shared genes (S x G_shared).
         """
-        # 1. Compute Z_prime (same as in get_rec_spot_loss)
-        C = torch.matmul(A, B)  # (S x K)
-        B_normalized = B / (torch.sum(B, dim=0) + self.eps)  # (C x K), col-normalised
-        M = torch.matmul(B_normalized.t(), X_shared)  # (K x G_shared)
-        Z_prime = torch.matmul(C, M)  # (S x G_shared)
+        Z_prime = torch.matmul(P, M)  # (S x G_shared)
+        return self._cosine_rec(Z_shared, Z_prime, dim=0)
 
-        # 2. Cosine similarity gene-wise: sum over spots (dim=0)
-        dot_product = torch.sum(Z_shared * Z_prime, dim=0)  # (G_shared,)
-        norm_Z = torch.norm(Z_shared, p=2, dim=0)  # (G_shared,)
-        norm_Z_prime = torch.norm(Z_prime, p=2, dim=0)  # (G_shared,)
-
-        cosine_sim = dot_product / (norm_Z * norm_Z_prime + self.eps)
-        cosine_sim = torch.clamp(cosine_sim, -1.0, 1.0)
-
-        loss_per_gene = torch.clamp(1.0 - cosine_sim, min=0.0)
-        return torch.mean(loss_per_gene)
-
-    def get_state_entropy_loss(self, B: Tensor) -> Tensor:
+    def get_state_entropy_loss(self, G: Tensor) -> Tensor:
         """
-        Cell state entropy loss.
-        Minimize number of used cell-states.
+        State-usage entropy loss. Minimize the number of used computed states.
+
+        The state-usage marginal is the fraction of cells assigned to each state
+        (via the size-weighted merge G). Low entropy -> few states used -> Leiden
+        clusters are merged together.
 
         Args:
-            B: Cell-State assignment matrix (C x K).
+            G: Leiden-subcluster -> computed-state matrix (L x L).
         """
-        # 1. Calculate p: The fraction of cells mapped to each state k
-        # p is the mean of B across the cell dimension (dim=0)
-        # Shape: (K,)
-        p = torch.mean(B, dim=0)
+        state_sizes = torch.matmul(G.t(), self.n)  # (L,)
+        p = state_sizes / (state_sizes.sum() + self.eps)  # (L,)
+        return -torch.sum(p * torch.log(p + self.eps)) / self.lnL
 
-        # 2. Compute Entropy: -sum(p * log(p + eps))
-        # eps is added for numerical stability to avoid log(0)
-        return -torch.sum(p * torch.log(p + self.eps))
-
-    def get_spot_entropy_loss(self, A: Tensor, B: Tensor) -> Tensor:
+    def get_spot_entropy_loss(self, P: Tensor) -> Tensor:
         """
-        Spot state entropy loss.
+        Spot-state entropy loss. Prioritize confident (near one-hot) per-spot
+        state assignments by minimizing the mean row-entropy of P.
 
-        Prioritize confident spot-to-cell-state assignments by minimizing
-        the entropy of the derived spot-state matrix C.
+        This is the term that, together with reconstruction, forces subclusters
+        that a spot co-uses to merge: for P = W @ G to concentrate on one state,
+        G must route those subclusters to the same state.
 
         Args:
-            A: Alignment matrix (S x C).
-            B: Cell-State assignment matrix (C x K).
+            P: Spot -> computed-state matrix (S x L).
         """
-        # 1. Compute C (S x K): Spot-to-State assignment matrix
-        C = torch.matmul(A, B)
+        spot_entropies = -torch.sum(P * torch.log(P + self.eps), dim=1)  # (S,)
+        return torch.mean(spot_entropies) / self.lnL
 
-        # 2. Compute Entropy per spot
-        # Formula: -sum_k(C_sk * log(C_sk + eps))
-        # We perform the sum across the state dimension (dim=1)
-        # Result shape: (S,)
-        spot_entropies = -torch.sum(C * torch.log(C + self.eps), dim=1)
-
-        # 3. Return the mean across all spots multiplied by lambda
-        return torch.mean(spot_entropies)
-
-    def get_soft_contingency_loss(self, B: Tensor) -> Tensor:
+    def get_merge_entropy_loss(self, G: Tensor) -> Tensor:
         """
-        Cluster-size-weighted entropy of the soft contingency matrix.
-
-        T[l, k] = sum_{c in Leiden cluster l} B[c, k]
-        For each Leiden cluster l, T[l,:] (row-normalized) should concentrate
-        on one state k. We minimie the cluster-size-weighted row entropy.
-        Entropy is normalized by log(K) so the value lies in [0, 1].
+        Cluster merge entropy loss. Push each Leiden subcluster to be assigned to
+        a single computed state by minimizing the cluster-size-weighted mean
+        row-entropy of G.
 
         Args:
-            B: Cell-to-state assignment matrix (C x K).
+            G: Leiden-subcluster -> computed-state matrix (L x L).
         """
-        # n_states == n_leiden_clusters by construction → T is square
-        K = B.shape[1]
+        row_entropies = -torch.sum(G * torch.log(G + self.eps), dim=1)  # (L,)
+        weights = self.n / (self.n.sum() + self.eps)  # (L,)
+        return torch.sum(weights * row_entropies) / self.lnL
 
-        # Soft contingency matrix (K x K) via scatter_add — no one-hot matrix needed
-        T = torch.zeros(K, K, device=B.device)
-        assert self.leiden_labels is not None
-        idx = self.leiden_labels.to(B.device).unsqueeze(1).expand(-1, K)  # (C x K)
-        T.scatter_add_(0, idx, B)
+    def get_merge_coherence_loss(self, G: Tensor) -> Tensor:
+        """
+        Shared-gene merge coherence loss. Penalizes co-assigning subclusters that
+        are far apart in shared-gene expression, so merges prefer subclusters the
+        spatial (shared-gene) view cannot tell apart.
 
-        # Cluster sizes: B rows sum to 1, so T[l,:].sum() = n_cells in cluster l
-        sizes = T.sum(dim=1)  # (K,)
-        weights = sizes / (
-            sizes.sum() + self.eps
-        )  # (L,) normalised cluster-size weights
+        S = G @ G^T is the soft co-assignment matrix (S[l1,l2] = probability l1
+        and l2 share a state); dist is the fixed pairwise shared-gene centroid
+        distance. The loss is their inner product, normalised by the number of
+        subclusters. It does not drive merging itself (its own minimum is no
+        co-assignment) — state_entropy drives merging, this term directs it.
 
-        # Row-normalise T → state probability distribution per Leiden cluster
-        T_norm = T / (sizes.unsqueeze(1) + self.eps)  # (L x K)
-
-        # Per-row entropy, normalised by log(K) → range [0, 1]
-        H = -(T_norm * torch.log(T_norm + self.eps)).sum(dim=1)  # (L,)
-        H = H / torch.log(torch.tensor(K, dtype=torch.float32, device=B.device))
-
-        return (weights * H).sum()
+        Args:
+            G: Leiden-subcluster -> computed-state matrix (L x L).
+        """
+        S = torch.matmul(G, G.t())  # (L x L) co-assignment; diagonal is free (dist=0)
+        return (self.dist * S).sum() / self.dist.shape[0]
 
     def forward(
         self,
-        A: Tensor,
-        B: Tensor,
-        X_shared: Tensor,
+        G: Tensor,
+        P: Tensor,
         Z_shared: Tensor,
     ) -> dict[str, Tensor]:
         """
         Args:
-            A: Spot-to-cell mapping (S × C), rows sum to 1.
-            B: Cell-to-state mapping (C × K), rows sum to 1.
-            X_shared: scRNA-seq reference restricted to shared genes (C × G_shared).
-            Z_shared: ST data restricted to shared genes (S × G_shared).
+            G: Leiden-subcluster -> computed-state mapping (L x L), rows sum to 1.
+            P: Spot -> computed-state mapping (S x L) = W @ G, rows sum to 1.
+            Z_shared: ST data restricted to shared genes (S x G_shared).
 
         Returns:
             Dict with keys:
-                "loss"             — weighted total loss (scalar, use for backward).
-                "rec_spot"         — unweighted spot reconstruction term.
-                "rec_gene"         — unweighted gene reconstruction term.
-                "state_entropy"    — unweighted state entropy term (normalised by log K).
-                "spot_entropy"     — unweighted spot entropy term (normalised by log K).
-                "soft_contingency" — unweighted soft contingency term (0 if disabled).
+                "loss"          — weighted total loss (scalar, use for backward).
+                "rec_spot"      — unweighted spot reconstruction term.
+                "rec_gene"      — unweighted gene reconstruction term.
+                "state_entropy" — unweighted state-usage entropy (normalised by log L).
+                "spot_entropy"  — unweighted spot entropy (normalised by log L).
+                "merge_entropy" — unweighted cluster merge entropy (normalised by log L).
+                "merge_coherence" — unweighted shared-gene merge coherence term.
         """
-        # 1. Individual terms (unweighted)
-        l_rec_spot = self.get_rec_spot_loss(A, B, X_shared, Z_shared)
-        l_rec_gene = self.get_rec_gene_loss(A, B, X_shared, Z_shared)
-        l_state_entropy = self.get_state_entropy_loss(B)
-        l_spot_entropy = self.get_spot_entropy_loss(A, B)
-        l_soft_contingency = (
-            self.get_soft_contingency_loss(B)
-            if self.lambda_soft_contingency > 0.0 and self.leiden_labels is not None
-            else B.sum() * 0.0
-        )
+        M = self.get_state_gep(G)
 
-        # Normalize l_state_entropy and l_spot_entropy by their maximum possible values to keep them in a comparable range
-        # Max entropy for both is log(K)
-        l_state_entropy /= self.lnK
-        l_spot_entropy /= self.lnK
+        l_rec_spot = self.get_rec_spot_loss(P, M, Z_shared)
+        l_rec_gene = self.get_rec_gene_loss(P, M, Z_shared)
+        l_state_entropy = self.get_state_entropy_loss(G)
+        l_spot_entropy = self.get_spot_entropy_loss(P)
+        l_merge_entropy = self.get_merge_entropy_loss(G)
+        l_merge_coherence = self.get_merge_coherence_loss(G)
 
-        # Weighted total
         total_loss = (
             self.lambda_rec_spot * l_rec_spot
             + self.lambda_rec_gene * l_rec_gene
             + self.lambda_state_entropy * l_state_entropy
             + self.lambda_spot_entropy * l_spot_entropy
-            + self.lambda_soft_contingency * l_soft_contingency
+            + self.lambda_merge_entropy * l_merge_entropy
+            + self.lambda_merge_coherence * l_merge_coherence
         )
 
         return {
@@ -271,5 +248,6 @@ class AIMLoss(nn.Module):
             "rec_gene": l_rec_gene,
             "state_entropy": l_state_entropy,
             "spot_entropy": l_spot_entropy,
-            "soft_contingency": l_soft_contingency,
+            "merge_entropy": l_merge_entropy,
+            "merge_coherence": l_merge_coherence,
         }
