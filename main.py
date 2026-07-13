@@ -475,8 +475,8 @@ def aim_compute_mapping(
 
 
 def compute_gene_expression_prediction(
-    spot_to_state: torch.Tensor,
-    merge: torch.Tensor,
+    G: torch.Tensor,
+    W: torch.Tensor,
     expr_sums_full: torch.Tensor,
     leiden_sizes: torch.Tensor,
     adata_sc: AnnData,
@@ -496,8 +496,8 @@ def compute_gene_expression_prediction(
     so each Leiden cluster maps to one state and each spot maps to one state.
 
     Args:
-        spot_to_state:   P — soft spot-to-state matrix (S x L), rows sum to 1.
-        merge:           G — soft Leiden-to-state matrix (L x L), rows sum to 1.
+        G:               soft Leiden-to-state matrix (L x L), rows sum to 1.
+        W:               soft Leiden-to-state matrix (S x L), rows sum to 1.
         expr_sums_full:  Summed full-gene expression per Leiden cluster (L x G_sc).
         leiden_sizes:    Number of cells per Leiden cluster (L,).
         adata_sc:        scRNA-seq reference (C x G_sc), used for gene ids only.
@@ -510,14 +510,25 @@ def compute_gene_expression_prediction(
         obs_names = gene symbols, var_names = spot IDs.
     """
     if deterministic_mapping:
-        G_use = row_one_hot(merge)
-        C = row_one_hot(spot_to_state)
-    else:
-        G_use = merge
-        C = spot_to_state
+        G = row_one_hot(G)
+        # C = row_one_hot(spot_to_state)
+        spot_to_state = torch.matmul(W, G)  # S x L
 
-    M = assemble_state_gep(G_use, expr_sums_full, leiden_sizes)  # (L x G_sc)
-    predicted_spot_expressions = torch.matmul(C, M)  # (S x G_sc)
+        P_csv = spot_to_state.detach().cpu().numpy()
+        P_csv[P_csv < 0.01] = 0.0
+        pd.DataFrame(
+            P_csv.round(4),
+        ).to_csv(
+            "./P_matrix_det.csv"
+        )  # spot -> state
+
+        spot_to_state = row_one_hot(spot_to_state)
+
+    else:
+        spot_to_state = torch.matmul(W, G)  # S x L
+
+    M = assemble_state_gep(G, expr_sums_full, leiden_sizes)  # (L x G_sc)
+    predicted_spot_expressions = torch.matmul(spot_to_state, M)  # (S x G_sc)
 
     # Transpose to G x S
     predicted_spot_expressions = predicted_spot_expressions.T  # now G x S
@@ -625,8 +636,8 @@ def main(
 
     # Compute and save probabilistic GEP
     adata_prediction_prob = compute_gene_expression_prediction(
-        P,
         G,
+        W,
         expr_sums_full,
         leiden_sizes,
         adata_sc,
@@ -651,8 +662,8 @@ def main(
     # Compute and save deterministic GEP
     logger.info("Apply deterministic mapping & compute prediction")
     adata_prediction_det = compute_gene_expression_prediction(
-        P,
         G,
+        W,
         expr_sums_full,
         leiden_sizes,
         adata_sc,
