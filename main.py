@@ -86,6 +86,14 @@ def row_one_hot(mat: torch.Tensor) -> torch.Tensor:
     return one_hot
 
 
+def col_one_hot(mat: torch.Tensor) -> torch.Tensor:
+    """Return a col-wise one-hot version of mat (argmax per col -> 1, else 0)."""
+    idx = torch.argmax(mat, dim=0, keepdim=True)
+    one_hot = torch.zeros_like(mat)
+    one_hot.scatter_(0, idx, 1.0)
+    return one_hot
+
+
 def aim_compute_mapping(
     adata_sc: AnnData,
     adata_st: AnnData,
@@ -180,10 +188,10 @@ def aim_compute_mapping(
     num_cells, g_sc = X.shape
     num_genes_shared = X_shared.shape[1]
     logger.debug(f"ST dimensions: num_spots={num_spots}, g_st={g_st}")
-    logger.debug(f"scRNA dimensions: num_cells={num_cells}, g_sc={g_sc}")
-    logger.debug(f"Number of genes shared: {num_genes_shared}")
-
-    # Fixed Leiden aggregates: expression sums per cluster (shared + full genes)
+    #     logger.debug(f"scRNA dimensions: num_cells={num_cells}, g_sc={g_sc}")
+    #     logger.debug(f"Number of genes shared: {num_genes_shared}")
+    #
+    #     # Fixed Leiden aggregates: expression sums per cluster (shared + full genes)
     # and cluster sizes. The shared-gene sums drive reconstruction; the full-gene
     # sums are used later to impute the complete predicted GEP.
     expr_sums_shared, leiden_sizes = leiden_aggregates(

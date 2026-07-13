@@ -13,6 +13,7 @@ The .typ source file is kept alongside the PDF for debugging.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import typst
 from datetime import date
@@ -395,17 +396,38 @@ _SUMMARY_ROW_LABELS = {
     "modularity__computed": "Modularity",
     "modularity_shared__computed": "Modularity (shared genes)",
     "contingency_score": "Contingency",
-    "median_cossim_gene": "Cossim (genewise)",
-    "median_cossim_spot": "Cossim (spotwise)",
+    "median_cossim_gene": "Cossim (genewise) prob/det",
+    "median_cossim_spot": "Cossim (spotwise) prob/det",
 }
 _SUMMARY_MIN_BOLD_ROWS = {"per_state_perm_p", "Substate p-value"}
 
+# Cossim rows: their CSV value is the probabilistic mapping median; the matching
+# deterministic median is read from the per-run metrics JSON and shown as prob/det.
+_SUMMARY_COSSIM_DET_JSON = {
+    "median_cossim_gene": "cossim-per-gene-det.json",
+    "median_cossim_spot": "cossim-per-spot-det.json",
+}
 
-def _overview_table(overview_csv: Path) -> str:
+
+def _read_det_median(pair_dir: Path, run_id: str, json_name: str) -> float | None:
+    """Read the median from a deterministic cossim JSON for one run, or None."""
+    json_path = pair_dir / str(run_id) / "metrics" / json_name
+    if not json_path.exists():
+        return None
+    try:
+        with open(json_path, encoding="utf-8") as fh:
+            return float(json.load(fh)["median"])
+    except (ValueError, KeyError, TypeError, OSError):
+        return None
+
+
+def _overview_table(overview_csv: Path, pair_dir: Path) -> str:
     """
     Typst table for analysis_overview.csv with:
       - Integer rows (K, Computed States, …) printed without decimals
       - All metric rows: maximum value per row printed bold
+      - Cossim rows: rendered as ``prob/det`` (probabilistic median from the CSV,
+        deterministic median read from each run's metrics JSON)
     """
     with open(overview_csv, newline="", encoding="utf-8") as fh:
         rows = list(csv.reader(fh))
@@ -414,6 +436,7 @@ def _overview_table(overview_csv: Path) -> str:
 
     header = rows[0]
     n = len(header)
+    run_ids = header[1:]
     data_rows = [r for r in rows[1:] if r]
 
     lines = [
@@ -430,6 +453,7 @@ def _overview_table(overview_csv: Path) -> str:
         label = _SUMMARY_ROW_LABELS.get(metric, metric)
         values = row[1:] if len(row) > 1 else []
         is_int_row = metric in _SUMMARY_INT_ROWS
+        det_json = _SUMMARY_COSSIM_DET_JSON.get(metric)
 
         bold_idx = -1
         if not is_int_row and values:
@@ -449,6 +473,11 @@ def _overview_table(overview_csv: Path) -> str:
                     text = str(int(float(v)))
                 except (ValueError, TypeError):
                     text = _esc(v)
+            elif det_json is not None:
+                run_id = run_ids[i] if i < len(run_ids) else ""
+                det = _read_det_median(pair_dir, run_id, det_json)
+                det_text = _fmt(str(det)) if det is not None else "–"
+                text = f"{_fmt(v)}/{det_text}"
             else:
                 text = _fmt(v)
             cells.append(f"[*{text}*]" if i == bold_idx else f"[{text}]")
@@ -515,7 +544,7 @@ def generate_summary_report(pair_dir: Path) -> Path | None:
 = Overview: All Runs
 
 #set text(size: 8.5pt)
-{_overview_table(overview)}
+{_overview_table(overview, pair_dir)}
 #set text(size: 11pt)
 {umap_section}
 """

@@ -4,19 +4,25 @@ epochs:
   - 1000
 normalize_and_log:
   - false
+#  - true
 reference_leiden_clustering_resolution:
   - 3.0
 loss_weights:
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.4
+    lambda_state_entropy: 2.0
     lambda_spot_entropy: 0.5
-    lambda_merge_entropy: 0.5
-    lambda_merge_coherence: 0.2
-  - lambda_rec_spot: 0.5
-    lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.4
-    lambda_spot_entropy: 0.5
-    lambda_merge_entropy: 0.5
-    lambda_merge_coherence: 0.1
-
+    lambda_merge_entropy: 0.0
+    lambda_merge_coherence: 0.25
+#  - lambda_rec_spot: 0.5
+#    lambda_rec_gene: 0.5
+#    lambda_state_entropy: 0.5
+#    lambda_spot_entropy: 0.5
+#    lambda_merge_entropy: 0.0
+#    lambda_merge_coherence: 0.25
+#  - lambda_rec_spot: 0.5
+#    lambda_rec_gene: 0.5
+#    lambda_state_entropy: 1.0
+#    lambda_spot_entropy: 0.5
+#    lambda_merge_entropy: 0.0
+#    lambda_merge_coherence: 0.25
