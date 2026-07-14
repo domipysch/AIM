@@ -1,5 +1,4 @@
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -16,14 +15,11 @@ from utils import (
     create_loss_plots,
     dump_loss_logs,
     estimate_gpu_memory_gb,
-    arr_to_h5ad,
 )
 from model import AIMModel
 from loss import AIMLoss
 from dataset import prepare_tensors_from_input
 from evaluate_k.clustering import run_leiden_clustering
-from evaluate_k.analysis import run_analysis
-from evaluate_k.report import generate_per_k_report
 
 logger = logging.getLogger(__name__)
 
@@ -51,66 +47,12 @@ def leiden_aggregates(
     return expr_sums, sizes
 
 
-def assemble_state_gep(
-    G: torch.Tensor,
-    expr_sums: torch.Tensor,
-    sizes: torch.Tensor,
-    l2_normalize: bool = False,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    """
-    Assemble computed-state gene expression profiles from the merge matrix.
-
-        M[k] = (sum_l G[l,k] * expr_sums[l]) / (sum_l G[l,k] * sizes[l])
-
-    i.e. each state centroid is the cell-count-weighted mean of the Leiden
-    centroids merged into it.
-
-    Args:
-        G:          Leiden-cluster -> computed-state matrix (L x L).
-        expr_sums:  Summed expression per Leiden cluster (L x G).
-        sizes:      Number of cells per Leiden cluster (L,).
-        l2_normalize: If True, L2-normalize each state profile row to unit norm.
-                    Makes every state contribute to the P·M reconstruction in
-                    proportion to its probability weight rather than its raw
-                    expression magnitude (closes the prob→det cosine gap that the
-                    ‖M_k‖ heterogeneity otherwise causes in linear space).
-
-    Returns:
-        M: State gene expression profiles (L x G).
-    """
-    weighted_sum = torch.matmul(G.t(), expr_sums)  # (L x G)
-    state_sizes = torch.matmul(G.t(), sizes)  # (L,)
-    M = weighted_sum / (state_sizes.unsqueeze(1) + eps)
-    if l2_normalize:
-        M = M / (torch.norm(M, p=2, dim=1, keepdim=True) + eps)
-    return M
-
-
-def row_one_hot(mat: torch.Tensor) -> torch.Tensor:
-    """Return a row-wise one-hot version of mat (argmax per row -> 1, else 0)."""
-    idx = torch.argmax(mat, dim=1, keepdim=True)
-    one_hot = torch.zeros_like(mat)
-    one_hot.scatter_(1, idx, 1.0)
-    return one_hot
-
-
-def col_one_hot(mat: torch.Tensor) -> torch.Tensor:
-    """Return a col-wise one-hot version of mat (argmax per col -> 1, else 0)."""
-    idx = torch.argmax(mat, dim=0, keepdim=True)
-    one_hot = torch.zeros_like(mat)
-    one_hot.scatter_(0, idx, 1.0)
-    return one_hot
-
-
 def aim_compute_mapping(
     adata_sc: AnnData,
     adata_st: AnnData,
-    output_folder: Path,
     lr: float,
     epochs: int,
     normalize_and_log: bool,
-    log_transform: bool,
     leiden_resolution: float,
     lambda_rec_spot: float,
     lambda_rec_gene: float,
@@ -120,14 +62,10 @@ def aim_compute_mapping(
     lambda_merge_entropy: float,
     lambda_merge_gini: float,
     lambda_merge_coherence: float,
-    l2_normalize_profiles: bool,
     verbose_logging: bool,
     device: torch.device,
-    save_intermediate: bool = False,
     gpu_limit_gb: int = 6,
 ) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
     torch.Tensor,
     torch.Tensor,
     torch.Tensor,
@@ -147,28 +85,11 @@ def aim_compute_mapping(
         G (L x L) — Leiden-subcluster -> computed-state merge
     and their product P = W @ G (S x L) is the spot -> computed-state assignment.
 
-    When save_intermediate=True, the following are written to output_folder/intermediate/:
-        G.csv / W.csv / P.csv         — merge / spot-subcluster / spot-state matrices (< 0.01 zeroed)
-        G_merge.h5ad                  — learned Leiden-subcluster -> state merge matrix (L x L)
-        leiden_to_state.csv           — per-cluster dominant state, confidence, size
-        B_thresh.h5ad                 — thresholded cell->state soft assignment (entries < 0.1 -> 0)
-        M_normalized.h5ad             — state gene expression profiles (L x G_sc)
-        cell_states_gep.h5ad          — GEPs for used states only
-        p.h5ad / q.h5ad               — mean cell / spot state usage vectors
-        cell_state_usage.json         — indices of states with non-zero usage
-
-    Here B (cell -> state, C x L) is the materialized factorization
-    B = S_leiden @ G. B_thresh is kept because the grid-search analysis flow reads
-    it. The spot->state matrix C = P is NOT saved here — it is mapping_prob.h5ad
-    transposed (S x L vs L x S).
-
     Returns:
         G:              Leiden-subcluster to computed-state matrix (L x L), rows sum to 1.
         W:              Spot to Leiden-subcluster matrix (S x L), rows sum to 1.
         P:              Spot to computed-state matrix = W @ G (S x L), rows sum to 1.
         leiden_labels:  Leiden cluster id per cell (C,), integer.
-        expr_sums_full: Summed full-gene expression per Leiden cluster (L x G_sc).
-        leiden_sizes:   Number of cells per Leiden cluster (L,).
         losses:         Dict of per-epoch loss values for each component.
     """
 
@@ -185,35 +106,28 @@ def aim_compute_mapping(
     if normalize_and_log:
         sc.pp.normalize_total(adata_sc)
         sc.pp.normalize_total(adata_st)
-        if log_transform:
-            logger.info("Normalize (total) & log1p gene expression and spatial data")
-            sc.pp.log1p(adata_sc)
-            sc.pp.log1p(adata_st)
-        else:
-            logger.info("Normalize (total) only — skipping log1p")
+        sc.pp.log1p(adata_sc)
+        sc.pp.log1p(adata_st)
     else:
         logger.info("Skipping normalize_and_log")
 
-    # Convert input anndata to tensors
+    # Convert input anndata to tensors (shared genes only — the full, non-shared
+    # matrices are never needed by the model, so they are not materialized).
     logger.debug("Prepare input tensors for model...")
-    X, Z, X_shared, Z_shared = prepare_tensors_from_input(adata_sc, adata_st, device)
+    X_shared, Z_shared = prepare_tensors_from_input(adata_sc, adata_st, device)
     logger.info("Prepared input tensors for model.")
     logger.info(f"Shared genes between scRNA and ST: {X_shared.shape[1]}")
 
-    num_spots, g_st = Z.shape
-    num_cells, g_sc = X.shape
+    num_spots, g_st = adata_st.n_obs, adata_st.n_vars
+    num_cells, g_sc = adata_sc.n_obs, adata_sc.n_vars
     num_genes_shared = X_shared.shape[1]
     logger.debug(f"ST dimensions: num_spots={num_spots}, g_st={g_st}")
-    #     logger.debug(f"scRNA dimensions: num_cells={num_cells}, g_sc={g_sc}")
-    #     logger.debug(f"Number of genes shared: {num_genes_shared}")
-    #
-    #     # Fixed Leiden aggregates: expression sums per cluster (shared + full genes)
-    # and cluster sizes. The shared-gene sums drive reconstruction; the full-gene
-    # sums are used later to impute the complete predicted GEP.
+
+    # Fixed Leiden aggregates: shared-gene expression sums per cluster and cluster
+    # sizes. These drive the reconstruction loss and the merge-coherence distance.
     expr_sums_shared, leiden_sizes = leiden_aggregates(
         X_shared, leiden_labels, leiden_n_clusters
     )
-    expr_sums_full, _ = leiden_aggregates(X, leiden_labels, leiden_n_clusters)
 
     # Pairwise shared-gene cosine distance between Leiden centroids (fixed).
     # Drives the merge-coherence loss: subclusters close here are hard to tell
@@ -232,8 +146,6 @@ def aim_compute_mapping(
     estimated_gb = estimate_gpu_memory_gb(
         num_cells=num_cells,
         num_spots=num_spots,
-        g_sc=g_sc,
-        g_st=g_st,
         num_genes_shared=num_genes_shared,
         n_states=L,
     )
@@ -263,7 +175,6 @@ def aim_compute_mapping(
         lambda_merge_entropy=lambda_merge_entropy,
         lambda_merge_gini=lambda_merge_gini,
         lambda_merge_coherence=lambda_merge_coherence,
-        l2_normalize_profiles=l2_normalize_profiles,
     ).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -359,225 +270,8 @@ def aim_compute_mapping(
     with torch.no_grad():
         G, W, P = model()
 
-    if save_intermediate:
-        logger.info("Saving intermediate results...")
-        folder_intermediate = output_folder / "intermediate"
-        folder_intermediate.mkdir(parents=True, exist_ok=True)
-
-        state_names = [f"state_{i}" for i in range(L)]
-        leiden_names = [f"leiden_{i}" for i in range(L)]
-
-        # Raw learned matrices as CSV for quick inspection: values < 0.01 zeroed,
-        # then rounded to 4 dp.
-        G_csv = G.detach().cpu().numpy()
-        G_csv[G_csv < 0.01] = 0.0
-        pd.DataFrame(G_csv.round(4), index=leiden_names, columns=state_names).to_csv(
-            folder_intermediate / "G.csv"  # subcluster -> state
-        )
-        W_csv = W.detach().cpu().numpy()
-        W_csv[W_csv < 0.01] = 0.0
-        pd.DataFrame(
-            W_csv.round(4), index=adata_st.obs_names.tolist(), columns=leiden_names
-        ).to_csv(
-            folder_intermediate / "W.csv"
-        )  # spot -> subcluster
-        P_csv = P.detach().cpu().numpy()
-        P_csv[P_csv < 0.01] = 0.0
-        pd.DataFrame(
-            P_csv.round(4), index=adata_st.obs_names.tolist(), columns=state_names
-        ).to_csv(
-            folder_intermediate / "P_matrix.csv"
-        )  # spot -> state
-
-        # Materialized cell->state B = S_leiden @ G (C x L). The spot->state
-        # matrix is P = W @ G (S x L).
-        B = G[leiden_labels]  # (C x L)
-
-        B_thresh = B.detach().cpu().clone()
-        B_thresh[B_thresh < 0.1] = 0.0
-        arr_to_h5ad(
-            B_thresh.numpy(),
-            folder_intermediate / "B_thresh.h5ad",
-            obs_names=adata_sc.obs_names.tolist(),
-            var_names=state_names,
-        )
-
-        # Spot->state P is not written as h5ad here: it equals mapping_prob.h5ad
-        # transposed (S x L vs L x S). Kept in-memory only for the usage report.
-        C_thresh = P.detach().cpu().clone()
-        C_thresh[C_thresh < 0.1] = 0.0
-
-        B_used_mask = B_thresh.sum(dim=0) > 0
-        C_used_mask = C_thresh.sum(dim=0) > 0
-        state_usage = {
-            "B_used_count": int(B_used_mask.sum().item()),
-            "B_used_indices": B_used_mask.nonzero(as_tuple=False).squeeze(1).tolist(),
-            "C_used_count": int(C_used_mask.sum().item()),
-            "C_used_indices": C_used_mask.nonzero(as_tuple=False).squeeze(1).tolist(),
-        }
-        with open(folder_intermediate / "cell_state_usage.json", "w") as f:
-            json.dump(state_usage, f, indent=2)
-
-        # Spots should only use states that cells populate; warn (do not crash a
-        # completed run) if a spot maps to an empty state.
-        if not set(state_usage["C_used_indices"]).issubset(
-            set(state_usage["B_used_indices"])
-        ):
-            logger.warning(
-                "C_used_indices is not a subset of B_used_indices: "
-                f"C={state_usage['C_used_indices']}, B={state_usage['B_used_indices']}"
-            )
-
-        p = torch.mean(B, dim=0)
-        p_np = p.detach().cpu().numpy()
-        pd.DataFrame(p_np.round(2)).to_csv(folder_intermediate / "p.csv", index=False)
-        arr_to_h5ad(
-            p_np.reshape(1, -1),
-            folder_intermediate / "p.h5ad",
-            obs_names=["mean_cell_state_usage"],
-            var_names=state_names,
-        )
-
-        q = torch.mean(P, dim=0)
-        q_np = q.detach().cpu().numpy()
-        pd.DataFrame(q_np.round(2)).to_csv(folder_intermediate / "q.csv", index=False)
-        arr_to_h5ad(
-            q_np.reshape(1, -1),
-            folder_intermediate / "q.h5ad",
-            obs_names=["mean_spot_state_usage"],
-            var_names=state_names,
-        )
-
-        # State gene expression profiles (full genes)
-        M = assemble_state_gep(
-            G, expr_sums_full, leiden_sizes, l2_normalize=l2_normalize_profiles
-        )
-        M_np = M.detach().cpu().numpy()
-        arr_to_h5ad(
-            M_np,
-            folder_intermediate / "M_normalized.h5ad",
-            obs_names=state_names,
-            var_names=adata_sc.var_names.tolist(),
-        )
-
-        c_used_idx = state_usage["C_used_indices"]
-        cell_states = M_np[c_used_idx, :]
-        arr_to_h5ad(
-            cell_states,
-            folder_intermediate / "cell_states_gep.h5ad",
-            obs_names=[f"state_{i}" for i in c_used_idx],
-            var_names=adata_sc.var_names.tolist(),
-        )
-
-        # G: Leiden-cluster -> computed-state merge matrix (L x L). This is the
-        # actual learned reference-side object; B above is just its cell-expanded
-        # view (B = G[leiden_labels]).
-        leiden_names = [f"leiden_{i}" for i in range(L)]
-        G_np = G.detach().cpu().numpy()
-        arr_to_h5ad(
-            G_np,
-            folder_intermediate / "G_merge.h5ad",
-            obs_names=leiden_names,
-            var_names=state_names,
-        )
-
-        # Compact merge map: each Leiden cluster's dominant state, the weight on
-        # it (confidence — 1.0 means a perfectly one-hot / sharp merge row), and
-        # the cluster size. Handy for spotting diffuse (unsharpened) rows.
-        merge_state = G_np.argmax(axis=1)
-        merge_confidence = G_np.max(axis=1)
-        pd.DataFrame(
-            {
-                "leiden_cluster": list(range(L)),
-                "n_cells": leiden_sizes.detach().cpu().numpy().astype(int),
-                "state": merge_state,
-                "confidence": merge_confidence.round(3),
-            }
-        ).to_csv(folder_intermediate / "leiden_to_state.csv", index=False)
-
     logger.info("Alignment complete.")
-    return G, W, P, leiden_labels, expr_sums_full, leiden_sizes, losses
-
-
-def compute_gene_expression_prediction(
-    G: torch.Tensor,
-    W: torch.Tensor,
-    expr_sums_full: torch.Tensor,
-    leiden_sizes: torch.Tensor,
-    adata_sc: AnnData,
-    adata_st: AnnData,
-    deterministic_mapping: bool,
-    torch_device: torch.device,
-    l2_normalize_profiles: bool = False,
-) -> AnnData:
-    """
-    Predict spot-level gene expression from the learned mapping.
-
-    Computes Z' = C @ M, where C is the spot->state matrix P and M is the
-    computed-state gene expression profile assembled from the merge matrix G
-    and the fixed full-gene Leiden aggregates.
-
-    In deterministic mode, both G (Leiden->state) and P (spot->state) are
-    replaced by their row-wise argmax (one-hot) before computing the prediction,
-    so each Leiden cluster maps to one state and each spot maps to one state.
-
-    Args:
-        G:               soft Leiden-to-state matrix (L x L), rows sum to 1.
-        W:               soft Leiden-to-state matrix (S x L), rows sum to 1.
-        expr_sums_full:  Summed full-gene expression per Leiden cluster (L x G_sc).
-        leiden_sizes:    Number of cells per Leiden cluster (L,).
-        adata_sc:        scRNA-seq reference (C x G_sc), used for gene ids only.
-        adata_st:        Spatial transcriptomics data (S x G_st), used for spot ids only.
-        deterministic_mapping: If True, hard-assign G and P before predicting.
-        torch_device:    Device for intermediate tensor computation.
-
-    Returns:
-        AnnData of shape (G_sc x S): predicted expression matrix,
-        obs_names = gene symbols, var_names = spot IDs.
-    """
-    if deterministic_mapping:
-        G = row_one_hot(G)
-        # C = row_one_hot(spot_to_state)
-        spot_to_state = torch.matmul(W, G)  # S x L
-
-        # P_csv = spot_to_state.detach().cpu().numpy()
-        # P_csv[P_csv < 0.01] = 0.0
-        # pd.DataFrame(
-        #     P_csv.round(4),
-        # ).to_csv(
-        #     "./P_matrix_det.csv"
-        # )  # spot -> state
-
-        spot_to_state = row_one_hot(spot_to_state)
-
-    else:
-        spot_to_state = torch.matmul(W, G)  # S x L
-
-    M = assemble_state_gep(G, expr_sums_full, leiden_sizes)  # (L x G_sc)
-    if l2_normalize_profiles:
-        # Normalize each state profile by its L2 norm over the SHARED genes — the
-        # space the reconstruction is supervised and evaluated on, matching the
-        # loss (whose M is shared-gene only). Normalizing over all sc genes instead
-        # leaves the shared-gene slice non-unit and only partly closes the gap.
-        shared = adata_sc.var_names.isin(set(adata_st.var_names))  # (G_sc,) bool
-        shared_t = torch.as_tensor(shared, device=M.device)
-        norms = torch.norm(M[:, shared_t], p=2, dim=1, keepdim=True)  # (L, 1)
-        M = M / (norms + 1e-8)
-    predicted_spot_expressions = torch.matmul(spot_to_state, M)  # (S x G_sc)
-
-    # Transpose to G x S
-    predicted_spot_expressions = predicted_spot_expressions.T  # now G x S
-    assert predicted_spot_expressions.shape == (
-        adata_sc.n_vars,
-        adata_st.n_obs,
-    ), "dims passen nicht"
-
-    # Create AnnData object for predicted spot expressions
-    adata_result = AnnData(X=predicted_spot_expressions.detach().cpu().numpy())
-    adata_result.obs_names = adata_sc.var_names
-    adata_result.var_names = adata_st.obs_names
-
-    return adata_result
+    return G, W, P, leiden_labels, losses
 
 
 def main(
@@ -587,7 +281,6 @@ def main(
     lr: float = 0.008,
     epochs: int = 1000,
     normalize_and_log: bool = False,
-    log_transform: bool = True,
     leiden_resolution: float = 3.0,
     lambda_rec_spot: float = 0.5,
     lambda_rec_gene: float = 0.5,
@@ -597,29 +290,25 @@ def main(
     lambda_merge_entropy: float = 0.0,
     lambda_merge_gini: float = 1.0,
     lambda_merge_coherence: float = 0.5,
-    l2_normalize_profiles: bool = False,
-    store_intermediate: bool = False,
-    skip_analysis: bool = False,
     verbose_logging: bool = False,
     gpu_limit_gb: int = 6,
-) -> tuple[AnnData, AnnData, AnnData, dict]:
+):
     """
-    Load data, run mapping, compute both probabilistic and deterministic GEPs,
-    and write all outputs to output_folder.
+    Load data, run mapping, and write all outputs to output_folder.
+
+    Post-mapping analysis is decoupled from this runner — it is not computed
+    here. Once these outputs are written, run it separately via
+    evaluate_k.run_from_output (reads the files below from disk).
 
     Outputs written:
-        gep_prob.h5ad      — probabilistic predicted GEP (G x S)
-        gep_det.h5ad       — deterministic predicted GEP (G x S)
-        mapping_prob.h5ad  — soft spot-to-state map (L x S)
-        mapping_det.h5ad   — hard spot-to-state map (L x S, one-hot columns)
-        loss/              — per-epoch loss curves and final values CSV
-        intermediate/      — B, C, M matrices (only when store_intermediate=True)
-
-    Returns:
-        gep_prob:                Probabilistic GEP AnnData (G x S).
-        gep_det:                 Deterministic GEP AnnData (G x S).
-        cell_to_cell_type_adata: Cell-to-state assignment matrix as AnnData (C x L).
-        losses_after_last_epoch: Dict of final loss component values.
+        mapping_prob.h5ad      — soft spot-to-state map (obs=spots, var=computed states)
+        leiden_merge_prob.h5ad — soft Leiden-subcluster-to-state merge matrix G
+                                 (obs=Leiden subclusters, var=computed states)
+        clusters_prob.h5ad     — per-cell Leiden overclustering label (obs=cells,
+                                 obs["leiden_cluster"], no var); combine with
+                                 leiden_merge_prob.h5ad (G) to recover the computed-state
+                                 assignment per cell
+        loss/                  — per-epoch loss curves and final values CSV
     """
 
     output_folder = Path(output_folder)
@@ -640,14 +329,12 @@ def main(
     logger.info("Loaded input scRNA and ST data.")
 
     # Step 2: Map data using AIM
-    G, W, P, leiden_labels, expr_sums_full, leiden_sizes, losses = aim_compute_mapping(
+    G, W, P, leiden_labels, losses = aim_compute_mapping(
         adata_sc=adata_sc.copy(),
         adata_st=adata_st.copy(),
-        output_folder=output_folder,
         lr=lr,
         epochs=epochs,
         normalize_and_log=normalize_and_log,
-        log_transform=log_transform,
         leiden_resolution=leiden_resolution,
         lambda_rec_spot=lambda_rec_spot,
         lambda_rec_gene=lambda_rec_gene,
@@ -657,107 +344,57 @@ def main(
         lambda_merge_entropy=lambda_merge_entropy,
         lambda_merge_gini=lambda_merge_gini,
         lambda_merge_coherence=lambda_merge_coherence,
-        l2_normalize_profiles=l2_normalize_profiles,
         verbose_logging=verbose_logging,
         device=device,
-        save_intermediate=store_intermediate,
         gpu_limit_gb=gpu_limit_gb,
     )
     logger.info("Obtained spot-to-state mapping.")
     L = G.shape[1]
     assert P.shape == (adata_st.n_obs, L), "dims passen nicht"
-
-    # Materialize cell->state assignment B = S_leiden @ G (C x L) for downstream analysis
-    B = G[leiden_labels]  # (C x L)
-    cell_to_cell_type_adata = AnnData(X=B.detach().cpu().numpy())
-    cell_to_cell_type_adata.obs_names = adata_sc.obs_names
-    cell_to_cell_type_adata.var_names = [f"Type {n}" for n in range(L)]
+    assert G.shape == (L, L), "dims passen nicht"
+    assert W.shape == (adata_st.n_obs, L), "dims passen nicht"
 
     # Save loss logs and plots
     losses_after_last_epoch = dump_loss_logs(losses, output_folder)
     create_loss_plots(losses, output_folder / "loss")
 
-    # Compute and save probabilistic GEP
-    adata_prediction_prob = compute_gene_expression_prediction(
-        G,
-        W,
-        expr_sums_full,
-        leiden_sizes,
-        adata_sc,
-        adata_st,
-        False,
-        device,
-        l2_normalize_profiles=l2_normalize_profiles,
-    )
-    gep_prob_path = output_folder / "gep_prob.h5ad"
-    adata_prediction_prob.write_h5ad(gep_prob_path)
-    logger.info(f"Saved prob GEP to {gep_prob_path}")
-
     state_names = [f"state_{i}" for i in range(L)]
-    mapping_np = P.detach().cpu().numpy().T  # L x S (state x spot)
+    leiden_names = [f"leiden_{i}" for i in range(L)]
+
+    # Save mapping: obs=spots, var=computed states (S x L)
     mapping_prob_path = output_folder / "mapping_prob.h5ad"
     AnnData(
-        X=mapping_np.astype(np.float32),
-        obs=pd.DataFrame(index=state_names),
-        var=pd.DataFrame(index=adata_st.obs_names),
+        X=P.detach().cpu().numpy().astype(np.float32),
+        obs=pd.DataFrame(index=adata_st.obs_names),
+        var=pd.DataFrame(index=state_names),
     ).write_h5ad(mapping_prob_path)
     logger.info(f"Saved prob mapping to {mapping_prob_path}")
 
-    # Compute and save deterministic GEP
-    logger.info("Apply deterministic mapping & compute prediction")
-    adata_prediction_det = compute_gene_expression_prediction(
-        G,
-        W,
-        expr_sums_full,
-        leiden_sizes,
-        adata_sc,
-        adata_st,
-        True,
-        device,
-        l2_normalize_profiles=l2_normalize_profiles,
-    )
-    gep_det_path = output_folder / "gep_det.h5ad"
-    adata_prediction_det.write_h5ad(gep_det_path)
-    logger.info(f"Saved det GEP to {gep_det_path}")
-
-    one_hot = row_one_hot(P).detach().cpu().numpy().T.astype(np.uint8)  # L x S
-    mapping_det_path = output_folder / "mapping_det.h5ad"
+    # Save Leiden-subcluster merge matrix: obs=Leiden subclusters, var=computed
+    # states (L x L) — this is G, the learned Leiden-subcluster -> computed-state
+    # merge matrix.
+    leiden_merge_prob_path = output_folder / "leiden_merge_prob.h5ad"
     AnnData(
-        X=one_hot,
-        obs=pd.DataFrame(index=state_names),
-        var=pd.DataFrame(index=adata_st.obs_names),
-    ).write_h5ad(mapping_det_path)
-    logger.info(f"Saved det mapping to {mapping_det_path}")
+        X=G.detach().cpu().numpy().astype(np.float32),
+        obs=pd.DataFrame(index=leiden_names),
+        var=pd.DataFrame(index=state_names),
+    ).write_h5ad(leiden_merge_prob_path)
+    logger.info(f"Saved Leiden merge matrix to {leiden_merge_prob_path}")
 
-    # Post-mapping analysis and report
-    if not skip_analysis:
-        try:
-            B_np = B.detach().cpu().numpy()  # C x L
-            C_np = P.detach().cpu().numpy()  # S x L
-            B_np[B_np < 0.1] = 0.0
-            C_np[C_np < 0.1] = 0.0
-            K_analysis = L
-            analysis_dir = output_folder / "analysis"
-            run_analysis(
-                adata_sc=adata_sc,
-                adata_st=adata_st,
-                B=B_np,
-                C=C_np,
-                output_dir=analysis_dir,
-                K=K_analysis,
-                leiden_resolution=leiden_resolution,
-            )
-            generate_per_k_report(analysis_dir, K_analysis, run_id="0")
-            logger.info("Analysis report written to %s", analysis_dir)
-        except Exception as _analysis_exc:
-            logger.error("Analysis failed (outputs already saved): %s", _analysis_exc)
-
-    return (
-        adata_prediction_prob,
-        adata_prediction_det,
-        cell_to_cell_type_adata,
-        losses_after_last_epoch,
-    )
+    # Save clusters: obs=cells, no var — obs["leiden_cluster"] names each cell's Leiden
+    # overclustering label (the hard Leiden assignment, not the merged computed
+    # state). Combine with leiden_merge_prob.h5ad (G) downstream to recover the
+    # computed-state assignment per cell.
+    leiden_labels_np = leiden_labels.detach().cpu().numpy()
+    cell_cluster_names = [leiden_names[i] for i in leiden_labels_np]
+    clusters_prob_path = output_folder / "clusters_prob.h5ad"
+    AnnData(
+        X=np.zeros((len(cell_cluster_names), 0), dtype=np.float32),
+        obs=pd.DataFrame(
+            {"leiden_cluster": cell_cluster_names}, index=adata_sc.obs_names
+        ),
+    ).write_h5ad(clusters_prob_path)
+    logger.info(f"Saved cell-to-cluster assignment to {clusters_prob_path}")
 
 
 if __name__ == "__main__":
@@ -798,13 +435,7 @@ if __name__ == "__main__":
         "--normalize_and_log",
         action="store_true",
         default=False,
-        help="Total-count normalize input data before training (and log1p unless --no_log_transform)",
-    )
-    parser.add_argument(
-        "--log_transform",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Apply log1p after normalize_total (only relevant when --normalize_and_log). Use --no-log_transform for normalize-only.",
+        help="Total-count normalize and log1p-transform input data before training",
     )
     parser.add_argument(
         "--leiden_resolution",
@@ -821,13 +452,6 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_merge_entropy", type=float, default=0.0)
     parser.add_argument("--lambda_merge_gini", type=float, default=1.0)
     parser.add_argument("--lambda_merge_coherence", type=float, default=0.5)
-    parser.add_argument(
-        "--l2_normalize_profiles",
-        action="store_true",
-        default=False,
-        help="L2-normalize state profiles M before P·M reconstruction (closes the "
-        "prob→det gap in linear space without log-transforming the data)",
-    )
     args = parser.parse_args()
 
     level = logging.DEBUG if args.logging == "verbose" else logging.INFO
@@ -847,8 +471,6 @@ if __name__ == "__main__":
                     "lr": args.lr,
                     "epochs": args.epochs,
                     "normalize_and_log": args.normalize_and_log,
-                    "log_transform": args.log_transform,
-                    "l2_normalize_profiles": args.l2_normalize_profiles,
                     "reference_leiden_clustering_resolution": args.leiden_resolution,
                 },
                 "loss_weights": {
@@ -873,7 +495,6 @@ if __name__ == "__main__":
         lr=args.lr,
         epochs=args.epochs,
         normalize_and_log=args.normalize_and_log,
-        log_transform=args.log_transform,
         leiden_resolution=args.leiden_resolution,
         lambda_rec_spot=args.lambda_rec_spot,
         lambda_rec_gene=args.lambda_rec_gene,
@@ -883,8 +504,6 @@ if __name__ == "__main__":
         lambda_merge_entropy=args.lambda_merge_entropy,
         lambda_merge_gini=args.lambda_merge_gini,
         lambda_merge_coherence=args.lambda_merge_coherence,
-        l2_normalize_profiles=args.l2_normalize_profiles,
         verbose_logging=(args.logging == "verbose"),
-        store_intermediate=True,
         gpu_limit_gb=args.gpu_limit_gb,
     )

@@ -64,7 +64,6 @@ class AIMLoss(nn.Module):
         lambda_merge_entropy: float = 0.0,
         lambda_merge_gini: float = 1.0,
         lambda_merge_coherence: float = 0.5,
-        l2_normalize_profiles: bool = False,
         eps: float = 1e-8,
     ):
         """
@@ -86,14 +85,6 @@ class AIMLoss(nn.Module):
                                     sharpening loss on G. This is the primary lever for
                                     a one-hot G (and hence det ≈ prob).
             lambda_merge_coherence: Weight for the shared-gene merge coherence loss.
-            l2_normalize_profiles:  If True, L2-normalize each state profile row of M
-                                    to unit norm before the P·M reconstruction, so a
-                                    state contributes in proportion to its probability
-                                    weight, not its raw expression magnitude. Removes
-                                    the ‖M_k‖ heterogeneity that lets a spot's residual
-                                    (non-argmax) probability mass dominate the cosine
-                                    direction — i.e. the source of the prob→det gap in
-                                    linear (non-log) space. Default False.
             eps:                    Numerical stability constant.
         """
         super(AIMLoss, self).__init__()
@@ -110,7 +101,6 @@ class AIMLoss(nn.Module):
         self.lambda_merge_entropy = lambda_merge_entropy
         self.lambda_merge_gini = lambda_merge_gini
         self.lambda_merge_coherence = lambda_merge_coherence
-        self.l2_normalize_profiles = l2_normalize_profiles
         self.eps = eps
         n_leiden = int(leiden_sizes.shape[0])
         self.lnL = torch.log(torch.tensor(n_leiden, dtype=torch.float32))
@@ -132,8 +122,6 @@ class AIMLoss(nn.Module):
         weighted_sum = torch.matmul(G.t(), self.P_sums)  # (L x G_shared)
         state_sizes = torch.matmul(G.t(), self.n)  # (L,)
         M = weighted_sum / (state_sizes.unsqueeze(1) + self.eps)
-        if self.l2_normalize_profiles:
-            M = M / (torch.norm(M, p=2, dim=1, keepdim=True) + self.eps)
         return M
 
     def _cosine_rec(self, Z_shared: Tensor, Z_prime: Tensor, dim: int) -> Tensor:

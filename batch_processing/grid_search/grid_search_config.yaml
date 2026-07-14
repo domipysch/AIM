@@ -4,35 +4,9 @@ epochs:
   - 1000
 normalize_and_log:
   - false
-  - true
 reference_leiden_clustering_resolution:
   - 3.0
-# Spot->state sharpening experiment. Shared base: rec=0.5/0.5,
-# state_entropy=0.5, merge_entropy=0.0, merge_coherence=0.25. Only the
-# spot-sharpening block varies. Each dict is one alternative config; crossed
-# with normalize_and_log {false,true} -> 14 runs.
 loss_weights:
-  # 0) baseline — current Shannon spot_entropy only
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.5
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.0
-#    lambda_spot_peak: 0.0
-#    lambda_spot_focal: 0.0
-  # 1) gini-lo — quadratic (Tsallis-2) sharpening, low
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.0
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.5
-#    lambda_spot_peak: 0.0
-#    lambda_spot_focal: 0.0
-#  # 2) gini-hi — quadratic (Tsallis-2) sharpening, high
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
     lambda_state_entropy: 0.5
@@ -40,46 +14,3 @@ loss_weights:
     lambda_merge_entropy: 0.0
     lambda_merge_coherence: 0.25
     lambda_spot_gini: 0.5
-    lambda_spot_peak: 0.5
-    lambda_spot_focal: 0.0
-#  # 3) peak-lo — collision (Renyi-2) peak loss, low
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.0
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.0
-#    lambda_spot_peak: 0.5
-#    lambda_spot_focal: 0.0
-#  # 4) peak-hi — collision (Renyi-2) peak loss, high
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.0
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.0
-#    lambda_spot_peak: 1.0
-#    lambda_spot_focal: 0.0
-#  # 5) focal — tail-weighted Shannon entropy (gamma=2.0)
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.0
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.0
-#    lambda_spot_peak: 0.0
-#    lambda_spot_focal: 0.5
-#    focal_gamma: 2.0
-#  # 6) gini+peak — combine quadratic + collision
-#  - lambda_rec_spot: 0.5
-#    lambda_rec_gene: 0.5
-#    lambda_state_entropy: 0.5
-#    lambda_spot_entropy: 0.0
-#    lambda_merge_entropy: 0.0
-#    lambda_merge_coherence: 0.25
-#    lambda_spot_gini: 0.5
-#    lambda_spot_peak: 0.5
-#    lambda_spot_focal: 0.0

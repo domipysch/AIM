@@ -2,149 +2,29 @@ import argparse
 import copy
 import csv
 import itertools
-import json
 import logging
 import shutil
 import sys
 import time
 import traceback
 from pathlib import Path
-import anndata as ad
 import pandas as pd
-import scanpy as sc
 import yaml
 import main as aim_main
-from evaluate_k.analysis import run_analysis
-from evaluate_k.clustering import run_leiden_shared_genes
-from evaluate_k.report import (
-    generate_per_k_report,
-    generate_summary_report,
-)
-from metrics.cossim import compute_and_save_cossim
-from utils import run_pca_neighbors_umap
 
 logger = logging.getLogger(__name__)
 
 
-def _read_median_cossim(run_dir: Path) -> tuple[float | None, float | None]:
-    """Return (gene_median, spot_median) from the metrics cossim JSONs, or (None, None)."""
-    metrics_dir = run_dir / "metrics"
-
-    def _read_median(json_path: Path) -> float | None:
-        if not json_path.exists():
-            return None
-        with open(json_path) as f:
-            return float(json.load(f)["median"])
-
-    gene_median = _read_median(metrics_dir / "cossim-per-gene.json")
-    spot_median = _read_median(metrics_dir / "cossim-per-spot.json")
-    return gene_median, spot_median
-
-
-def _precompute_analysis_artifacts(
-    sc_path: Path, st_path: Path, leiden_resolution: float
-):
-    """Pre-compute the per-dataset analysis artifacts shared across all K runs.
-
-    Returns (adata_sc, adata_st, adata_processed_base, leiden_labels_precomp,
-    leiden_shared_labels_precomp, shared_genes).
-    """
-    logger.info("Pre-computing analysis artifacts (PCA, UMAP, Leiden)…")
-    adata_sc = ad.read_h5ad(sc_path)
-    adata_st = ad.read_h5ad(st_path)
-    shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
-
-    adata_processed_base = adata_sc.copy()
-    run_pca_neighbors_umap(adata_processed_base)
-    sc.tl.leiden(
-        adata_processed_base, resolution=leiden_resolution, key_added="_leiden_ref"
-    )
-    leiden_labels_precomp = adata_processed_base.obs["_leiden_ref"].astype(int).values
-
-    leiden_shared_labels_precomp, _ = run_leiden_shared_genes(
-        adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
-    )
-    logger.info("Analysis pre-computation done.")
-    return (
-        adata_sc,
-        adata_st,
-        adata_processed_base,
-        leiden_labels_precomp,
-        leiden_shared_labels_precomp,
-        shared_genes,
-    )
-
-
-def _analyze_run(
-    run_dir: Path,
-    run_id,
-    adata_sc,
-    adata_st,
-    leiden_resolution: float,
-    adata_processed_base,
-    leiden_labels_precomp,
-    leiden_shared_labels_precomp,
-) -> dict | None:
-    """Run post-mapping analysis + per-K report for one existing run.
-
-    Reads the stored cell->state matrix B (intermediate/B_thresh.h5ad) and the
-    spot->state matrix C from mapping_prob.h5ad (transposed; run_analysis only
-    argmaxes C). No mapping recompute. K is always derived from B.shape[1].
-    Returns the analysis-overview row dict, or None when the files are missing.
-    """
-    b_path = run_dir / "intermediate" / "B_thresh.h5ad"
-    mapping_path = run_dir / "mapping_prob.h5ad"
-    if not (b_path.exists() and mapping_path.exists()):
-        logger.warning(
-            "Run %s: B_thresh / mapping_prob files missing — skipping analysis",
-            run_id,
-        )
-        return None
-
-    B = ad.read_h5ad(b_path).X
-    # mapping_prob is (states x spots) = H.T; transpose back to (spots x states)
-    C = ad.read_h5ad(mapping_path).X.T
-    K = int(B.shape[1])
-    analysis_dir = run_dir / "analysis"
-    results = run_analysis(
-        adata_sc=adata_sc,
-        adata_st=adata_st,
-        B=B,
-        C=C,
-        output_dir=analysis_dir,
-        K=K,
-        leiden_resolution=leiden_resolution,
-        adata_processed_base=adata_processed_base,
-        leiden_labels=leiden_labels_precomp,
-        leiden_shared_labels=leiden_shared_labels_precomp,
-    )
-    generate_per_k_report(analysis_dir, K, str(run_id))
-
-    gene_median, spot_median = _read_median_cossim(run_dir)
-    analysis_row: dict = {"run": str(run_id), "K": K}
-    analysis_row["Computed states"] = results["n_computed_states"]
-    analysis_row["Computed states > 1%"] = results["n_computed_states_above_1pct"]
-    analysis_row["Mapped states"] = results["n_mapped_states"]
-    analysis_row["Mapped states > 1%"] = results["n_mapped_states_above_1pct"]
-    analysis_row["per_state_perm_p"] = results["substate_metrics"]["weighted_perm_p"]
-    for metric, value in results["metrics_computed"].items():
-        analysis_row[f"{metric}__computed"] = value
-    analysis_row["contingency_score"] = results["contingency_matching"]["score"]
-    analysis_row["median_cossim_gene"] = gene_median
-    analysis_row["median_cossim_spot"] = spot_median
-    return analysis_row
-
-
-def _write_summary_analysis(ds_folder: Path, analysis_summary_rows: list[dict]) -> None:
-    """Write analysis_overview.csv and the cross-K summary report PDF."""
-    if not analysis_summary_rows:
-        logger.warning("No analysis rows — skipping summary analysis report.")
-        return
-    overview_path = ds_folder / "analysis_overview.csv"
-    df = pd.DataFrame(analysis_summary_rows).set_index("run").T
-    df.to_csv(overview_path, index=True)
-    logger.info("Analysis overview → %s", overview_path)
-    generate_summary_report(ds_folder)
+def _read_losses_end(output_folder: Path) -> dict:
+    """Read the final-epoch loss values that main() writes to loss/losses_end.csv."""
+    losses_path = output_folder / "loss" / "losses_end.csv"
+    if not losses_path.exists():
+        return {}
+    df = pd.read_csv(losses_path)
+    if df.empty:
+        return {}
+    row = df.iloc[0].to_dict()
+    return {k: (None if pd.isna(v) else v) for k, v in row.items()}
 
 
 def run_config(
@@ -152,7 +32,6 @@ def run_config(
     st_path: Path,
     run_config_path: Path,
     output_folder: Path,
-    metrics_folder: Path,
     gpu_limit_gb: int = 6,
 ) -> dict:
     # Load config from the per-run YAML written by the grid-search loop
@@ -162,40 +41,29 @@ def run_config(
 
     verbose_flag = logger.getEffectiveLevel() == logging.DEBUG
 
-    # Run alignment (G x S)
-    predicted_gep, predicted_gep_det, cell_to_celltype, losses_after_last_epoch = (
-        aim_main.main(
-            sc_path,
-            st_path,
-            output_folder=output_folder,
-            lr=cfg["lr"],
-            epochs=cfg["epochs"],
-            normalize_and_log=cfg.get("normalize_and_log", False),
-            log_transform=cfg.get("log_transform", True),
-            leiden_resolution=cfg.get("reference_leiden_clustering_resolution", 3.0),
-            lambda_rec_spot=loss_cfg.get("lambda_rec_spot", 0.5),
-            lambda_rec_gene=loss_cfg.get("lambda_rec_gene", 0.5),
-            # lambda_clust_intra=loss_cfg.get("lambda_clust_intra", 0.0),
-            # lambda_clust_inter=loss_cfg.get("lambda_clust_inter", 0.0),
-            lambda_state_entropy=loss_cfg.get("lambda_state_entropy", 0.1),
-            lambda_spot_entropy=loss_cfg.get("lambda_spot_entropy", 0.0),
-            lambda_spot_gini=loss_cfg.get("lambda_spot_gini", 0.5),
-            lambda_merge_entropy=loss_cfg.get("lambda_merge_entropy", 0.0),
-            lambda_merge_gini=loss_cfg.get("lambda_merge_gini", 1.0),
-            lambda_merge_coherence=loss_cfg.get("lambda_merge_coherence", 0.5),
-            l2_normalize_profiles=cfg.get("l2_normalize_profiles", False),
-            verbose_logging=verbose_flag,
-            store_intermediate=True,
-            skip_analysis=True,
-            gpu_limit_gb=gpu_limit_gb,
-        )
+    # Run alignment — writes mapping_prob.h5ad, leiden_merge_prob.h5ad,
+    # clusters_prob.h5ad, and loss/ to output_folder.
+    aim_main.main(
+        sc_path,
+        st_path,
+        output_folder=output_folder,
+        lr=cfg["lr"],
+        epochs=cfg["epochs"],
+        normalize_and_log=cfg.get("normalize_and_log", False),
+        leiden_resolution=cfg.get("reference_leiden_clustering_resolution", 3.0),
+        lambda_rec_spot=loss_cfg.get("lambda_rec_spot", 0.5),
+        lambda_rec_gene=loss_cfg.get("lambda_rec_gene", 0.5),
+        lambda_state_entropy=loss_cfg.get("lambda_state_entropy", 0.1),
+        lambda_spot_entropy=loss_cfg.get("lambda_spot_entropy", 0.0),
+        lambda_spot_gini=loss_cfg.get("lambda_spot_gini", 0.5),
+        lambda_merge_entropy=loss_cfg.get("lambda_merge_entropy", 0.0),
+        lambda_merge_gini=loss_cfg.get("lambda_merge_gini", 1.0),
+        lambda_merge_coherence=loss_cfg.get("lambda_merge_coherence", 0.5),
+        verbose_logging=verbose_flag,
+        gpu_limit_gb=gpu_limit_gb,
     )
 
-    # Cosine-similarity metrics (probabilistic + deterministic predictions)
-    compute_and_save_cossim(st_path, predicted_gep, metrics_folder)
-    compute_and_save_cossim(st_path, predicted_gep_det, metrics_folder, suffix="-det")
-
-    return losses_after_last_epoch
+    return _read_losses_end(output_folder)
 
 
 def main(
@@ -306,19 +174,6 @@ def main(
     # Copy experiment config to output folder for reference
     shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
 
-    # ── Analysis artifacts (PCA/UMAP/Leiden) are precomputed lazily per Leiden
-    # resolution and cached. The resolution can be a grid axis, so a single
-    # up-front precompute would be wrong for runs at other resolutions. ──
-    analysis_summary_rows: list[dict] = []
-    _analysis_cache: dict[float, tuple] = {}
-
-    def _get_analysis_artifacts(resolution: float):
-        if resolution not in _analysis_cache:
-            _analysis_cache[resolution] = _precompute_analysis_artifacts(
-                sc_path, st_path, resolution
-            )
-        return _analysis_cache[resolution]
-
     # Prepare summary CSV
     summary_path = ds_folder / "summary.csv"
 
@@ -350,9 +205,6 @@ def main(
             with open(run_config_path, "w") as cf:
                 yaml.safe_dump(cfg_copy, cf, sort_keys=False)
 
-            metric_dir = run_dir / "metrics"
-            metric_dir.mkdir(parents=True, exist_ok=True)
-
             start = time.time()
             exc = None
             tb = ""
@@ -369,7 +221,6 @@ def main(
                     st_path,
                     run_config_path,
                     run_dir,
-                    metric_dir,
                     gpu_limit_gb=gpu_limit_gb,
                 )
                 status = "ok"
@@ -383,37 +234,6 @@ def main(
                 logger.info(f"Run {run_id} completed in {duration:.2f}s")
             else:
                 logger.error(f"Run {run_id} failed after {duration:.2f}s: {exc}\n{tb}")
-
-            # ── Per-run analysis & report ─────────────────────────────────
-            if exc is None:
-                try:
-                    run_res = float(
-                        cfg_copy.get("reference_leiden_clustering_resolution", 3.0)
-                    )
-                    (
-                        adata_sc,
-                        adata_st,
-                        adata_processed_base,
-                        leiden_labels_precomp,
-                        leiden_shared_labels_precomp,
-                        shared_genes,
-                    ) = _get_analysis_artifacts(run_res)
-                    analysis_row = _analyze_run(
-                        run_dir,
-                        run_id,
-                        adata_sc,
-                        adata_st,
-                        run_res,
-                        adata_processed_base,
-                        leiden_labels_precomp,
-                        leiden_shared_labels_precomp,
-                    )
-                    if analysis_row is not None:
-                        analysis_summary_rows.append(analysis_row)
-                except Exception as _analysis_exc:
-                    logger.error(
-                        "Analysis failed for run %s: %s", run_id, _analysis_exc
-                    )
 
             row = {
                 "id": run_id,
@@ -437,87 +257,6 @@ def main(
                 raise exc
 
             run_id += 1
-
-    # ── Summary analysis report ───────────────────────────────────────────
-    _write_summary_analysis(ds_folder, analysis_summary_rows)
-
-
-def run_analyses_only(
-    experiment_config: Path,
-    sc_path: Path,
-    st_path: Path,
-    output_folder: Path,
-) -> None:
-    """Re-run only the post-mapping analyses for an already-computed dataset.
-
-    Reuses each run's stored B/C assignment matrices (``<run>/intermediate/``) —
-    no mapping/training is recomputed. For every numeric run sub-folder it reruns
-    ``run_analysis`` + the per-K report, then rewrites ``analysis_overview.csv``
-    and the summary report. Mapping outputs, metrics and shared boxplots are left
-    untouched. The per-run ``K`` is read from each ``<run>/config.yml``; the Leiden
-    resolution is read from ``experiment_config`` (matching the original run).
-    """
-    experiment_config = Path(experiment_config)
-    ds_folder = Path(output_folder)
-    if not ds_folder.is_dir():
-        raise FileNotFoundError(
-            f"Output folder not found (run the mapping first): {ds_folder}"
-        )
-    if not experiment_config.exists():
-        raise FileNotFoundError(f"experiment_config not found: {experiment_config}")
-
-    with open(experiment_config, "r") as f:
-        base_cfg = yaml.safe_load(f) or {}
-    leiden_resolution = float(
-        base_cfg.get("reference_leiden_clustering_resolution", 3.0)
-    )
-
-    logger.info(f"=== Analyses-only: SC: {sc_path.stem}  ST: {st_path.stem} ===")
-
-    (
-        adata_sc,
-        adata_st,
-        adata_processed_base,
-        leiden_labels_precomp,
-        leiden_shared_labels_precomp,
-        shared_genes,
-    ) = _precompute_analysis_artifacts(sc_path, st_path, leiden_resolution)
-
-    run_dirs = sorted(
-        (d for d in ds_folder.iterdir() if d.is_dir() and d.name.isdigit()),
-        key=lambda d: int(d.name),
-    )
-    if not run_dirs:
-        logger.warning(
-            "No run sub-folders found in %s — nothing to analyse.", ds_folder
-        )
-        return
-
-    analysis_summary_rows: list[dict] = []
-    for run_dir in run_dirs:
-        run_id = int(run_dir.name)
-        run_config_path = run_dir / "config.yml"
-        if not run_config_path.exists():
-            logger.warning("Run %s: config.yml missing — skipping.", run_id)
-            continue
-        try:
-            analysis_row = _analyze_run(
-                run_dir,
-                run_id,
-                adata_sc,
-                adata_st,
-                leiden_resolution,
-                adata_processed_base,
-                leiden_labels_precomp,
-                leiden_shared_labels_precomp,
-            )
-            if analysis_row is not None:
-                analysis_summary_rows.append(analysis_row)
-                logger.info("Run %s analysed.", run_id)
-        except Exception as _analysis_exc:
-            logger.error("Analysis failed for run %s: %s", run_id, _analysis_exc)
-
-    _write_summary_analysis(ds_folder, analysis_summary_rows)
 
 
 if __name__ == "__main__":

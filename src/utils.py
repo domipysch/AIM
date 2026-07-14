@@ -14,28 +14,24 @@ logger = logging.getLogger(__name__)
 def estimate_gpu_memory_gb(
     num_cells: int,
     num_spots: int,
-    g_sc: int,
-    g_st: int,
     num_genes_shared: int,
     n_states: int,
 ) -> float:
     """
     Rough upper-bound estimate of GPU memory required (in GB).
 
-    The per-cell spot->cell matrix (S x C) is gone, so the footprint is
-    dominated by the data tensors plus the small model matrices (G: L x L,
+    Only the shared-gene tensors are ever materialized on device (the full,
+    non-shared expression matrices are never loaded), so the footprint is
+    dominated by X_shared/Z_shared plus the small model matrices (G: L x L,
     H: S x L) and the Z' = H @ M reconstruction workspace, where L = n_states.
     """
     B32 = 4  # bytes per float32
     L = n_states
 
     est_bytes = B32 * (
-        num_cells * g_sc  # X
-        + num_spots * g_st  # Z
-        + num_cells * num_genes_shared  # X_shared
+        num_cells * num_genes_shared  # X_shared
         + num_spots * num_genes_shared  # Z_shared
         + L * num_genes_shared  # expr_sums_shared
-        + L * g_sc  # expr_sums_full
         + 3 * num_spots * L  # H + grads + workspace
         + 3 * num_spots * num_genes_shared  # Z' reconstruction workspace
     )
