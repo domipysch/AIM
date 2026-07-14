@@ -3,8 +3,8 @@ Post-mapping analysis for AIM.
 
 Standalone entry point; call run_analysis() after mapping:
 
-    from evaluate_k.analysis import run_analysis
-    results = run_analysis(adata_sc, adata_st, B, C, output_dir=Path("analysis_out"), K=5)
+    from analysis.analysis import run_analysis
+    results = run_analysis(adata_sc, adata_st, cell_state_soft, spot_state_soft, output_dir=Path("analysis_out"), leiden_resolution=3.0, n_leiden=5, leiden_labels=leiden_labels)
 
 Outputs written to output_dir:
     cell_state_profiles.png          per-state expression heatmap + cell/spot fractions
@@ -14,8 +14,6 @@ Outputs written to output_dir:
     umap_allgenes_vs_shared.png      computed-state UMAP: all-gene vs shared-gene embedding
     umap_comparison.png              UMAP: computed assignment vs Leiden (shared & all genes)
     contingency_heatmap.png          contingency matrix (Leiden, all genes)
-    substate_metrics.csv             per-state sub-cluster metrics
-    crosstab_heatmap.png             predicted state × GT cell type (only if gt_label_key given)
 """
 
 from __future__ import annotations
@@ -32,9 +30,7 @@ from anndata import AnnData
 from utils import _to_numpy, run_pca_neighbors_umap, hard_assignments
 from .assignments import cell_state_fractions
 from .clustering import (
-    build_shared_graph,
     compute_modularity,
-    run_leiden_clustering,
     run_leiden_shared_genes,
 )
 from .matching import (
@@ -49,7 +45,6 @@ from .plots import (
     plot_state_fractions,
     plot_spatial_cell_states,
 )
-from .substate_analysis import compute_substate_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -57,14 +52,12 @@ logger = logging.getLogger(__name__)
 def run_analysis(
     adata_sc: AnnData,
     adata_st: AnnData,
-    B: torch.Tensor | np.ndarray,
-    C: torch.Tensor | np.ndarray,
+    cell_state_soft: torch.Tensor | np.ndarray,
+    spot_state_soft: torch.Tensor | np.ndarray,
     output_dir: Path,
     leiden_resolution: float,
-    K: int,
-    adata_processed_base: AnnData | None = None,
-    leiden_labels: np.ndarray | None = None,
-    leiden_shared_labels: np.ndarray | None = None,
+    n_leiden: int,
+    leiden_labels: np.ndarray,
 ) -> dict:
     """
     Full post-mapping analysis pipeline.
@@ -73,11 +66,22 @@ def run_analysis(
     ----------
     adata_sc         : Single-cell AnnData (cells × genes), raw counts expected.
     adata_st         : Spatial AnnData (spots × genes).
-    B                : Cell-to-state soft-assignment matrix (n_cells, K).
-    C                : Spot-to-state soft-assignment matrix (n_spots, K).
+    cell_state_soft  : Cell-to-state soft-assignment matrix (n_cells, n_leiden).
+    spot_state_soft  : Spot-to-state soft-assignment matrix (n_spots, n_leiden).
     output_dir       : Directory where all outputs are written (created if absent).
-    K                : Number of cell states (inferred from B if None).
+    n_leiden         : Number of AIM state slots — equal to L, the number of
+                       Leiden overclustering clusters (AIM's G matrix is L x L,
+                       so L is both the Leiden-cluster count and the total
+                       number of state slots; see model.py). Not every slot is
+                       necessarily used — see n_computed_states/n_mapped_states
+                       below for the actually-occupied count.
     leiden_resolution     : Resolution for the main Leiden reference clusterings.
+    leiden_labels    : Leiden cluster id per cell (n_cells,), integer — the exact
+                       "all genes" overclustering used to train this run (e.g.
+                       loaded from leiden_overclustering.h5ad). Not recomputed
+                       here: scanpy's Leiden isn't deterministic run-to-run, so a
+                       fresh clustering wouldn't reproduce the actual partition
+                       the model was trained on.
 
     Returns
     -------
@@ -92,7 +96,6 @@ def run_analysis(
         modularity_shared_leiden float                  shared-gene modularity of the
                                                         Leiden-shared partition (≈ ceiling)
         contingency_matching dict   contingency argmax matching (Leiden, all genes)
-        substate_metrics     dict   per-state sub-cluster analysis results
         adata_processed        AnnData           sc data with UMAP + all labels
     """
     output_dir = Path(output_dir)
@@ -102,70 +105,50 @@ def run_analysis(
     data_dir = output_dir / "data"
     data_dir.mkdir(exist_ok=True)
 
-    B = _to_numpy(B)
-    C = _to_numpy(C)
+    cell_state_soft = _to_numpy(cell_state_soft)
+    spot_state_soft = _to_numpy(spot_state_soft)
 
     shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
     logger.info(
-        "run_analysis: K=%d, cells=%d, spots=%d, shared_genes=%d",
-        K,
+        "run_analysis: n_leiden=%d, cells=%d, spots=%d, shared_genes=%d",
+        n_leiden,
         len(adata_sc),
         len(adata_st),
         len(shared_genes),
     )
 
     # ── Hard assignments ──────────────────────────────────────────────────────
-    cell_states = hard_assignments(B)
-    spot_states = hard_assignments(C)
+    cell_states = hard_assignments(cell_state_soft)
+    spot_states = hard_assignments(spot_state_soft)
     state_palette = _build_state_palette(sorted(np.unique(cell_states).tolist()))
 
     n_computed_states = int(len(np.unique(cell_states)))
     n_mapped_states = int(len(np.unique(spot_states)))
 
     # ── Fractions ─────────────────────────────────────────────────────────────
-    cell_fractions = cell_state_fractions(cell_states, K)
-    spot_fractions = cell_state_fractions(spot_states, K)
+    cell_fractions = cell_state_fractions(cell_states, n_leiden)
+    spot_fractions = cell_state_fractions(spot_states, n_leiden)
 
-    # ── Prepare sc data (copy pre-computed base or compute from scratch) ──────
-    if adata_processed_base is not None:
-        adata_processed = adata_processed_base.copy()
-    else:
-        adata_processed = adata_sc.copy()
-        run_pca_neighbors_umap(adata_processed)
+    # ── Prepare sc data ────────────────────────────────────────────────────────
+    adata_processed = adata_sc.copy()
+    run_pca_neighbors_umap(adata_processed)
 
-    # ── Leiden reference – all genes (pre-computed or on demand) ─────────────
-    if leiden_labels is None:
-        leiden_labels, _ = run_leiden_clustering(adata_sc, resolution=leiden_resolution)
-
-    # ── Leiden reference – shared genes (pre-computed or on demand) ───────────
+    # ── Leiden reference – shared genes ───────────────────────────────────────
     # Keep the shared-gene AnnData (with its KNN graph) for the shared modularity.
-    adata_shared: AnnData | None = None
-    if leiden_shared_labels is None:
-        leiden_shared_labels, adata_shared = run_leiden_shared_genes(
-            adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
-        )
+    leiden_shared_labels, adata_shared = run_leiden_shared_genes(
+        adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+    )
 
     # ── Modularity for the computed assignment ────────────────────────────────
     # Two graphs: all genes (existing) and shared genes only — the latter is the
     # space the method actually operates in (ST is only seen through shared genes).
     logger.info("Computing modularity for computed assignment…")
-    if adata_shared is None:
-        adata_shared = build_shared_graph(adata_sc, shared_genes)
-    modularity_shared = (
-        compute_modularity(adata_shared, cell_states)
-        if adata_shared is not None
-        else float("nan")
-    )
     metrics_computed = {
         "modularity": compute_modularity(adata_processed, cell_states),
-        "modularity_shared": modularity_shared,
+        "modularity_shared": compute_modularity(adata_shared, cell_states),
     }
     # Leiden-shared partition on the same graph ≈ ceiling (Leiden ~maximises Q)
-    modularity_shared_leiden = (
-        compute_modularity(adata_shared, leiden_shared_labels)
-        if adata_shared is not None
-        else float("nan")
-    )
+    modularity_shared_leiden = compute_modularity(adata_shared, leiden_shared_labels)
     logger.info(
         "Modularity: %s | shared Leiden ref=%.4f",
         metrics_computed,
@@ -177,41 +160,6 @@ def run_analysis(
     adata_processed.obs["leiden_shared_state"] = pd.Categorical(
         leiden_shared_labels.astype(str)
     )
-
-    # ── Per-state sub-cluster analysis ───────────────────────────────────────
-    logger.info("Computing per-state sub-cluster metrics…")
-    substate = compute_substate_metrics(
-        adata_sc,
-        adata_st,
-        cell_states,
-        spot_states,
-        leiden_labels,
-        shared_genes,
-        n_top_genes=30,
-        n_perm=100,
-    )
-
-    def _fmt_row(cs: int, metrics: dict) -> dict:
-        def _f(v):
-            try:
-                return v if v == v else "—"  # NaN != NaN
-            except TypeError:
-                return v
-
-        return {
-            "CS": int(cs),
-            "cells": int(metrics["n_cells"]),
-            "spots": int(metrics["n_spots"]),
-            "n_LS": int(metrics["n_leiden_sub"]),
-            "cosim": _f(metrics["cossim_centroid"]),
-            "perm_p": _f(metrics["perm_p_value"]),
-        }
-
-    pd.DataFrame(
-        [_fmt_row(cs, m) for cs, m in sorted(substate["per_state"].items())]
-    ).to_csv(data_dir / "substate_metrics.csv", index=False)
-
-    logger.info("Sub-cluster metrics → %s/substate_metrics.csv", data_dir)
 
     # ── Combined UMAP comparison ──────────────────────────────────────────────
     plot_umap_comparison(
@@ -225,8 +173,6 @@ def run_analysis(
             ),
         ],
         output_path=plots_dir / "umap_comparison.png",
-        cell_fractions=cell_fractions,
-        spot_fractions=spot_fractions,
         state_palette=state_palette,
     )
 
@@ -235,28 +181,21 @@ def run_analysis(
         adata_processed,
         panels=[("computed_state", "Computed cell-state assignment")],
         output_path=plots_dir / "umap_computed_state.png",
-        cell_fractions=cell_fractions,
-        spot_fractions=spot_fractions,
         state_palette=state_palette,
     )
 
     # ── Computed states: all-gene vs shared-gene UMAP (side by side) ──────────
-    if adata_shared is not None:
-        adata_shared.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
-        if "X_umap" not in adata_shared.obsm:
-            sc.tl.umap(adata_shared)
-        plot_computed_state_umaps(
-            adata_processed,
-            adata_shared,
-            output_path=plots_dir / "umap_allgenes_vs_shared.png",
-            cell_fractions=cell_fractions,
-            spot_fractions=spot_fractions,
-            state_palette=state_palette,
-            modularity_all=metrics_computed["modularity"],
-            modularity_shared=metrics_computed["modularity_shared"],
-        )
-    else:
-        logger.warning("No shared-gene graph — skipping all-vs-shared UMAP figure.")
+    adata_shared.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
+    if "X_umap" not in adata_shared.obsm:
+        sc.tl.umap(adata_shared)
+    plot_computed_state_umaps(
+        adata_processed,
+        adata_shared,
+        output_path=plots_dir / "umap_allgenes_vs_shared.png",
+        state_palette=state_palette,
+        modularity_all=metrics_computed["modularity"],
+        modularity_shared=metrics_computed["modularity_shared"],
+    )
 
     # ── Spatial cell-state plot ───────────────────────────────────────────────
     plot_spatial_cell_states(
@@ -264,8 +203,6 @@ def run_analysis(
         spot_states,
         output_path=plots_dir / "spatial_cell_states.png",
         state_palette=state_palette,
-        cell_fractions=cell_fractions,
-        spot_fractions=spot_fractions,
     )
 
     # ── Cell-state profiles ───────────────────────────────────────────────────
@@ -294,7 +231,6 @@ def run_analysis(
         contingency_matching,
         plots_dir / "contingency_heatmap.png",
         spot_fractions=spot_fractions,
-        cell_fractions=cell_fractions,
     )
 
     n_computed_states_above_1pct = int(
@@ -316,6 +252,5 @@ def run_analysis(
         "metrics_computed": metrics_computed,
         "modularity_shared_leiden": modularity_shared_leiden,
         "contingency_matching": contingency_matching,
-        "substate_metrics": substate,
         "adata_processed": adata_processed,
     }

@@ -42,7 +42,7 @@ def run_config(
     verbose_flag = logger.getEffectiveLevel() == logging.DEBUG
 
     # Run alignment — writes mapping_prob.h5ad, leiden_merge_prob.h5ad,
-    # clusters_prob.h5ad, and loss/ to output_folder.
+    # leiden_overclustering.h5ad, and loss/ to output_folder.
     aim_main.main(
         sc_path,
         st_path,

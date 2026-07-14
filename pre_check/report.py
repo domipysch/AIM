@@ -29,7 +29,7 @@ _PAGE_SETUP = """\
 """
 
 
-# ─── Helpers (same pattern as evaluate_k/report.py) ──────────────────────────
+# ─── Helpers (same pattern as analysis/report.py) ──────────────────────────
 
 
 def _esc(s: str) -> str:

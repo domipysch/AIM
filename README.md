@@ -14,7 +14,7 @@ src/
 ├── spatial_graph.py             # KNN / Delaunay / Radius graph builders
 ├── sc_embedding.py              # PCA / scVI cell embeddings
 ├── utils.py                     # Shared helpers
-├── evaluate_k/                  # Post-mapping analysis (clustering, reports, plots)
+├── analysis/                     # Post-mapping analysis (clustering, reports, plots)
 └── metrics/                     # Evaluation metrics O2, O4
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 batch_processing/

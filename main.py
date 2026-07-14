@@ -19,7 +19,7 @@ from utils import (
 from model import AIMModel
 from loss import AIMLoss
 from dataset import prepare_tensors_from_input
-from evaluate_k.clustering import run_leiden_clustering
+from analysis.clustering import run_leiden_clustering
 
 logger = logging.getLogger(__name__)
 
@@ -298,13 +298,13 @@ def main(
 
     Post-mapping analysis is decoupled from this runner — it is not computed
     here. Once these outputs are written, run it separately via
-    evaluate_k.run_from_output (reads the files below from disk).
+    analysis.run_from_output (reads the files below from disk).
 
     Outputs written:
         mapping_prob.h5ad      — soft spot-to-state map (obs=spots, var=computed states)
         leiden_merge_prob.h5ad — soft Leiden-subcluster-to-state merge matrix G
                                  (obs=Leiden subclusters, var=computed states)
-        clusters_prob.h5ad     — per-cell Leiden overclustering label (obs=cells,
+        leiden_overclustering.h5ad     — per-cell Leiden overclustering label (obs=cells,
                                  obs["leiden_cluster"], no var); combine with
                                  leiden_merge_prob.h5ad (G) to recover the computed-state
                                  assignment per cell
@@ -387,14 +387,16 @@ def main(
     # computed-state assignment per cell.
     leiden_labels_np = leiden_labels.detach().cpu().numpy()
     cell_cluster_names = [leiden_names[i] for i in leiden_labels_np]
-    clusters_prob_path = output_folder / "clusters_prob.h5ad"
+    leiden_overclustering_path = output_folder / "leiden_overclustering.h5ad"
     AnnData(
         X=np.zeros((len(cell_cluster_names), 0), dtype=np.float32),
         obs=pd.DataFrame(
             {"leiden_cluster": cell_cluster_names}, index=adata_sc.obs_names
         ),
-    ).write_h5ad(clusters_prob_path)
-    logger.info(f"Saved cell-to-cluster assignment to {clusters_prob_path}")
+    ).write_h5ad(leiden_overclustering_path)
+    logger.info(
+        f"Saved cell-to-leiden-cluster assignment to {leiden_overclustering_path}"
+    )
 
 
 if __name__ == "__main__":
@@ -446,12 +448,12 @@ if __name__ == "__main__":
     # loss weights
     parser.add_argument("--lambda_rec_spot", type=float, default=0.5)
     parser.add_argument("--lambda_rec_gene", type=float, default=0.5)
-    parser.add_argument("--lambda_state_entropy", type=float, default=0.1)
+    parser.add_argument("--lambda_state_entropy", type=float, default=1.0)
     parser.add_argument("--lambda_spot_entropy", type=float, default=0.0)
     parser.add_argument("--lambda_spot_gini", type=float, default=0.5)
-    parser.add_argument("--lambda_merge_entropy", type=float, default=0.0)
-    parser.add_argument("--lambda_merge_gini", type=float, default=1.0)
-    parser.add_argument("--lambda_merge_coherence", type=float, default=0.5)
+    parser.add_argument("--lambda_merge_entropy", type=float, default=0.2)
+    parser.add_argument("--lambda_merge_gini", type=float, default=0.0)
+    parser.add_argument("--lambda_merge_coherence", type=float, default=0.0)
     args = parser.parse_args()
 
     level = logging.DEBUG if args.logging == "verbose" else logging.INFO
