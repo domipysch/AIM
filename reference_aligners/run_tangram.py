@@ -220,6 +220,8 @@ if __name__ == "__main__":
         "-nal",
         "--normalize_and_log",
         action="store_true",
+        required=False,
+        default=False,
         help="Whether to normalize and log input data beforehand",
     )
     parser.add_argument(

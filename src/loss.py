@@ -29,10 +29,21 @@ class AIMLoss(nn.Module):
         rec_spot       — spot-level cosine reconstruction of Z' vs Z
         rec_gene       — gene-level cosine reconstruction of Z' vs Z
         state_entropy  — entropy of state-usage marginal (few states used -> merging)
-        spot_entropy   — mean row-entropy of P (each spot -> one state)
-        merge_entropy  — size-weighted mean row-entropy of G (each subcluster -> one state)
+        spot_entropy   — mean row-entropy of P (each spot -> one state, Shannon)
+        spot_gini      — quadratic (Gini / Tsallis-2) spot sharpening on P
+        merge_entropy  — size-weighted mean row-entropy of G (each subcluster -> one state, Shannon)
+        merge_gini     — size-weighted quadratic (Gini / Tsallis-2) sharpening on G
         merge_coherence— penalizes co-assigning subclusters that are far apart in
                          shared-gene expression (directs *which* subclusters merge)
+
+    The deterministic output argmaxes BOTH G and P, so making prob ≈ det requires
+    both matrices to be genuinely one-hot after training. Two Gini/Tsallis-2
+    sharpeners target exactly that: `spot_gini` for P (rows over states) and
+    `merge_gini` for G (subcluster rows over states). Their gradient (-2 * value)
+    penalises leftover second-place mass hard and uniformly, unlike Shannon
+    entropy whose gradient nearly vanishes around moderately-peaked rows — which
+    is why the Gini variants sharpen far more aggressively than their Shannon
+    counterparts (spot_entropy / merge_entropy).
     """
 
     # Registered buffers (declared for type checkers; set via register_buffer).
@@ -48,9 +59,12 @@ class AIMLoss(nn.Module):
         lambda_rec_spot: float = 0.5,
         lambda_rec_gene: float = 0.5,
         lambda_state_entropy: float = 0.1,
-        lambda_spot_entropy: float = 0.08,
-        lambda_merge_entropy: float = 1.0,
+        lambda_spot_entropy: float = 0.0,
+        lambda_spot_gini: float = 0.5,
+        lambda_merge_entropy: float = 0.0,
+        lambda_merge_gini: float = 1.0,
         lambda_merge_coherence: float = 0.5,
+        l2_normalize_profiles: bool = False,
         eps: float = 1e-8,
     ):
         """
@@ -61,9 +75,25 @@ class AIMLoss(nn.Module):
             lambda_rec_spot:        Weight for spot-level reconstruction loss.
             lambda_rec_gene:        Weight for gene-level reconstruction loss.
             lambda_state_entropy:   Weight for state-usage entropy loss.
-            lambda_spot_entropy:    Weight for spot-state entropy loss.
-            lambda_merge_entropy:   Weight for Leiden-cluster merge entropy loss.
+            lambda_spot_entropy:    Weight for the Shannon spot-state entropy loss on P.
+                                    Default 0 (off) — spot_gini is the preferred P knob.
+            lambda_spot_gini:       Weight for the quadratic (Gini / Tsallis-2) spot
+                                    sharpening loss on P. This is the primary lever for
+                                    a one-hot P.
+            lambda_merge_entropy:   Weight for the Shannon Leiden-cluster merge entropy
+                                    loss on G. Default 0 (off) — merge_gini is preferred.
+            lambda_merge_gini:      Weight for the quadratic (Gini / Tsallis-2) merge
+                                    sharpening loss on G. This is the primary lever for
+                                    a one-hot G (and hence det ≈ prob).
             lambda_merge_coherence: Weight for the shared-gene merge coherence loss.
+            l2_normalize_profiles:  If True, L2-normalize each state profile row of M
+                                    to unit norm before the P·M reconstruction, so a
+                                    state contributes in proportion to its probability
+                                    weight, not its raw expression magnitude. Removes
+                                    the ‖M_k‖ heterogeneity that lets a spot's residual
+                                    (non-argmax) probability mass dominate the cosine
+                                    direction — i.e. the source of the prob→det gap in
+                                    linear (non-log) space. Default False.
             eps:                    Numerical stability constant.
         """
         super(AIMLoss, self).__init__()
@@ -76,11 +106,17 @@ class AIMLoss(nn.Module):
         self.lambda_rec_gene = lambda_rec_gene
         self.lambda_state_entropy = lambda_state_entropy
         self.lambda_spot_entropy = lambda_spot_entropy
+        self.lambda_spot_gini = lambda_spot_gini
         self.lambda_merge_entropy = lambda_merge_entropy
+        self.lambda_merge_gini = lambda_merge_gini
         self.lambda_merge_coherence = lambda_merge_coherence
+        self.l2_normalize_profiles = l2_normalize_profiles
         self.eps = eps
         n_leiden = int(leiden_sizes.shape[0])
         self.lnL = torch.log(torch.tensor(n_leiden, dtype=torch.float32))
+        # Max Gini impurity (1 - 1/L) at a uniform row; used to normalise the
+        # quadratic sharpening losses into ~[0, 1] like the entropy terms.
+        self.gini_norm = 1.0 - 1.0 / n_leiden
         logger.debug("AIMLoss initialized")
 
     def get_state_gep(self, G: Tensor) -> Tensor:
@@ -95,7 +131,10 @@ class AIMLoss(nn.Module):
         """
         weighted_sum = torch.matmul(G.t(), self.P_sums)  # (L x G_shared)
         state_sizes = torch.matmul(G.t(), self.n)  # (L,)
-        return weighted_sum / (state_sizes.unsqueeze(1) + self.eps)
+        M = weighted_sum / (state_sizes.unsqueeze(1) + self.eps)
+        if self.l2_normalize_profiles:
+            M = M / (torch.norm(M, p=2, dim=1, keepdim=True) + self.eps)
+        return M
 
     def _cosine_rec(self, Z_shared: Tensor, Z_prime: Tensor, dim: int) -> Tensor:
         """
@@ -158,12 +197,15 @@ class AIMLoss(nn.Module):
 
     def get_spot_entropy_loss(self, P: Tensor) -> Tensor:
         """
-        Spot-state entropy loss. Prioritize confident (near one-hot) per-spot
-        state assignments by minimizing the mean row-entropy of P.
+        Spot-state entropy loss (Shannon). Prioritize confident (near one-hot)
+        per-spot state assignments by minimizing the mean row-entropy of P.
 
         This is the term that, together with reconstruction, forces subclusters
         that a spot co-uses to merge: for P = W @ G to concentrate on one state,
         G must route those subclusters to the same state.
+
+        Kept for baseline comparison; spot_gini is the preferred, stronger P
+        sharpener.
 
         Args:
             P: Spot -> computed-state matrix (S x L).
@@ -171,11 +213,33 @@ class AIMLoss(nn.Module):
         spot_entropies = -torch.sum(P * torch.log(P + self.eps), dim=1)  # (S,)
         return torch.mean(spot_entropies) / self.lnL
 
+    def get_spot_gini_loss(self, P: Tensor) -> Tensor:
+        """
+        Quadratic (Gini / Tsallis-2) spot sharpening loss.
+
+        Mean per-spot Gini impurity  1 - sum_k P[s,k]^2, normalised by its
+        maximum (1 - 1/L) so it lives in ~[0, 1] like the entropy terms.
+
+        It is zero only when each row is one-hot. Unlike Shannon entropy, whose
+        gradient nearly vanishes around moderately-peaked rows, the gradient
+        here is -2 P_k, which penalises any leftover second-place mass uniformly
+        and hard. (Note the identity 1 - sum_k P_k^2 = sum_k P_k (1 - P_k), an
+        entrywise "push every value to 0 or 1" penalty.)
+
+        Args:
+            P: Spot -> computed-state matrix (S x L).
+        """
+        gini = 1.0 - torch.sum(P * P, dim=1)  # (S,)
+        return torch.mean(gini) / self.gini_norm
+
     def get_merge_entropy_loss(self, G: Tensor) -> Tensor:
         """
-        Cluster merge entropy loss. Push each Leiden subcluster to be assigned to
-        a single computed state by minimizing the cluster-size-weighted mean
-        row-entropy of G.
+        Cluster merge entropy loss (Shannon). Push each Leiden subcluster to be
+        assigned to a single computed state by minimizing the cluster-size-
+        weighted mean row-entropy of G.
+
+        Kept for baseline comparison; merge_gini is the preferred, stronger G
+        sharpener.
 
         Args:
             G: Leiden-subcluster -> computed-state matrix (L x L).
@@ -183,6 +247,25 @@ class AIMLoss(nn.Module):
         row_entropies = -torch.sum(G * torch.log(G + self.eps), dim=1)  # (L,)
         weights = self.n / (self.n.sum() + self.eps)  # (L,)
         return torch.sum(weights * row_entropies) / self.lnL
+
+    def get_merge_gini_loss(self, G: Tensor) -> Tensor:
+        """
+        Quadratic (Gini / Tsallis-2) merge sharpening loss on G.
+
+        The G analog of get_spot_gini_loss: cluster-size-weighted mean per-row
+        Gini impurity  1 - sum_k G[l,k]^2, normalised by its maximum (1 - 1/L).
+        Zero only when every subcluster row of G is one-hot. Because the
+        deterministic prediction argmaxes G, a one-hot G is what makes the
+        deterministic and probabilistic reconstructions coincide; this term is
+        the primary lever for that (its -2 G_k gradient sharpens far harder than
+        the Shannon merge_entropy around moderately-peaked rows).
+
+        Args:
+            G: Leiden-subcluster -> computed-state matrix (L x L).
+        """
+        gini = 1.0 - torch.sum(G * G, dim=1)  # (L,)
+        weights = self.n / (self.n.sum() + self.eps)  # (L,)
+        return torch.sum(weights * gini) / self.gini_norm
 
     def get_merge_coherence_loss(self, G: Tensor) -> Tensor:
         """
@@ -220,8 +303,10 @@ class AIMLoss(nn.Module):
                 "rec_spot"      — unweighted spot reconstruction term.
                 "rec_gene"      — unweighted gene reconstruction term.
                 "state_entropy" — unweighted state-usage entropy (normalised by log L).
-                "spot_entropy"  — unweighted spot entropy (normalised by log L).
-                "merge_entropy" — unweighted cluster merge entropy (normalised by log L).
+                "spot_entropy"  — unweighted Shannon spot entropy (normalised by log L).
+                "spot_gini"     — unweighted quadratic spot sharpening term.
+                "merge_entropy" — unweighted Shannon cluster merge entropy (normalised by log L).
+                "merge_gini"    — unweighted quadratic merge sharpening term.
                 "merge_coherence" — unweighted shared-gene merge coherence term.
         """
         M = self.get_state_gep(G)
@@ -230,7 +315,9 @@ class AIMLoss(nn.Module):
         l_rec_gene = self.get_rec_gene_loss(P, M, Z_shared)
         l_state_entropy = self.get_state_entropy_loss(G)
         l_spot_entropy = self.get_spot_entropy_loss(P)
+        l_spot_gini = self.get_spot_gini_loss(P)
         l_merge_entropy = self.get_merge_entropy_loss(G)
+        l_merge_gini = self.get_merge_gini_loss(G)
         l_merge_coherence = self.get_merge_coherence_loss(G)
 
         total_loss = (
@@ -238,7 +325,9 @@ class AIMLoss(nn.Module):
             + self.lambda_rec_gene * l_rec_gene
             + self.lambda_state_entropy * l_state_entropy
             + self.lambda_spot_entropy * l_spot_entropy
+            + self.lambda_spot_gini * l_spot_gini
             + self.lambda_merge_entropy * l_merge_entropy
+            + self.lambda_merge_gini * l_merge_gini
             + self.lambda_merge_coherence * l_merge_coherence
         )
 
@@ -248,6 +337,8 @@ class AIMLoss(nn.Module):
             "rec_gene": l_rec_gene,
             "state_entropy": l_state_entropy,
             "spot_entropy": l_spot_entropy,
+            "spot_gini": l_spot_gini,
             "merge_entropy": l_merge_entropy,
+            "merge_gini": l_merge_gini,
             "merge_coherence": l_merge_coherence,
         }

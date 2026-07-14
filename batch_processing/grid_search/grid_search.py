@@ -20,12 +20,8 @@ from evaluate_k.report import (
     generate_per_k_report,
     generate_summary_report,
 )
+from metrics.cossim import compute_and_save_cossim
 from utils import run_pca_neighbors_umap
-from metrics import (
-    run_all_metrics,
-    run_all_shared_boxplots,
-    run_all_permutation_boxplots,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -175,15 +171,19 @@ def run_config(
             lr=cfg["lr"],
             epochs=cfg["epochs"],
             normalize_and_log=cfg.get("normalize_and_log", False),
+            log_transform=cfg.get("log_transform", True),
             leiden_resolution=cfg.get("reference_leiden_clustering_resolution", 3.0),
             lambda_rec_spot=loss_cfg.get("lambda_rec_spot", 0.5),
             lambda_rec_gene=loss_cfg.get("lambda_rec_gene", 0.5),
             # lambda_clust_intra=loss_cfg.get("lambda_clust_intra", 0.0),
             # lambda_clust_inter=loss_cfg.get("lambda_clust_inter", 0.0),
             lambda_state_entropy=loss_cfg.get("lambda_state_entropy", 0.1),
-            lambda_spot_entropy=loss_cfg.get("lambda_spot_entropy", 0.08),
-            lambda_merge_entropy=loss_cfg.get("lambda_merge_entropy", 1.0),
+            lambda_spot_entropy=loss_cfg.get("lambda_spot_entropy", 0.0),
+            lambda_spot_gini=loss_cfg.get("lambda_spot_gini", 0.5),
+            lambda_merge_entropy=loss_cfg.get("lambda_merge_entropy", 0.0),
+            lambda_merge_gini=loss_cfg.get("lambda_merge_gini", 1.0),
             lambda_merge_coherence=loss_cfg.get("lambda_merge_coherence", 0.5),
+            l2_normalize_profiles=cfg.get("l2_normalize_profiles", False),
             verbose_logging=verbose_flag,
             store_intermediate=True,
             skip_analysis=True,
@@ -191,22 +191,9 @@ def run_config(
         )
     )
 
-    # Run individual metrics (probabilistic)
-    run_all_metrics.main(
-        sc_path,
-        st_path,
-        metrics_folder,
-        result_gep=predicted_gep,
-    )
-
-    # Run individual metrics (deterministic)
-    run_all_metrics.main(
-        sc_path,
-        st_path,
-        metrics_folder,
-        result_gep=predicted_gep_det,
-        name_suffix="-det",
-    )
+    # Cosine-similarity metrics (probabilistic + deterministic predictions)
+    compute_and_save_cossim(st_path, predicted_gep, metrics_folder)
+    compute_and_save_cossim(st_path, predicted_gep_det, metrics_folder, suffix="-det")
 
     return losses_after_last_epoch
 
@@ -450,25 +437,6 @@ def main(
                 raise exc
 
             run_id += 1
-
-    # Create shared boxplots for this dataset (probabilistic metrics, one box per run)
-    metric_dirs = [ds_folder / str(i) / "metrics" for i in range(run_id)]
-    labels = [str(i) for i in range(run_id)]
-    shared_dir = ds_folder / "shared"
-    shared_dir.mkdir(parents=True, exist_ok=True)
-
-    # Run shared metrics
-    run_all_shared_boxplots.main(
-        metric_dirs,
-        labels,
-        shared_dir,
-    )
-    # Run shared permutation test boxplots
-    # run_all_permutation_boxplots.main(
-    #     metric_dirs,
-    #     labels,
-    #     shared_dir,
-    # )
 
     # ── Summary analysis report ───────────────────────────────────────────
     _write_summary_analysis(ds_folder, analysis_summary_rows)

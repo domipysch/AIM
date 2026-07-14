@@ -138,7 +138,9 @@ def dump_loss_logs(losses: dict, output_folder: Path) -> dict:
         "clust",
         "state_entropy",
         "spot_entropy",
+        "spot_gini",
         "merge_entropy",
+        "merge_gini",
         "merge_coherence",
     ):
         comp_vals = losses.get(comp, {})
@@ -252,6 +254,13 @@ def create_loss_plots(losses: dict, loss_dir: Path) -> None:
             ),
             label="merge_coherence-weighted",
         )
+    for _comp in ("spot_gini", "merge_gini"):
+        if _comp in losses:
+            plt.plot(
+                epochs,
+                list(v * losses[_comp]["weight"] for v in losses[_comp]["values"]),
+                label=f"{_comp}-weighted",
+            )
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss Curve (components + total)")
@@ -272,7 +281,9 @@ def create_loss_plots(losses: dict, loss_dir: Path) -> None:
         *(("clust",) if "clust" in losses else ()),
         "state_entropy",
         "spot_entropy",
+        *(("spot_gini",) if "spot_gini" in losses else ()),
         *(("merge_entropy",) if "merge_entropy" in losses else ()),
+        *(("merge_gini",) if "merge_gini" in losses else ()),
         *(("merge_coherence",) if "merge_coherence" in losses else ()),
     )
 

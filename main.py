@@ -55,6 +55,7 @@ def assemble_state_gep(
     G: torch.Tensor,
     expr_sums: torch.Tensor,
     sizes: torch.Tensor,
+    l2_normalize: bool = False,
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
@@ -69,13 +70,21 @@ def assemble_state_gep(
         G:          Leiden-cluster -> computed-state matrix (L x L).
         expr_sums:  Summed expression per Leiden cluster (L x G).
         sizes:      Number of cells per Leiden cluster (L,).
+        l2_normalize: If True, L2-normalize each state profile row to unit norm.
+                    Makes every state contribute to the P·M reconstruction in
+                    proportion to its probability weight rather than its raw
+                    expression magnitude (closes the prob→det cosine gap that the
+                    ‖M_k‖ heterogeneity otherwise causes in linear space).
 
     Returns:
         M: State gene expression profiles (L x G).
     """
     weighted_sum = torch.matmul(G.t(), expr_sums)  # (L x G)
     state_sizes = torch.matmul(G.t(), sizes)  # (L,)
-    return weighted_sum / (state_sizes.unsqueeze(1) + eps)
+    M = weighted_sum / (state_sizes.unsqueeze(1) + eps)
+    if l2_normalize:
+        M = M / (torch.norm(M, p=2, dim=1, keepdim=True) + eps)
+    return M
 
 
 def row_one_hot(mat: torch.Tensor) -> torch.Tensor:
@@ -101,13 +110,17 @@ def aim_compute_mapping(
     lr: float,
     epochs: int,
     normalize_and_log: bool,
+    log_transform: bool,
     leiden_resolution: float,
     lambda_rec_spot: float,
     lambda_rec_gene: float,
     lambda_state_entropy: float,
     lambda_spot_entropy: float,
+    lambda_spot_gini: float,
     lambda_merge_entropy: float,
+    lambda_merge_gini: float,
     lambda_merge_coherence: float,
+    l2_normalize_profiles: bool,
     verbose_logging: bool,
     device: torch.device,
     save_intermediate: bool = False,
@@ -168,13 +181,16 @@ def aim_compute_mapping(
     leiden_labels = torch.tensor(labels_np, dtype=torch.long, device=device)
     logger.info(f"Leiden clusters: {leiden_n_clusters}")
 
-    # (Optional) Preprocess data: Normalize & Log-transform
+    # (Optional) Preprocess data: total-count normalization, optionally + log1p.
     if normalize_and_log:
-        logger.info("Normalize & Log-transform gene expression and spatial data")
         sc.pp.normalize_total(adata_sc)
         sc.pp.normalize_total(adata_st)
-        sc.pp.log1p(adata_sc)
-        sc.pp.log1p(adata_st)
+        if log_transform:
+            logger.info("Normalize (total) & log1p gene expression and spatial data")
+            sc.pp.log1p(adata_sc)
+            sc.pp.log1p(adata_st)
+        else:
+            logger.info("Normalize (total) only — skipping log1p")
     else:
         logger.info("Skipping normalize_and_log")
 
@@ -243,8 +259,11 @@ def aim_compute_mapping(
         lambda_rec_gene=lambda_rec_gene,
         lambda_state_entropy=lambda_state_entropy,
         lambda_spot_entropy=lambda_spot_entropy,
+        lambda_spot_gini=lambda_spot_gini,
         lambda_merge_entropy=lambda_merge_entropy,
+        lambda_merge_gini=lambda_merge_gini,
         lambda_merge_coherence=lambda_merge_coherence,
+        l2_normalize_profiles=l2_normalize_profiles,
     ).to(device)
 
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -260,7 +279,9 @@ def aim_compute_mapping(
         "rec_gene": {"weight": lambda_rec_gene, "values": list()},
         "state_entropy": {"weight": lambda_state_entropy, "values": list()},
         "spot_entropy": {"weight": lambda_spot_entropy, "values": list()},
+        "spot_gini": {"weight": lambda_spot_gini, "values": list()},
         "merge_entropy": {"weight": lambda_merge_entropy, "values": list()},
+        "merge_gini": {"weight": lambda_merge_gini, "values": list()},
         "merge_coherence": {"weight": lambda_merge_coherence, "values": list()},
     }
 
@@ -319,9 +340,11 @@ def aim_compute_mapping(
         losses["spot_entropy"]["values"].append(
             to_scalar(loss_dict.get("spot_entropy"))
         )
+        losses["spot_gini"]["values"].append(to_scalar(loss_dict.get("spot_gini")))
         losses["merge_entropy"]["values"].append(
             to_scalar(loss_dict.get("merge_entropy"))
         )
+        losses["merge_gini"]["values"].append(to_scalar(loss_dict.get("merge_gini")))
         losses["merge_coherence"]["values"].append(
             to_scalar(loss_dict.get("merge_coherence"))
         )
@@ -426,7 +449,9 @@ def aim_compute_mapping(
         )
 
         # State gene expression profiles (full genes)
-        M = assemble_state_gep(G, expr_sums_full, leiden_sizes)
+        M = assemble_state_gep(
+            G, expr_sums_full, leiden_sizes, l2_normalize=l2_normalize_profiles
+        )
         M_np = M.detach().cpu().numpy()
         arr_to_h5ad(
             M_np,
@@ -483,6 +508,7 @@ def compute_gene_expression_prediction(
     adata_st: AnnData,
     deterministic_mapping: bool,
     torch_device: torch.device,
+    l2_normalize_profiles: bool = False,
 ) -> AnnData:
     """
     Predict spot-level gene expression from the learned mapping.
@@ -514,13 +540,13 @@ def compute_gene_expression_prediction(
         # C = row_one_hot(spot_to_state)
         spot_to_state = torch.matmul(W, G)  # S x L
 
-        P_csv = spot_to_state.detach().cpu().numpy()
-        P_csv[P_csv < 0.01] = 0.0
-        pd.DataFrame(
-            P_csv.round(4),
-        ).to_csv(
-            "./P_matrix_det.csv"
-        )  # spot -> state
+        # P_csv = spot_to_state.detach().cpu().numpy()
+        # P_csv[P_csv < 0.01] = 0.0
+        # pd.DataFrame(
+        #     P_csv.round(4),
+        # ).to_csv(
+        #     "./P_matrix_det.csv"
+        # )  # spot -> state
 
         spot_to_state = row_one_hot(spot_to_state)
 
@@ -528,6 +554,15 @@ def compute_gene_expression_prediction(
         spot_to_state = torch.matmul(W, G)  # S x L
 
     M = assemble_state_gep(G, expr_sums_full, leiden_sizes)  # (L x G_sc)
+    if l2_normalize_profiles:
+        # Normalize each state profile by its L2 norm over the SHARED genes — the
+        # space the reconstruction is supervised and evaluated on, matching the
+        # loss (whose M is shared-gene only). Normalizing over all sc genes instead
+        # leaves the shared-gene slice non-unit and only partly closes the gap.
+        shared = adata_sc.var_names.isin(set(adata_st.var_names))  # (G_sc,) bool
+        shared_t = torch.as_tensor(shared, device=M.device)
+        norms = torch.norm(M[:, shared_t], p=2, dim=1, keepdim=True)  # (L, 1)
+        M = M / (norms + 1e-8)
     predicted_spot_expressions = torch.matmul(spot_to_state, M)  # (S x G_sc)
 
     # Transpose to G x S
@@ -552,13 +587,17 @@ def main(
     lr: float = 0.008,
     epochs: int = 1000,
     normalize_and_log: bool = False,
+    log_transform: bool = True,
     leiden_resolution: float = 3.0,
     lambda_rec_spot: float = 0.5,
     lambda_rec_gene: float = 0.5,
     lambda_state_entropy: float = 0.1,
-    lambda_spot_entropy: float = 0.08,
-    lambda_merge_entropy: float = 1.0,
+    lambda_spot_entropy: float = 0.0,
+    lambda_spot_gini: float = 0.5,
+    lambda_merge_entropy: float = 0.0,
+    lambda_merge_gini: float = 1.0,
     lambda_merge_coherence: float = 0.5,
+    l2_normalize_profiles: bool = False,
     store_intermediate: bool = False,
     skip_analysis: bool = False,
     verbose_logging: bool = False,
@@ -608,13 +647,17 @@ def main(
         lr=lr,
         epochs=epochs,
         normalize_and_log=normalize_and_log,
+        log_transform=log_transform,
         leiden_resolution=leiden_resolution,
         lambda_rec_spot=lambda_rec_spot,
         lambda_rec_gene=lambda_rec_gene,
         lambda_state_entropy=lambda_state_entropy,
         lambda_spot_entropy=lambda_spot_entropy,
+        lambda_spot_gini=lambda_spot_gini,
         lambda_merge_entropy=lambda_merge_entropy,
+        lambda_merge_gini=lambda_merge_gini,
         lambda_merge_coherence=lambda_merge_coherence,
+        l2_normalize_profiles=l2_normalize_profiles,
         verbose_logging=verbose_logging,
         device=device,
         save_intermediate=store_intermediate,
@@ -644,6 +687,7 @@ def main(
         adata_st,
         False,
         device,
+        l2_normalize_profiles=l2_normalize_profiles,
     )
     gep_prob_path = output_folder / "gep_prob.h5ad"
     adata_prediction_prob.write_h5ad(gep_prob_path)
@@ -670,6 +714,7 @@ def main(
         adata_st,
         True,
         device,
+        l2_normalize_profiles=l2_normalize_profiles,
     )
     gep_det_path = output_folder / "gep_det.h5ad"
     adata_prediction_det.write_h5ad(gep_det_path)
@@ -753,7 +798,13 @@ if __name__ == "__main__":
         "--normalize_and_log",
         action="store_true",
         default=False,
-        help="Normalize and log-transform input data before training",
+        help="Total-count normalize input data before training (and log1p unless --no_log_transform)",
+    )
+    parser.add_argument(
+        "--log_transform",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply log1p after normalize_total (only relevant when --normalize_and_log). Use --no-log_transform for normalize-only.",
     )
     parser.add_argument(
         "--leiden_resolution",
@@ -765,9 +816,18 @@ if __name__ == "__main__":
     parser.add_argument("--lambda_rec_spot", type=float, default=0.5)
     parser.add_argument("--lambda_rec_gene", type=float, default=0.5)
     parser.add_argument("--lambda_state_entropy", type=float, default=0.1)
-    parser.add_argument("--lambda_spot_entropy", type=float, default=0.08)
-    parser.add_argument("--lambda_merge_entropy", type=float, default=1.0)
+    parser.add_argument("--lambda_spot_entropy", type=float, default=0.0)
+    parser.add_argument("--lambda_spot_gini", type=float, default=0.5)
+    parser.add_argument("--lambda_merge_entropy", type=float, default=0.0)
+    parser.add_argument("--lambda_merge_gini", type=float, default=1.0)
     parser.add_argument("--lambda_merge_coherence", type=float, default=0.5)
+    parser.add_argument(
+        "--l2_normalize_profiles",
+        action="store_true",
+        default=False,
+        help="L2-normalize state profiles M before P·M reconstruction (closes the "
+        "prob→det gap in linear space without log-transforming the data)",
+    )
     args = parser.parse_args()
 
     level = logging.DEBUG if args.logging == "verbose" else logging.INFO
@@ -787,6 +847,8 @@ if __name__ == "__main__":
                     "lr": args.lr,
                     "epochs": args.epochs,
                     "normalize_and_log": args.normalize_and_log,
+                    "log_transform": args.log_transform,
+                    "l2_normalize_profiles": args.l2_normalize_profiles,
                     "reference_leiden_clustering_resolution": args.leiden_resolution,
                 },
                 "loss_weights": {
@@ -794,7 +856,9 @@ if __name__ == "__main__":
                     "lambda_rec_gene": args.lambda_rec_gene,
                     "lambda_state_entropy": args.lambda_state_entropy,
                     "lambda_spot_entropy": args.lambda_spot_entropy,
+                    "lambda_spot_gini": args.lambda_spot_gini,
                     "lambda_merge_entropy": args.lambda_merge_entropy,
+                    "lambda_merge_gini": args.lambda_merge_gini,
                     "lambda_merge_coherence": args.lambda_merge_coherence,
                 },
             },
@@ -809,13 +873,17 @@ if __name__ == "__main__":
         lr=args.lr,
         epochs=args.epochs,
         normalize_and_log=args.normalize_and_log,
+        log_transform=args.log_transform,
         leiden_resolution=args.leiden_resolution,
         lambda_rec_spot=args.lambda_rec_spot,
         lambda_rec_gene=args.lambda_rec_gene,
         lambda_state_entropy=args.lambda_state_entropy,
         lambda_spot_entropy=args.lambda_spot_entropy,
+        lambda_spot_gini=args.lambda_spot_gini,
         lambda_merge_entropy=args.lambda_merge_entropy,
+        lambda_merge_gini=args.lambda_merge_gini,
         lambda_merge_coherence=args.lambda_merge_coherence,
+        l2_normalize_profiles=args.l2_normalize_profiles,
         verbose_logging=(args.logging == "verbose"),
         store_intermediate=True,
         gpu_limit_gb=args.gpu_limit_gb,

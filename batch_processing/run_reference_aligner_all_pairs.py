@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 import anndata as ad
-from src.metrics.run_all_metrics import main as run_all_metrics
+from src.metrics.cossim import compute_and_save_cossim
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -198,12 +198,7 @@ def main() -> None:
                 logger.info(f"{tag} Computing {metrics_subdir}")
                 try:
                     gep = ad.read_h5ad(gep_path)
-                    run_all_metrics(
-                        sc_path=sc_path,
-                        st_path=st_path,
-                        metrics=metrics_dir,
-                        result_gep=gep,
-                    )
+                    compute_and_save_cossim(st_path, gep, metrics_dir)
                 except Exception as exc:
                     msg = f"{tag} Metrics ({metrics_subdir}) FAILED: {exc}"
                     logger.error(msg)
