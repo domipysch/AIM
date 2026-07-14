@@ -43,9 +43,24 @@ def celltype_centroids(
 
 def top_marker_genes(adata_norm: AnnData, cell_type_key: str, n_top: int) -> list[str]:
     """Top n_top marker genes per cell type (union, order preserved), via
-    scanpy's rank_genes_groups on already normalized+log1p data."""
+    scanpy's rank_genes_groups on already normalized+log1p data.
+
+    Cell types with fewer than 2 cells are skipped: the Wilcoxon test needs
+    at least two samples per group, and scanpy errors out otherwise."""
     adata_copy = adata_norm.copy()
-    sc.tl.rank_genes_groups(adata_copy, groupby=cell_type_key, method="wilcoxon")
+
+    counts = adata_copy.obs[cell_type_key].value_counts()
+    valid_groups = counts[counts >= 2].index.astype(str).tolist()
+    dropped = counts[counts < 2].index.astype(str).tolist()
+    if dropped:
+        logger.warning(
+            "Skipping cell type(s) with <2 cells in marker ranking: %s",
+            ", ".join(dropped),
+        )
+
+    sc.tl.rank_genes_groups(
+        adata_copy, groupby=cell_type_key, groups=valid_groups, method="wilcoxon"
+    )
     names = adata_copy.uns["rank_genes_groups"]["names"]
     markers: list[str] = []
     for group in names.dtype.names:

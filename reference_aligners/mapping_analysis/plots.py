@@ -125,7 +125,6 @@ def plot_spatial_hard_celltypes(
             coords[mask, 1],
             c=[palette[ct]],
             s=dot_size,
-            label=f"{ct} (n={int(mask.sum())})",
             linewidths=0,
             alpha=0.85,
             rasterized=True,
@@ -135,7 +134,6 @@ def plot_spatial_hard_celltypes(
     ax.set_xlabel("x", fontsize=10)
     ax.set_ylabel("y", fontsize=10)
     ax.set_title("Spatial distribution of hard-mapped cell types", fontsize=12)
-    ax.legend(loc="upper right", fontsize=8, markerscale=1.5, framealpha=0.7)
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)

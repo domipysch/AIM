@@ -1,14 +1,17 @@
 """Batch runner: reference aligner (Tangram / TACCO / DOT) for every pair × cell-type granularity.
 
-Run from the repository root with the appropriate conda environment active:
+Run from the repository root with the appropriate conda environment active
+and PYTHONPATH=src (needed by the mapping analysis step, which imports
+`metrics.*`):
     conda activate tangram_env   # or tacco_env / dot_env
-    python -m batch_processing.run_reference_aligner_all_pairs --aligner tangram [options]
+    PYTHONPATH=src python -m batch_processing.run_reference_aligner_all_pairs --aligner tangram [options]
 
 For each pair the script iterates over every non-empty CellTypeKey in scRNA/index.csv
 (CellTypeKey0, CellTypeKey1, CellTypeKey2) and produces one subtree per granularity:
 
     <output_dir>/{PairID:03d}_{scName}__{stName}/{cell_type_key}/
         mapping_prob.h5ad     <- spots x type mapping, var_names = cell type names
+        analysis/             <- mapping analysis report + plots + data (always run)
 """
 
 import argparse
@@ -17,6 +20,8 @@ import logging
 import sys
 from pathlib import Path
 from typing import Callable
+
+from reference_aligners.mapping_analysis.analyze import analyze_mapping
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -179,6 +184,15 @@ def main() -> None:
                 msg = (
                     f"{tag} mapping_prob.h5ad not found after run: {mapping_prob_path}"
                 )
+                logger.error(msg)
+                errors.append(msg)
+                continue
+
+            logger.info(f"{tag} Running mapping analysis")
+            try:
+                analyze_mapping(sc_path, st_path, granularity_dir, cell_type_key=ct_key)
+            except Exception as exc:
+                msg = f"{tag} mapping analysis FAILED: {exc}"
                 logger.error(msg)
                 errors.append(msg)
 
