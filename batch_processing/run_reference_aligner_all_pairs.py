@@ -1,10 +1,8 @@
 """Batch runner: reference aligner (Tangram / TACCO / DOT) for every pair × cell-type granularity.
 
-Run from the repository root with the appropriate conda environment active
-and PYTHONPATH=src (needed by the mapping analysis step, which imports
-`metrics.*`):
+Run from the repository root with the appropriate conda environment active:
     conda activate tangram_env   # or tacco_env / dot_env
-    PYTHONPATH=src python -m batch_processing.run_reference_aligner_all_pairs --aligner tangram [options]
+    python -m batch_processing.run_reference_aligner_all_pairs --aligner tangram [options]
 
 For each pair the script iterates over every non-empty CellTypeKey in scRNA/index.csv
 (CellTypeKey0, CellTypeKey1, CellTypeKey2) and produces one subtree per granularity:
@@ -20,6 +18,15 @@ import logging
 import sys
 from pathlib import Path
 from typing import Callable
+
+# The mapping analysis step imports `metrics.*` / `utils`, which live under
+# src/ — add it to sys.path here so this script works regardless of whether
+# the caller remembers to set PYTHONPATH=src (mirrors the same fix in
+# batch_processing/grid_search/run_grid_search_all_pairs.py).
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_DIR = str(_REPO_ROOT / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 from reference_aligners.mapping_analysis.analyze import analyze_mapping
 

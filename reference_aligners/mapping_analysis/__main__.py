@@ -10,7 +10,16 @@ Works identically for Tangram, TACCO, and DOT outputs.
 
 import argparse
 import logging
+import sys
 from pathlib import Path
+
+# analyze.py imports `metrics.*` / `utils`, which live under src/ — add it to
+# sys.path here so this CLI works regardless of whether the caller remembers
+# to set PYTHONPATH=src.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SRC_DIR = str(_REPO_ROOT / "src")
+if _SRC_DIR not in sys.path:
+    sys.path.insert(0, _SRC_DIR)
 
 from reference_aligners.mapping_analysis.analyze import analyze_mapping
 
