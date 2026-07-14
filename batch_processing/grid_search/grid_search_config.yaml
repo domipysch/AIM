@@ -36,11 +36,11 @@ loss_weights:
   - lambda_rec_spot: 0.5
     lambda_rec_gene: 0.5
     lambda_state_entropy: 0.5
-    lambda_spot_entropy: 0.5
+    lambda_spot_entropy: 0.0
     lambda_merge_entropy: 0.0
     lambda_merge_coherence: 0.25
-    lambda_spot_gini: 0.0
-    lambda_spot_peak: 0.0
+    lambda_spot_gini: 0.5
+    lambda_spot_peak: 0.5
     lambda_spot_focal: 0.0
 #  # 3) peak-lo — collision (Renyi-2) peak loss, low
 #  - lambda_rec_spot: 0.5

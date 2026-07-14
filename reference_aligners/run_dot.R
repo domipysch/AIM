@@ -1,13 +1,11 @@
 #!/usr/bin/env Rscript
 
-# Run DOT alignment on a prepared dataset.
-# Reads sc.h5ad and st.h5ad; saves all four outputs (prob + det GEP and mapping) as CSVs.
-# Python converts the CSVs to h5ad after this script exits.
+# Run DOT alignment on a prepared dataset (always in high-resolution mode, HSO).
+# Reads sc.h5ad and st.h5ad; saves the probabilistic mapping as a CSV.
+# Python converts the CSV to h5ad after this script exits.
 #
 # Usage:
-# Rscript run_dot.R <sc_path> <st_path> <LSO|HSO> <cellTypeKey|cellID> \
-#                   <gep_prob_path.csv> <gep_det_path.csv> \
-#                   <mapping_prob_path.csv> <mapping_det_path.csv>
+# Rscript run_dot.R <sc_path> <st_path> <cellTypeKey|cellID> <mapping_prob_path.csv>
 #
 # cellTypeKey:
 #   "cellID"        -> map individual cells (each cell is its own type)
@@ -20,21 +18,13 @@ library(stats)
 library(utils)
 
 args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 8) {
-  stop("Need 8 args: sc_path, st_path, mode (LSO|HSO), cellTypeKey, gep_prob_path, gep_det_path, mapping_prob_path, mapping_det_path.")
+if (length(args) < 4) {
+  stop("Need 4 args: sc_path, st_path, cellTypeKey, mapping_prob_path.")
 }
-sc_path          <- args[1]
-st_path          <- args[2]
-mode             <- toupper(args[3])
-cellTypeKey      <- args[4]
-gep_prob_path    <- args[5]
-gep_det_path     <- args[6]
-mapping_prob_path <- args[7]
-mapping_det_path  <- args[8]
-
-if (!mode %in% c("LSO", "HSO")) {
-  stop(sprintf("Invalid mode '%s'. Use 'LSO' or 'HSO'.", mode))
-}
+sc_path           <- args[1]
+st_path           <- args[2]
+cellTypeKey       <- args[3]
+mapping_prob_path <- args[4]
 
 # ---- Helper functions ----
 
@@ -146,74 +136,20 @@ srt_counts <- t(X_st)
 rownames(srt_counts) <- st_gene_ids
 colnames(srt_counts) <- spot_ids
 
-# ---- Build reference centroids (T x G) ----
-cat("Build reference centroids...\n")
-celltype_levels    <- unique(cell_types)
-ref_centroids_list <- lapply(celltype_levels, function(ct) {
-  idx <- which(cell_types == ct)
-  if (length(idx) == 1) {
-    as.numeric(X_sc[idx, , drop = TRUE])
-  } else {
-    colMeans(X_sc[idx, , drop = FALSE])
-  }
-})
-ref_centroids <- do.call(rbind, ref_centroids_list)  # T x G
-rownames(ref_centroids) <- as.character(celltype_levels)
-colnames(ref_centroids) <- sc_gene_ids
-
 # ---- Create DOT object and run decomposition ----
 cat("Create DOT object...\n")
 dot.srt <- setup.srt(srt_data = srt_counts, srt_coords = srt_coords)
 dot.ref <- setup.ref(ref_data = ref_counts, ref_annotations = cell_types, 1)
 dot     <- create.DOT(dot.srt, dot.ref)
 
-if (mode == "HSO") {
-  cat("Running DOT in high-resolution mode (HSO)...\n")
-  dot <- run.DOT.highresolution(dot)  # dot@weights: S x T
-} else {
-  cat("Running DOT in low-resolution mode (LSO)...\n")
-  dot <- run.DOT.lowresolution(dot, ratios_weight = 0, max_spot_size = 20, verbose = FALSE)
-  # dot@weights: S x T
-}
+cat("Running DOT in high-resolution mode (HSO)...\n")
+dot <- run.DOT.highresolution(dot)  # dot@weights: S x T
 
-# ---- Derive probabilistic and deterministic weights ----
 weights_prob <- as.matrix(dot@weights)  # S x T
 
-# Deterministic: argmax one-hot per spot
-finite_mask  <- is.finite(weights_prob)
-weights_repl <- weights_prob
-weights_repl[!finite_mask] <- -Inf
-argmax_idx   <- max.col(weights_repl, ties.method = "first")
-weights_det  <- matrix(0, nrow(weights_prob), ncol(weights_prob),
-                       dimnames = dimnames(weights_prob))
-weights_det[cbind(seq_len(nrow(weights_prob)), argmax_idx)] <- 1
-rows_no_finite <- rowSums(finite_mask) == 0
-if (any(rows_no_finite)) weights_det[rows_no_finite, ] <- 0
-
-# ---- Helper: compute and write GEP CSV (G x S) ----
-write_gep <- function(weights, path) {
-  gep <- t(ref_centroids) %*% t(weights)  # G x S
-  gep <- as.matrix(gep)
-  rownames(gep) <- sc_gene_ids
-  colnames(gep) <- spot_ids
-  out_df <- data.frame(GEP = rownames(gep), gep, check.names = FALSE, stringsAsFactors = FALSE)
-  numeric_cols <- vapply(out_df, is.numeric, logical(1))
-  out_df[numeric_cols] <- lapply(out_df[numeric_cols], function(x) round(x, 4))
-  write.csv(out_df, file = path, row.names = FALSE, quote = FALSE)
-}
-
-# ---- Write all four outputs ----
-out_dir <- dirname(gep_prob_path)
+# ---- Write mapping CSV ----
+out_dir <- dirname(mapping_prob_path)
 if (!dir.exists(out_dir)) dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
-
-write_gep(weights_prob, gep_prob_path)
-cat("Done. GEP (prob) written to:", gep_prob_path, "\n")
-
-write_gep(weights_det, gep_det_path)
-cat("Done. GEP (det) written to:", gep_det_path, "\n")
 
 write.csv(as.data.frame(weights_prob), file = mapping_prob_path, quote = FALSE)
 cat("Done. Mapping (prob) written to:", mapping_prob_path, "\n")
-
-write.csv(as.data.frame(weights_det), file = mapping_det_path, quote = FALSE)
-cat("Done. Mapping (det) written to:", mapping_det_path, "\n")

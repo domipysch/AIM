@@ -7,10 +7,9 @@ import pandas as pd
 import scanpy as sc
 import numpy as np
 import logging
-from anndata import AnnData
 import argparse
-from scipy.sparse import issparse
 import torch
+from anndata import AnnData
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,7 @@ def tangram_align_data(
     map_clusters: bool,
     cell_type_key: str,
     output_folder: Path,
-) -> tuple[AnnData, AnnData]:
+):
     """
     Run Tangram alignment on a prepared dataset.
     Saves prediction GEP CSV to output_path.
@@ -128,64 +127,23 @@ def tangram_align_data(
         assert ad_map_prob.n_obs == adata_sc_map.n_obs
         assert ad_map_prob.n_vars == adata_st.n_obs
 
-    # Step 4: Make coppy of mapping: Apply one-hot encoding to mapping: Only one cell / cell type per spot
-    ad_map_det = ad_map_prob.copy()
-
-    # For each column (spot) in ad_map, set the max value to 1 and all others to 0 (map spot to exactly one cell)
-    if issparse(ad_map_det.X):
-        mat = ad_map_det.X.toarray()
+    # Step 4: Reshape mapping to spots x type, with proper cell type names in var_names
+    # (Tangram's own obs_names are just numeric indices for cluster mode; the actual
+    # cell type names live in the cell_type_key obs column instead)
+    if map_clusters:
+        type_names = ad_map_prob.obs[cell_type_key].astype(str).tolist()
     else:
-        mat = ad_map_det.X.copy()
-    argmax_idx = np.argmax(
-        mat, axis=0
-    )  # for each spot (column), index of max cell / cell type
-    one_hot = np.zeros_like(mat, dtype=np.uint8)
-    one_hot[argmax_idx, np.arange(mat.shape[1])] = 1
-    ad_map_det.X = one_hot
+        type_names = ad_map_prob.obs_names.tolist()
 
-    for ad_map, mapping_type in ((ad_map_prob, "prob"), (ad_map_det, "det")):
+    ad_map = AnnData(
+        X=ad_map_prob.X.T.astype(np.float32),
+        obs=pd.DataFrame(index=adata_st.obs_names),
+        var=pd.DataFrame(index=type_names),
+    )
 
-        # Store mapping matrix as h5ad
-        mapping_path_h5ad = output_folder / f"mapping_{mapping_type}.h5ad"
-        ad_map.write_h5ad(mapping_path_h5ad)
-        logger.info(f"Saved {mapping_type} mapping to %s", mapping_path_h5ad)
-
-        # Compute Z' out of the mapping (expected gene expression per spot, scRNA data weighted by mapping)
-        logger.info("Project gene expression to spatial spots")
-        ad_ge = tg.project_genes(
-            adata_map=ad_map,
-            adata_sc=adata_sc,
-            cluster_label=cell_type_key if map_clusters else None,
-        )  # S x G
-
-        # Transpose to G x S
-        ad_ge = ad_ge.transpose()  # now G x S
-        assert ad_ge.n_obs == adata_sc.n_vars
-        assert ad_ge.n_vars == adata_st.n_obs
-        ad_ge.X = ad_ge.X.astype("float32")
-
-        # Export ad_ge to CSV
-        # - Rows: Genes
-        # - Columns: Spots
-        # - Top left cell = "GEP"
-        if issparse(ad_ge.X):
-            expr = ad_ge.X.A
-        else:
-            expr = ad_ge.X
-
-        # Check: Rows = Genes, Columns = Spots
-        assert expr.shape == (adata_sc.n_vars, adata_st.n_obs), "dims passen nicht"
-
-        # Make obs_names uppercase (gene names in uppercase in input data, also in output)
-        ad_ge.obs_names = [s.upper() for s in ad_ge.obs_names]
-
-        # Write resulting GEP h5ad (layout: obs = genes G, var = spots S)
-        logger.info(f"Write result GEP to h5ad.")
-        gep_path_h5ad = output_folder / f"gep_{mapping_type}.h5ad"
-        ad_ge.write_h5ad(gep_path_h5ad)
-        logger.info(f"Saved {mapping_type} tangram GEP to {gep_path_h5ad}")
-
-    return ad_ge
+    mapping_path_h5ad = output_folder / f"mapping_prob.h5ad"
+    ad_map.write_h5ad(mapping_path_h5ad)
+    logger.info(f"Saved mapping to %s", mapping_path_h5ad)
 
 
 if __name__ == "__main__":

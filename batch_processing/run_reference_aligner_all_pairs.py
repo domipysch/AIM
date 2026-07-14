@@ -1,4 +1,4 @@
-"""Batch runner: reference aligner (Tangram / TACCO / DOT) + metrics for every pair × cell-type granularity.
+"""Batch runner: reference aligner (Tangram / TACCO / DOT) for every pair × cell-type granularity.
 
 Run from the repository root with the appropriate conda environment active:
     conda activate tangram_env   # or tacco_env / dot_env
@@ -8,12 +8,7 @@ For each pair the script iterates over every non-empty CellTypeKey in scRNA/inde
 (CellTypeKey0, CellTypeKey1, CellTypeKey2) and produces one subtree per granularity:
 
     <output_dir>/{PairID:03d}_{scName}__{stName}/{cell_type_key}/
-        gep_prob.h5ad         <- predicted GEP (probabilistic mapping)
-        gep_det.h5ad          <- predicted GEP (deterministic mapping)
-        mapping_prob.h5ad
-        mapping_det.h5ad
-        metrics_prob/         <- metrics evaluated on gep_prob
-        metrics_det/          <- metrics evaluated on gep_det
+        mapping_prob.h5ad     <- spots x type mapping, var_names = cell type names
 """
 
 import argparse
@@ -22,8 +17,6 @@ import logging
 import sys
 from pathlib import Path
 from typing import Callable
-import anndata as ad
-from src.metrics.cossim import compute_and_save_cossim
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -89,7 +82,7 @@ def _get_align_fn(aligner: str) -> Callable:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a reference aligner (Tangram, TACCO, or DOT) and metrics "
+        description="Run a reference aligner (Tangram, TACCO, or DOT) "
         "for every pair in pairs.csv, once per available cell-type granularity."
     )
     parser.add_argument(
@@ -170,8 +163,7 @@ def main() -> None:
 
         for ct_key in keys:
             granularity_dir = pair_dir / ct_key
-            gep_prob_path = granularity_dir / "gep_prob.h5ad"
-            gep_det_path = granularity_dir / "gep_det.h5ad"
+            mapping_prob_path = granularity_dir / "mapping_prob.h5ad"
             tag = f"[Pair {pair_id:>3} | {ct_key}]"
 
             logger.info(f"{tag} Running {args.aligner}: {sc_name}  ×  {st_name}")
@@ -183,26 +175,12 @@ def main() -> None:
                 errors.append(msg)
                 continue
 
-            for gep_path, metrics_subdir in (
-                (gep_prob_path, "metrics_prob"),
-                (gep_det_path, "metrics_det"),
-            ):
-                metrics_dir = granularity_dir / metrics_subdir
-
-                if not gep_path.exists():
-                    msg = f"{tag} GEP not found, cannot compute {metrics_subdir}: {gep_path}"
-                    logger.error(msg)
-                    errors.append(msg)
-                    continue
-
-                logger.info(f"{tag} Computing {metrics_subdir}")
-                try:
-                    gep = ad.read_h5ad(gep_path)
-                    compute_and_save_cossim(st_path, gep, metrics_dir)
-                except Exception as exc:
-                    msg = f"{tag} Metrics ({metrics_subdir}) FAILED: {exc}"
-                    logger.error(msg)
-                    errors.append(msg)
+            if not mapping_prob_path.exists():
+                msg = (
+                    f"{tag} mapping_prob.h5ad not found after run: {mapping_prob_path}"
+                )
+                logger.error(msg)
+                errors.append(msg)
 
         logger.info(f"[Pair {pair_id:>3}] Done → {pair_dir}")
 
