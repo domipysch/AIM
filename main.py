@@ -469,12 +469,10 @@ if __name__ == "__main__":
     with open(args.output_folder / "config.yaml", "w") as f:
         yaml.safe_dump(
             {
-                "training": {
-                    "lr": args.lr,
-                    "epochs": args.epochs,
-                    "normalize_and_log": args.normalize_and_log,
-                    "reference_leiden_clustering_resolution": args.leiden_resolution,
-                },
+                "lr": args.lr,
+                "epochs": args.epochs,
+                "normalize_and_log": args.normalize_and_log,
+                "reference_leiden_clustering_resolution": args.leiden_resolution,
                 "loss_weights": {
                     "lambda_rec_spot": args.lambda_rec_spot,
                     "lambda_rec_gene": args.lambda_rec_gene,

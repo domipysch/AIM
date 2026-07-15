@@ -40,6 +40,11 @@ from metrics.onehot import onehot_metrics
 from metrics.onehot_plots import plot_dominance_thresholds, plot_onehot_distribution
 
 from .analysis import run_analysis
+from .biology_metrics import (
+    compute_spatial_organization,
+    compute_substate_coherence,
+    flatten_biology_objectives,
+)
 from .mapping_metrics import (
     assemble_state_centroids,
     compute_hard_mapping_validated,
@@ -66,7 +71,7 @@ def _read_leiden_resolution(output_folder: Path) -> float:
     with open(config_path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     try:
-        return float(cfg["training"]["reference_leiden_clustering_resolution"])
+        return float(cfg["reference_leiden_clustering_resolution"])
     except KeyError as e:
         raise KeyError(
             f"config.yaml in {output_folder} has no "
@@ -76,8 +81,11 @@ def _read_leiden_resolution(output_folder: Path) -> float:
 
 def _save_onehot(
     matrix, key: str, row_label: str, names: list[str], plots_dir: Path, data_dir: Path
-) -> None:
-    """Compute + save + plot one-hotness metrics for one matrix (P or G)."""
+) -> dict:
+    """Compute + save + plot one-hotness metrics for one matrix (P or G).
+
+    Returns the onehot_metrics dict so its summary can be folded into the flat
+    objective_metrics.csv."""
     m = onehot_metrics(matrix)
     pd.DataFrame(
         {
@@ -99,17 +107,79 @@ def _save_onehot(
     plot_dominance_thresholds(
         m, plots_dir / f"onehot_thresholds_{key}.png", row_label=row_label
     )
+    return m
+
+
+_COSSIM_COMBOS = ("soft-raw", "hard-raw", "soft-norm", "hard-norm")
+
+
+def _collect_objectives(
+    results: dict,
+    onehot_P: dict,
+    onehot_G: dict,
+    cossim_summary: dict,
+    spatial: dict,
+    coherence: dict,
+    n_leiden: int,
+    n_active_states: int,
+    n_mapped_states: int,
+) -> dict[str, float]:
+    """Flatten every scalar the analysis produces into one grid-search-facing row.
+
+    Columns are emitted in a fixed schema (missing values -> NaN) so the header
+    is stable across every run of a grid search, regardless of which optional
+    blocks (e.g. cossim when there are no shared genes) actually ran.
+    """
+    obj: dict[str, float] = {}
+
+    # Mapping sharpness (one-hotness) of P (spot->state) and G (leiden->state).
+    for prefix, m in (("sharp_mapping", onehot_P), ("sharp_merge", onehot_G)):
+        s = m["summary"]
+        obj[f"{prefix}_max_prob_mean"] = float(s["max_prob"]["mean"])
+        obj[f"{prefix}_gini_mean"] = float(s["gini_impurity"]["mean"])
+        obj[f"{prefix}_frac_above_0.9"] = float(s["frac_max_prob_above_0.9"])
+
+    # Reconstruction cosine similarity (fixed 4 combos x gene/spot).
+    for combo in _COSSIM_COMBOS:
+        c = cossim_summary.get(combo, {})
+        key = combo.replace("-", "_")
+        obj[f"recon_{key}_gene"] = float(c.get("median_gene", float("nan")))
+        obj[f"recon_{key}_spot"] = float(c.get("median_spot", float("nan")))
+
+    # Modularity + state counts (from run_analysis).
+    mc = results.get("metrics_computed", {})
+    obj["modularity_all"] = float(mc.get("modularity", float("nan")))
+    obj["modularity_shared"] = float(mc.get("modularity_shared", float("nan")))
+    obj["modularity_shared_leiden"] = float(
+        results.get("modularity_shared_leiden", float("nan"))
+    )
+    obj["n_leiden"] = float(n_leiden)
+    obj["n_active_states"] = float(n_active_states)
+    obj["n_mapped_states"] = float(n_mapped_states)
+    obj["n_computed_states"] = float(results.get("n_computed_states", float("nan")))
+    obj["n_computed_states_above_1pct"] = float(
+        results.get("n_computed_states_above_1pct", float("nan"))
+    )
+    obj["n_mapped_states_above_1pct"] = float(
+        results.get("n_mapped_states_above_1pct", float("nan"))
+    )
+
+    # Biology: spatial organisation + substate merge coherence.
+    obj.update(flatten_biology_objectives(spatial, coherence))
+    return obj
 
 
 def analyze_run(
     sc_path: Path,
     st_path: Path,
     output_folder: Path,
-) -> tuple[dict, int]:
+) -> tuple[dict, int, dict]:
     """
     Load one run's saved mapping outputs and run the full post-mapping
     analysis: one-hotness metrics, hard mapping + validation, reconstruction
-    cosine similarity, and the existing UMAP/modularity/contingency pipeline.
+    cosine similarity, the biology metrics (spatial organisation of the mapped
+    spots + substate merge coherence), and the existing UMAP/modularity/
+    contingency pipeline.
 
     Args:
         sc_path, st_path: Full paths to the sc/st h5ad used for the run.
@@ -120,10 +190,16 @@ def analyze_run(
                            — so it always matches the resolution the run was trained
                            with.
 
+    Writes (in analysis/data/): biology_metrics.json (full spatial + coherence
+    detail) and objective_metrics.csv (one row of flat scalar objectives — the
+    grid-search-facing summary of everything: sharpness, reconstruction,
+    modularity, spatial organisation, merge coherence).
+
     Returns:
-        (results, n_leiden): the dict returned by run_analysis, and the total
-        number of AIM state slots (= L, the number of Leiden overclustering
-        clusters — see model.py).
+        (results, n_leiden, objectives): the dict returned by run_analysis, the
+        total number of AIM state slots (= L, the number of Leiden overclustering
+        clusters — see model.py), and the flat scalar-objective dict also written
+        to objective_metrics.csv.
 
     Raises:
         ValueError: if the hard mapping is inconsistent (see
@@ -149,8 +225,8 @@ def analyze_run(
 
     # ── 1. One-hotness — mapping_prob (P) and leiden_merge_prob (G) ─────────
     logger.info("Computing one-hot metrics...")
-    _save_onehot(P, "mapping_prob", "spot", spot_names, plots_dir, data_dir)
-    _save_onehot(
+    onehot_P = _save_onehot(P, "mapping_prob", "spot", spot_names, plots_dir, data_dir)
+    onehot_G = _save_onehot(
         G, "leiden_merge_prob", "leiden cluster", leiden_names, plots_dir, data_dir
     )
 
@@ -164,10 +240,21 @@ def analyze_run(
         G_hard, leiden_names, state_names, data_dir / "leiden_merge_hard.h5ad"
     )
 
+    # ── 2b. Spatial organisation of the mapped spots ────────────────────────
+    logger.info("Computing spatial organisation of mapped spots...")
+    spot_states = np.asarray(P).argmax(axis=1)
+    coords = (
+        np.asarray(adata_st.obsm["spatial"]) if "spatial" in adata_st.obsm else None
+    )
+    spatial = compute_spatial_organization(spot_states, coords)
+
     # ── 3. Reconstruction cosine similarity (soft/hard x raw/norm) ──────────
     logger.info("Computing reconstruction cosine similarities...")
     shared_genes = sorted(set(adata_sc.var_names) & set(adata_st.var_names))
     cossim_summary: dict[str, dict] = {}
+    coherence = compute_substate_coherence(
+        np.zeros((n_leiden, 0)), G_hard
+    )  # placeholder (no shared genes); overwritten below when shared genes exist
     if not shared_genes:
         logger.warning("No shared genes between sc and st data — skipping cossim.")
     else:
@@ -184,6 +271,12 @@ def analyze_run(
         expr_sums_norm, _ = compute_leiden_expression_sums(
             adata_sc_norm, leiden_idx, n_leiden
         )
+
+        # Substate merge coherence — on the normalized+log1p shared-gene
+        # Leiden-cluster centroids (mean expression per cluster).
+        logger.info("Computing substate merge coherence...")
+        centroids_leiden_norm = expr_sums_norm / (sizes[:, None] + 1e-8)
+        coherence = compute_substate_coherence(centroids_leiden_norm, G_hard)
 
         adata_st_norm = adata_st_shared.copy()
         sc.pp.normalize_total(adata_st_norm, target_sum=1e4)
@@ -236,9 +329,31 @@ def analyze_run(
         n_leiden=n_leiden,
         leiden_labels=leiden_idx,
     )
+    # Persist the biology metrics BEFORE the report is generated — the report's
+    # spatial/coherence sections read biology_metrics.json from disk, so it must
+    # already exist when generate_analysis_report runs.
+    with open(data_dir / "biology_metrics.json", "w") as f:
+        json.dump({"spatial": spatial, "coherence": coherence}, f, indent=2)
+
     generate_analysis_report(analysis_dir, n_active_states, n_mapped_states, n_leiden)
     logger.info("Analysis report written to %s", analysis_dir)
-    return results, n_leiden
+
+    # ── 5. Flat objective scalars ───────────────────────────────────────────
+    objectives = _collect_objectives(
+        results=results,
+        onehot_P=onehot_P,
+        onehot_G=onehot_G,
+        cossim_summary=cossim_summary,
+        spatial=spatial,
+        coherence=coherence,
+        n_leiden=n_leiden,
+        n_active_states=n_active_states,
+        n_mapped_states=n_mapped_states,
+    )
+    pd.DataFrame([objectives]).to_csv(data_dir / "objective_metrics.csv", index=False)
+    logger.info("Objective metrics written to %s", data_dir / "objective_metrics.csv")
+
+    return results, n_leiden, objectives
 
 
 if __name__ == "__main__":

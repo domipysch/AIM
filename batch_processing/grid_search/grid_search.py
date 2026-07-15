@@ -11,6 +11,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 import main as aim_main
+from analysis.run_from_output import analyze_run
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +64,14 @@ def run_config(
         gpu_limit_gb=gpu_limit_gb,
     )
 
-    return _read_losses_end(output_folder)
+    # Post-mapping analysis — reads the outputs written above and writes the
+    # analysis/ report into the same output_folder. Returns the flat scalar
+    # objectives (sharpness, reconstruction, modularity, spatial organisation,
+    # merge coherence) so they land in the grid-search summary.csv alongside the
+    # final loss values, making every one of them a searchable objective.
+    _, _, objectives = analyze_run(sc_path, st_path, output_folder)
+
+    return {**_read_losses_end(output_folder), **objectives}
 
 
 def main(
@@ -172,7 +180,7 @@ def main(
     ds_folder.mkdir(parents=True, exist_ok=True)
 
     # Copy experiment config to output folder for reference
-    shutil.copy(experiment_config, ds_folder / "experiment_config.yml")
+    shutil.copy(experiment_config, ds_folder / "experiment_config.yaml")
 
     # Prepare summary CSV
     summary_path = ds_folder / "summary.csv"
@@ -201,7 +209,7 @@ def main(
 
             run_dir = ds_folder / str(run_id)
             run_dir.mkdir(parents=True, exist_ok=True)
-            run_config_path = run_dir / "config.yml"
+            run_config_path = run_dir / "config.yaml"
             with open(run_config_path, "w") as cf:
                 yaml.safe_dump(cfg_copy, cf, sort_keys=False)
 

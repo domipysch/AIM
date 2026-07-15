@@ -30,6 +30,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import typst
 from datetime import date
 from pathlib import Path
@@ -90,6 +91,41 @@ def _csv_table(csv_path: Path) -> str:
             cells.append(cell)
         lines.append("  " + ", ".join(cells) + ",")
 
+    lines.append(")")
+    return "\n".join(lines)
+
+
+def _num(v, nd: int = 4) -> str:
+    """Format a value as a fixed-decimal string; non-finite / non-numeric -> 'n/a'."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    return f"{f:.{nd}f}" if math.isfinite(f) else "n/a"
+
+
+def _pct(v) -> str:
+    """Format a fraction as a percentage; non-finite / non-numeric -> 'n/a'."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "n/a"
+    return f"{f:.1%}" if math.isfinite(f) else "n/a"
+
+
+def _multi_col_table(header: tuple[str, ...], rows: list[list[str]]) -> str:
+    """Return an n-column Typst #table(...) string (bold header, first col left-aligned)."""
+    n = len(header)
+    lines = [
+        "#table(",
+        f"  columns: {n},",
+        "  stroke: 0.5pt,",
+        "  fill: (_, row) => if row == 0 { luma(220) } else if calc.odd(row) { luma(248) } else { white },",
+        "  align: (col, _) => if col == 0 { left } else { right },",
+        "  " + ", ".join(f"[*{_esc(str(h))}*]" for h in header) + ",",
+    ]
+    for row in rows:
+        lines.append("  " + ", ".join(f"[{_esc(str(c))}]" for c in row) + ",")
     lines.append(")")
     return "\n".join(lines)
 
@@ -247,6 +283,119 @@ _PAGE_SETUP = """\
 """
 
 
+def _biology_section(data_dir: Path) -> str:
+    """Spatial-organisation + substate-coherence sections, built from the
+    biology_metrics.json written by analysis.run_from_output. Returns '' if the
+    file is absent or unreadable."""
+    json_path = data_dir / "biology_metrics.json"
+    if not json_path.exists():
+        return ""
+    try:
+        with open(json_path, encoding="utf-8") as fh:
+            bio = json.load(fh)
+    except (json.JSONDecodeError, OSError):
+        return ""
+
+    parts: list[str] = []
+
+    # ── Spatial organisation of the mapped spots ────────────────────────────
+    sp = bio.get("spatial", {})
+    lsp, mi = sp.get("local_purity"), sp.get("morans_i")
+    if lsp or mi:
+
+        def _spatial_row(name: str, d: dict | None) -> list[str]:
+            if not d:
+                return [name, "n/a", "n/a", "n/a", "n/a"]
+            return [
+                name,
+                _num(d.get("observed")),
+                _num(d.get("null_mean")),
+                _num(d.get("z_score"), 2),
+                _num(d.get("p_value"), 3),
+            ]
+
+        header: tuple[str, ...] = (
+            "Metric",
+            "Observed",
+            "Null mean",
+            "z-score",
+            "p-value",
+        )
+        rows = [
+            _spatial_row("Local spatial purity", lsp),
+            _spatial_row("Moran's I (mean over states)", mi),
+        ]
+        parts.append(
+            "\n= Spatial Organisation of Mapped Spots\n\n"
+            "Mapped spot states (argmax of P) scored against a label-shuffle null "
+            f"(spots: {sp.get('n_spots', '?')}, k neighbours: {sp.get('k', '?')}, "
+            f"permutations: {sp.get('n_perm', '?')}). Higher purity / Moran's I / "
+            "z-score = mapped states are more spatially coherent than chance.\n\n"
+            + _multi_col_table(header, rows)
+            + "\n"
+        )
+
+    # ── Substate merge coherence ─────────────────────────────────────────────
+    coh = bio.get("coherence", {})
+    agg = coh.get("aggregate", {})
+    per_state = coh.get("per_state", {})
+    if agg:
+        agg_tbl = _two_col_table(
+            [
+                (
+                    "States tested (merge >=2 Leiden clusters)",
+                    str(int(agg.get("n_tested_states", 0))),
+                ),
+                ("Mean pairwise cosine similarity", _num(agg.get("mean_cossim"))),
+                ("Mean z-score vs. null", _num(agg.get("mean_z_score"), 2)),
+                ("Fraction significant (p < 0.05)", _pct(agg.get("frac_significant"))),
+            ]
+        )
+        tested = {s: m for s, m in per_state.items() if m.get("skipped_reason") is None}
+        per_state_block = ""
+        if tested:
+            header = (
+                "State",
+                "n Leiden",
+                "Mean cossim",
+                "Median",
+                "Null mean",
+                "z-score",
+                "p-value",
+            )
+            rows = [
+                [
+                    s,
+                    str(m.get("n_leiden_sub", "?")),
+                    _num(m.get("mean_cossim")),
+                    _num(m.get("median_cossim")),
+                    _num(m.get("null_mean")),
+                    _num(m.get("z_score_mean"), 2),
+                    _num(m.get("p_value_mean"), 3),
+                ]
+                for s, m in sorted(tested.items(), key=lambda kv: int(kv[0]))
+            ]
+            per_state_block = "\n" + _multi_col_table(header, rows) + "\n"
+        n_skipped = len(per_state) - len(tested)
+        skipped_note = (
+            f"\n\n#text(size: 9pt, fill: luma(120))[{n_skipped} state(s) not testable "
+            "(fewer than 2 merged Leiden clusters, or none in other states to form a null).]"
+            if n_skipped
+            else ""
+        )
+        parts.append(
+            "\n= Substate Merge Coherence (shared genes)\n\n"
+            "For each computed state merging >=2 Leiden clusters: mean pairwise cosine "
+            "similarity of the merged clusters' shared-gene centroids, vs. a null of "
+            "same-sized random draws of Leiden clusters from other states. Higher cosine / "
+            "z-score = the merged clusters are more mutually alike than an arbitrary "
+            "same-sized group, i.e. the merge is more coherent."
+            f"{skipped_note}\n\n" + agg_tbl + per_state_block
+        )
+
+    return "\n".join(parts)
+
+
 # ─── Analysis report ──────────────────────────────────────────────────────────
 
 
@@ -379,6 +528,9 @@ semantics). "raw" compares raw counts; "norm" compares total-count-normalized
 
 {_csv_table(cossim_csv)}
 {boxplot_block}""")
+
+    # 7 & 8. Biology metrics — spatial organisation + substate merge coherence
+    parts.append(_biology_section(data_dir))
 
     source = "\n".join(p for p in parts if p)
     return out_pdf if _compile(source, out_pdf) else None
