@@ -22,3 +22,7 @@ dependencies:
   - threadpoolctl
   - pyamg
   - tacco
+  - pytorch
+  - pip
+  - pip:
+      - typst

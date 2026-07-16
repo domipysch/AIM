@@ -5,7 +5,8 @@ For each row in pairs.csv the script:
   1. Writes a per-pair config YAML (data/output stripped from the template; hyperparameters kept)
   2. Runs grid_search for all pairs in parallel across GPUs
 
-Post-mapping analyses are handled separately by run_analyses_all_pairs.py.
+Post-mapping analysis now runs inline as part of each grid_search run (see
+grid_search.run_config), so it is included automatically for every pair here.
 
 Usage
 -----

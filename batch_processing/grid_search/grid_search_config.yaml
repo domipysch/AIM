@@ -1,14 +1,37 @@
+# First orientation grid — AIM on one dataset (mouse-ssp, pair 0).
+# loss_weights is a DICT of lists: each key is swept as an independent grid axis
+# (Cartesian product). rec_spot/rec_gene fixed as the data-fit anchor; the two
+# Shannon sharpeners (spot_entropy/merge_entropy) held at 0 — dominated by the
+# Gini analogs. 2*4*2*2*2 = 64 runs.
 lr:
   - 0.008
 epochs:
   - 1000
 normalize_and_log:
   - false
+  - true
 reference_leiden_clustering_resolution:
   - 3.0
 loss_weights:
-  - lambda_rec_spot: 0.5
-    lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.1
-    lambda_spot_entropy: 0.08
-    lambda_soft_contingency: 1
+  lambda_rec_spot:
+    - 0.5
+  lambda_rec_gene:
+    - 0.5
+  lambda_state_entropy:
+    - 0.25
+    - 0.5
+    - 1.0
+    - 2.0
+  lambda_spot_entropy:
+    - 0.0
+  lambda_spot_gini:
+    - 0.5
+    - 1.0
+  lambda_merge_entropy:
+    - 0.0
+  lambda_merge_gini:
+    - 1.0
+    - 2.0
+  lambda_merge_coherence:
+    - 0.0
+    - 0.5

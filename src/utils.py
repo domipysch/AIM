@@ -14,29 +14,28 @@ logger = logging.getLogger(__name__)
 def estimate_gpu_memory_gb(
     num_cells: int,
     num_spots: int,
-    g_sc: int,
-    g_st: int,
     num_genes_shared: int,
     n_states: int,
 ) -> float:
-    """Rough upper-bound estimate of GPU memory required (in GB)."""
+    """
+    Rough upper-bound estimate of GPU memory required (in GB).
+
+    Only the shared-gene tensors are ever materialized on device (the full,
+    non-shared expression matrices are never loaded), so the footprint is
+    dominated by X_shared/Z_shared plus the small model matrices (G: L x L,
+    H: S x L) and the Z' = H @ M reconstruction workspace, where L = n_states.
+    """
     B32 = 4  # bytes per float32
+    L = n_states
 
-    # Input tensors kept on GPU during training
-    data = (
-        num_cells * g_sc
-        + num_spots * g_st
-        + num_cells * num_genes_shared
-        + num_spots * num_genes_shared
-    ) * B32
-
-    # Trainable parameters + their gradients (factor ×2) + Adam moment estimates (factor ×2)
-    A_bytes = num_spots * num_cells * B32 * 4
-    B_bytes = num_cells * n_states * B32 * 4
-
-    # 50 % overhead for activations, edge index, misc buffers
-    total = (data + A_bytes + B_bytes) * 1.5
-    return total / (1024**3)
+    est_bytes = B32 * (
+        num_cells * num_genes_shared  # X_shared
+        + num_spots * num_genes_shared  # Z_shared
+        + L * num_genes_shared  # expr_sums_shared
+        + 3 * num_spots * L  # H + grads + workspace
+        + 3 * num_spots * num_genes_shared  # Z' reconstruction workspace
+    )
+    return est_bytes / (1024**3)
 
 
 def arr_to_h5ad(
@@ -135,7 +134,10 @@ def dump_loss_logs(losses: dict, output_folder: Path) -> dict:
         "clust",
         "state_entropy",
         "spot_entropy",
-        "soft_contingency",
+        "spot_gini",
+        "merge_entropy",
+        "merge_gini",
+        "merge_coherence",
     ):
         comp_vals = losses.get(comp, {})
         val = None
@@ -230,15 +232,31 @@ def create_loss_plots(losses: dict, loss_dir: Path) -> None:
         ),
         label="spot_entropy-weighted",
     )
-    if "soft_contingency" in losses:
+    if "merge_entropy" in losses:
         plt.plot(
             epochs,
             list(
-                v * losses["soft_contingency"]["weight"]
-                for v in losses["soft_contingency"]["values"]
+                v * losses["merge_entropy"]["weight"]
+                for v in losses["merge_entropy"]["values"]
             ),
-            label="soft_contingency-weighted",
+            label="merge_entropy-weighted",
         )
+    if "merge_coherence" in losses:
+        plt.plot(
+            epochs,
+            list(
+                v * losses["merge_coherence"]["weight"]
+                for v in losses["merge_coherence"]["values"]
+            ),
+            label="merge_coherence-weighted",
+        )
+    for _comp in ("spot_gini", "merge_gini"):
+        if _comp in losses:
+            plt.plot(
+                epochs,
+                list(v * losses[_comp]["weight"] for v in losses[_comp]["values"]),
+                label=f"{_comp}-weighted",
+            )
     plt.xlabel("Epoch")
     plt.ylabel("Loss")
     plt.title("Loss Curve (components + total)")
@@ -259,7 +277,10 @@ def create_loss_plots(losses: dict, loss_dir: Path) -> None:
         *(("clust",) if "clust" in losses else ()),
         "state_entropy",
         "spot_entropy",
-        *(("soft_contingency",) if "soft_contingency" in losses else ()),
+        *(("spot_gini",) if "spot_gini" in losses else ()),
+        *(("merge_entropy",) if "merge_entropy" in losses else ()),
+        *(("merge_gini",) if "merge_gini" in losses else ()),
+        *(("merge_coherence",) if "merge_coherence" in losses else ()),
     )
 
     # Ensure epochs list is available

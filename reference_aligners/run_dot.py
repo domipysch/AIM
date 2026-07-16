@@ -30,77 +30,50 @@ def dot_align_data(
     st_path: Path,
     cell_type_key: str,
     output_folder: Path,
-) -> tuple[AnnData, AnnData]:
+):
     """
     Run DOT alignment by calling run_dot.R via Rscript.
-    Saves gep_prob.h5ad, gep_det.h5ad, mapping_prob.h5ad, mapping_det.h5ad
-    to output_folder and returns (gep_prob, gep_det).
+    Saves mapping_prob.h5ad (obs=spots, var=cell types) to output_folder.
 
     Args:
         sc_path: Full path to sc.h5ad.
         st_path: Full path to st.h5ad.
         cell_type_key: obs column to use as annotation; pass "cellID" to map individual cells.
-        output_folder: Folder where all outputs are written.
+        output_folder: Folder where the output is written.
 
     Returns:
-        Tuple (gep_prob, gep_det), each AnnData with obs=genes, var=spots (G x S layout).
+        AnnData with obs=spots, var=cell types (S x T layout).
     """
     annotation_key = cell_type_key if cell_type_key else "cellID"
 
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    gep_prob_csv = output_folder / "gep_prob.csv"
-    gep_det_csv = output_folder / "gep_det.csv"
     map_prob_csv = output_folder / "mapping_prob.csv"
-    map_det_csv = output_folder / "mapping_det.csv"
 
     cmd = [
         _find_rscript(),
         R_SCRIPT,
         str(sc_path),
         str(st_path),
-        "HSO",
         annotation_key,
-        str(gep_prob_csv),
-        str(gep_det_csv),
         str(map_prob_csv),
-        str(map_det_csv),
     ]
     logger.info("Running DOT via R: %s", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
-    def _csv_to_gep_h5ad(csv_path: Path, h5ad_path: Path) -> AnnData:
-        df = pd.read_csv(csv_path, header=0, index_col=0)
-        adata = AnnData(
-            X=np.asarray(df.values, dtype=np.float32),
-            obs=pd.DataFrame(index=df.index),
-            var=pd.DataFrame(index=df.columns),
-        )
-        adata.write_h5ad(h5ad_path)
-        csv_path.unlink()
-        return adata
+    # R writes weights as S x T (rows=spots, cols=cell types, already named) —
+    # this is already the layout we want, no transpose needed.
+    df = pd.read_csv(map_prob_csv, header=0, index_col=0)
+    ad_map = AnnData(
+        X=np.asarray(df.values, dtype=np.float32),
+        obs=pd.DataFrame(index=df.index.astype(str)),
+        var=pd.DataFrame(index=df.columns.astype(str)),
+    )
+    ad_map.write_h5ad(output_folder / "mapping_prob.h5ad")
+    map_prob_csv.unlink(missing_ok=True)
 
-    def _csv_to_mapping_h5ad(csv_path: Path, h5ad_path: Path, dtype: type) -> AnnData:
-        # R writes weights as S×T (rows=spots, cols=cell_types)
-        # Transpose to T×S to match Tangram/TACCO layout (obs=cell_types, var=spots)
-        df = pd.read_csv(csv_path, header=0, index_col=0)
-        adata = AnnData(
-            X=np.asarray(df.values.T, dtype=dtype),
-            obs=pd.DataFrame(index=df.columns),
-            var=pd.DataFrame(index=df.index),
-        )
-        adata.write_h5ad(h5ad_path)
-        csv_path.unlink()
-        return adata
-
-    gep_prob = _csv_to_gep_h5ad(gep_prob_csv, output_folder / "gep_prob.h5ad")
-    gep_det = _csv_to_gep_h5ad(gep_det_csv, output_folder / "gep_det.h5ad")
-    _csv_to_mapping_h5ad(map_prob_csv, output_folder / "mapping_prob.h5ad", np.float32)
-    _csv_to_mapping_h5ad(map_det_csv, output_folder / "mapping_det.h5ad", np.uint8)
-
-    logger.info("All DOT outputs written to %s", output_folder)
-    return gep_prob, gep_det
+    logger.info("Saved mapping to %s", output_folder / "mapping_prob.h5ad")
 
 
 if __name__ == "__main__":

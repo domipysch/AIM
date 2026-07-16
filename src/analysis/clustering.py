@@ -13,26 +13,6 @@ from utils import run_pca_neighbors_umap
 logger = logging.getLogger(__name__)
 
 
-def build_shared_graph(adata_sc: AnnData, shared_genes: list[str]) -> AnnData | None:
-    """
-    Build a KNN neighbour graph of the SC reference using only the shared genes.
-
-    Mirrors `run_leiden_shared_genes` (normalize → log1p → PCA → neighbors on the
-    shared-gene subset) but skips Leiden/UMAP — used to compute the shared-gene
-    modularity when the Leiden-shared labels were precomputed elsewhere.
-    Returns None when fewer than two shared genes are present in the reference.
-    """
-    available = [g for g in shared_genes if g in adata_sc.var_names]
-    if len(available) < 2:
-        logger.warning(
-            "Too few shared genes (%d) — cannot build shared graph.", len(available)
-        )
-        return None
-    adata_shared = adata_sc[:, available].copy()
-    run_pca_neighbors_umap(adata_shared, skip_umap=True)
-    return adata_shared
-
-
 def compute_modularity(adata_processed: AnnData, labels: np.ndarray) -> float:
     """
     Modularity of the given partition on the precomputed scanpy KNN graph
