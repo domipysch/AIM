@@ -1,7 +1,7 @@
-"""Post-mapping analysis, decoupled from both the AIM runner (main.py) and
-grid_search.py: reads a run's saved mapping outputs from disk and produces the
-analysis report from them. Neither main.py nor grid_search.py compute the
-analysis matrices inline anymore — both call into this module instead.
+"""Post-mapping analysis, decoupled from the method runner (main.py): reads a
+run's saved mapping outputs from disk and produces the analysis report from
+them. main.py does not compute the analysis matrices inline — it calls into
+this module instead (optionally, per K, under --full_analysis).
 
 Computes, for one AIM run:
     - One-hotness metrics/plots for mapping_prob.h5ad (P) and

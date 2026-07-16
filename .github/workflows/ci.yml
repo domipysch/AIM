@@ -23,7 +23,7 @@ jobs:
         run: black --check .
 
       - name: Type check (mypy)
-        run: mypy src data_preparation reference_aligners
+        run: mypy src data_preparation reference_aligners pre_check
 
   sample-smoke-test:
     runs-on: ubuntu-latest
@@ -58,22 +58,34 @@ jobs:
             --st_dir    sample_dataset/ST \
             --output_dir sample_output/pre_check/sample_batch
 
-      - name: Novel method – single pair
+      - name: Novel method – single pair (greedy mapping)
         run: |
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_folder sample_output/novel/sample \
-            --K 3 \
-            --epochs 5
+            --output_folder sample_output/novel/greedy \
+            --mapping           greedy \
+            --leiden_resolution 3.0
 
-      - name: Grid search – single pair
+      - name: Novel method – single pair (learned mapping)
         run: |
-          python -m batch_processing.grid_search.grid_search \
-            -c              batch_processing/grid_search/grid_search_config_ci.yaml \
+          python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_folder sample_output/grid_search/sample
+            --output_folder sample_output/novel/learned \
+            --mapping           learned \
+            --leiden_resolution 3.0 \
+            --epochs            5
+
+      - name: Novel method – all pairs (batch mode)
+        run: |
+          python main.py \
+            --pairs_csv  sample_dataset/pairs.csv \
+            --sc_dir     sample_dataset/scRNA \
+            --st_dir     sample_dataset/ST \
+            --output_dir sample_output/novel/sample_batch \
+            --mapping           greedy \
+            --leiden_resolution 3.0
 
   sample-reference-aligners:
     runs-on: ubuntu-latest
