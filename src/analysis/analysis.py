@@ -1,203 +1,284 @@
 """
-Post-mapping analysis for AIM.
-
-Standalone entry point; call run_analysis() after mapping:
+Post-mapping analysis for AIM: scores one K's saved mapping outputs against
+adata_sc/adata_st and produces the analysis report for that K.
 
     from analysis.analysis import run_analysis
-    results = run_analysis(adata_sc, adata_st, cell_state_soft, spot_state_soft, output_dir=Path("analysis_out"), leiden_resolution=3.0, n_leiden=5, leiden_labels=leiden_labels)
+    run_analysis(adata_sc, adata_st, run_dir)
 
-Outputs written to output_dir:
-    cell_state_profiles.png          per-state expression heatmap + cell/spot fractions
-    cell_state_fractions.png         standalone cell/spot fraction bar charts
-    spatial_cell_states.png          spatial plot coloured by computed state
-    umap_computed_state.png          computed-state UMAP (shown beside the spatial plot)
-    umap_allgenes_vs_shared.png      computed-state UMAP: all-gene vs shared-gene embedding
-    umap_comparison.png              UMAP: computed assignment vs Leiden (shared & all genes)
-    contingency_heatmap.png          contingency matrix (Leiden, all genes)
+Reads whatever it needs directly off ``adata_sc``/``adata_st`` (obs[OBS_LEIDEN_ALL_GENES],
+uns[UNS_SHARED_GENES / UNS_LEIDEN_RESOLUTION_ALL_GENES / UNS_LEIDEN_SIZES /
+UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM / UNS_LEIDEN_EXPR_SUMS_SHARED_GENES*] —
+see adata_schema.py) rather than taking it as a separate parameter, and loads
+this K's own outputs (spot_to_state_mapping.h5ad onto adata_st.obsm,
+leiden_to_state.csv) from ``run_dir``.
+
+Computes, for one K:
+    - One-hotness metrics/plots for spot_to_state_mapping.h5ad (P).
+    - Hard (argmax) mapping: for every spot, the index of its winning state —
+      stored on adata_st.obsm[OBSM_MAPPING_HARD] alongside the soft P.
+    - Reconstruction cosine similarity (soft/hard x raw/normalized+log1p),
+      via state centroids assembled from the Leiden-cluster expression sums.
+    - Biology metrics: spatial organisation of the mapped spots + substate
+      merge coherence (both permutation-tested).
+    - Hard assignments, fractions, modularity of the computed-state
+      partition, and the plots (UMAP grid, spatial map, state profiles,
+      leiden-merge map).
+
+Outputs written to run_dir/analysis/:
+    data/cossim/, cossim_summary.csv reconstruction cosine similarity
+    data/biology_metrics.json        spatial organisation + substate coherence detail
+    plots/cell_state_profiles.png    per-state expression heatmap + cell/spot fractions
+    plots/cell_state_fractions.png   standalone cell/spot fraction bar charts
+    plots/spatial_cell_states.png    spatial plot coloured by computed state
+    plots/umap_computed_state.png    computed-state UMAP (shown beside the spatial plot)
+    plots/umap_grid.png              2x2 UMAP grid: {Leiden, computed} x {all, shared genes}
+    plots/leiden_merge_map.png       which Leiden overclusters merged into each AIM state
+    report.pdf                       the PDF report (via analysis.report)
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
-import torch
 from anndata import AnnData
 
-from utils import _to_numpy, run_pca_neighbors_umap, hard_assignments
+from adata_schema import (
+    LAYER_LOGNORM,
+    OBS_LEIDEN_ALL_GENES,
+    OBS_LEIDEN_SHARED_GENES,
+    OBSM_MAPPING_SOFT,
+    OBSM_SPATIAL,
+    OBSP_CONNECTIVITIES_SHARED_GENES,
+    UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM,
+    UNS_LEIDEN_EXPR_SUMS_SHARED_GENES,
+    UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM,
+    UNS_LEIDEN_RESOLUTION_ALL_GENES,
+    UNS_LEIDEN_SIZES,
+    UNS_SHARED_GENES,
+    OBSM_MAPPING_HARD,
+)
+from metrics.cossim import CossimResult, compute_and_save_cossim
+from metrics.cossim_plots import plot_cossim_boxplots
+
+from .utils import hard_assignments
 from .assignments import cell_state_fractions
-from .clustering import (
-    compute_modularity,
-    run_leiden_shared_genes,
+from .biology_metrics import compute_spatial_organization, compute_substate_coherence
+from .clustering import compute_modularity
+from .mapping_metrics import (
+    assemble_state_centroids,
+    load_mapping,
+    load_leiden_to_state,
+    predict_expression,
 )
-from .matching import (
-    compute_contingency_matching,
-    plot_contingency_heatmap,
-)
+from .onehot import save_onehot
 from .plots import (
     _build_state_palette,
-    plot_computed_state_umaps,
+    plot_umap_grid,
+    plot_leiden_merge_map,
     plot_umap_comparison,
     plot_state_profiles,
     plot_state_fractions,
     plot_spatial_cell_states,
 )
+from .report import generate_analysis_report
 
 logger = logging.getLogger(__name__)
 
 
-def run_analysis(
-    adata_sc: AnnData,
-    adata_st: AnnData,
-    cell_state_soft: torch.Tensor | np.ndarray,
-    spot_state_soft: torch.Tensor | np.ndarray,
-    output_dir: Path,
-    leiden_resolution: float,
-    n_leiden: int,
-    leiden_labels: np.ndarray,
-) -> dict:
+def run_analysis(adata_sc: AnnData, adata_st: AnnData, run_dir: Path) -> None:
     """
-    Full post-mapping analysis pipeline.
+    Score one K's saved mapping outputs against ``adata_sc``/``adata_st``:
+    one-hotness metrics, hard (argmax) mapping, reconstruction cosine
+    similarity, biology metrics (spatial organisation + substate merge
+    coherence), hard assignments/fractions/modularity of the computed-state
+    partition, and the UMAP/spatial/state-profile plots — then writes the
+    PDF report.
 
-    Parameters
-    ----------
-    adata_sc         : Single-cell AnnData (cells × genes), raw counts expected.
-    adata_st         : Spatial AnnData (spots × genes).
-    cell_state_soft  : Cell-to-state soft-assignment matrix (n_cells, n_leiden).
-    spot_state_soft  : Spot-to-state soft-assignment matrix (n_spots, n_leiden).
-    output_dir       : Directory where all outputs are written (created if absent).
-    n_leiden         : Number of AIM state slots — equal to L, the number of
-                       Leiden overclustering clusters (AIM's G matrix is L x L,
-                       so L is both the Leiden-cluster count and the total
-                       number of state slots; see model.py). Not every slot is
-                       necessarily used — see n_computed_states/n_mapped_states
-                       below for the actually-occupied count.
-    leiden_resolution     : Resolution for the main Leiden reference clusterings.
-    leiden_labels    : Leiden cluster id per cell (n_cells,), integer — the exact
-                       "all genes" overclustering used to train this run (e.g.
-                       loaded from leiden_overclustering.h5ad). Not recomputed
-                       here: scanpy's Leiden isn't deterministic run-to-run, so a
-                       fresh clustering wouldn't reproduce the actual partition
-                       the model was trained on.
-
-    Returns
-    -------
-    dict with keys:
-        cell_states            np.ndarray (n_cells,)   hard cell-state labels
-        spot_states            np.ndarray (n_spots,)   hard cell-state labels
-        cell_fractions         dict[int, float]         fraction of cells per state
-        spot_fractions         dict[int, float]         fraction of spots per state
-        n_mapped_states_above_1pct int                   mapped states with >1% of spots
-        metrics_computed       dict[str, float]         modularity (all genes) and
-                                                        modularity_shared (shared-gene graph)
-        modularity_shared_leiden float                  shared-gene modularity of the
-                                                        Leiden-shared partition (≈ ceiling)
-        contingency_matching dict   contingency argmax matching (Leiden, all genes)
-        adata_processed        AnnData           sc data with UMAP + all labels
+    Args:
+        adata_sc: Single-cell AnnData (cells x genes), raw counts in .X;
+                  carries obs[OBS_LEIDEN_ALL_GENES / OBS_LEIDEN_SHARED_GENES],
+                  uns[UNS_SHARED_GENES / UNS_LEIDEN_RESOLUTION_ALL_GENES /
+                  UNS_LEIDEN_SIZES / UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM /
+                  UNS_LEIDEN_EXPR_SUMS_SHARED_GENES*] (see adata_schema.py) —
+                  written by aim.clustering / aim.aggregation before the K
+                  sweep runs, and read back here rather than recomputed. The
+                  Leiden overclustering used to train this run is read from
+                  here, not recomputed: scanpy's Leiden isn't deterministic
+                  run-to-run, so a fresh clustering wouldn't reproduce the
+                  actual partition the model was trained on.
+        adata_st: Spatial AnnData (spots x genes), carrying layers[LAYER_LOGNORM].
+                  Mutated in place: this K's mapping is loaded onto
+                  adata_st.obsm[OBSM_MAPPING_SOFT / OBSM_MAPPING_HARD].
+        run_dir: one K_<kkk> sweep folder, containing spot_to_state_mapping.h5ad
+                  and leiden_to_state.csv (as written by main.py). analysis/ is
+                  written inside this folder.
     """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    plots_dir = output_dir / "plots"
-    plots_dir.mkdir(exist_ok=True)
-    data_dir = output_dir / "data"
-    data_dir.mkdir(exist_ok=True)
 
-    cell_state_soft = _to_numpy(cell_state_soft)
-    spot_state_soft = _to_numpy(spot_state_soft)
+    # Get base paths
+    run_dir = Path(run_dir)
+    analysis_dir = run_dir / "analysis"
+    plots_dir = analysis_dir / "plots"
+    data_dir = analysis_dir / "data"
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
-    shared_genes = list(set(adata_sc.var_names) & set(adata_st.var_names))
-    logger.info(
-        "run_analysis: n_leiden=%d, cells=%d, spots=%d, shared_genes=%d",
-        n_leiden,
-        len(adata_sc),
-        len(adata_st),
-        len(shared_genes),
+    # Load this K's prob spot to state mapping (onto adata_st.obsm) and tree cut (leiden to state)
+    load_mapping(run_dir, adata_st)
+    leiden_to_state = load_leiden_to_state(run_dir)  # (L,)
+
+    P = adata_st.obsm[OBSM_MAPPING_SOFT]
+    k = P.shape[1]
+
+    # Create hard mapping: for every spot, the index of its winning (argmax)
+    # state (S,), reshaped to (S x 1) since obsm entries are matrices — stored
+    # alongside the soft mapping. spot_states_hard itself is reused below for
+    # spatial organisation and the "hard" cossim reconstruction combos.
+    logger.info("Computing hard (argmax) mapping...")
+    spot_states_hard = P.argmax(axis=1)
+    adata_st.obsm[OBSM_MAPPING_HARD] = spot_states_hard.reshape(-1, 1)
+
+    # ── 1. One-hotness — spot_to_state_mapping ──────────────────────────────
+    logger.info("Computing one-hot metrics...")
+    save_onehot(adata_st, plots_dir, data_dir)
+
+    # ── 2b. Spatial organisation of the mapped spots ────────────────────────
+    logger.info("Computing spatial organisation of mapped spots...")
+    coords = (
+        np.asarray(adata_st.obsm[OBSM_SPATIAL])
+        if OBSM_SPATIAL in adata_st.obsm
+        else None
+    )
+    spatial = compute_spatial_organization(spot_states_hard, coords)
+
+    shared_genes = list(adata_sc.uns[UNS_SHARED_GENES])
+    sizes = adata_sc.uns[UNS_LEIDEN_SIZES]
+
+    # ── 3. Reconstruction cosine similarity (soft/hard P x raw/norm) ────────
+    # shared_genes is guaranteed non-empty here: aim.sweep asserts it before
+    # the K sweep (and this analysis) ever runs.
+    logger.info("Computing reconstruction cosine similarities...")
+    adata_st_shared = adata_st[:, shared_genes]  # view, not a copy
+    adata_st_norm = AnnData(
+        X=np.asarray(adata_st_shared.layers[LAYER_LOGNORM]),
+        obs=pd.DataFrame(index=adata_st_shared.obs_names),
+        var=pd.DataFrame(index=shared_genes),
     )
 
-    # ── Hard assignments ──────────────────────────────────────────────────────
+    # Substate merge coherence — on the normalized+log1p shared-gene
+    # Leiden-cluster centroids (mean expression per cluster).
+    logger.info("Computing substate merge coherence...")
+    coherence = compute_substate_coherence(
+        adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM], leiden_to_state
+    )
+
+    # leiden_to_state is the only merge there is (the tree cut has no soft
+    # form) — assemble each centroid set once and reuse it for both the
+    # soft-P and hard-P cossim combos below, instead of recomputing it twice.
+    centroids_raw = assemble_state_centroids(
+        leiden_to_state, k, adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES], sizes
+    )
+    centroids_norm = assemble_state_centroids(
+        leiden_to_state, k, adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM], sizes
+    )
+
+    # "hard" combos use spot_states_hard (winning-state index per spot) to
+    # gather each spot's assigned-state centroid row directly — no one-hot
+    # matrix needed, unlike "soft" which is a genuine mapping @ centroids.
+    spot_names = adata_st.obs_names.tolist()
+    combos = {
+        "soft-raw": (P, centroids_raw, adata_st_shared, False),
+        "hard-raw": (spot_states_hard, centroids_raw, adata_st_shared, True),
+        "soft-norm": (P, centroids_norm, adata_st_norm, False),
+        "hard-norm": (spot_states_hard, centroids_norm, adata_st_norm, True),
+    }
+    cossim_summary: dict[str, dict] = {}
+    cossim_dir = data_dir / "cossim"
+    cossim_results: dict[str, CossimResult] = {}
+    for label, (m, centroids, st_ref, is_hard) in combos.items():
+        pred = (
+            centroids[m] if is_hard else predict_expression(m, centroids)
+        )  # S x G_shared
+        pred_adata = AnnData(
+            X=pred.T.astype(np.float32),
+            obs=pd.DataFrame(index=shared_genes),
+            var=pd.DataFrame(index=spot_names),
+        )
+        result = compute_and_save_cossim(
+            st_ref, pred_adata, cossim_dir, suffix=f"-{label}"
+        )
+        cossim_results[label] = result
+        cossim_summary[label] = {
+            "median_gene": result.median_gene,
+            "median_spot": result.median_spot,
+        }
+    pd.DataFrame(cossim_summary).T.to_csv(data_dir / "cossim_summary.csv")
+    plot_cossim_boxplots(cossim_results, plots_dir / "cossim_boxplots.png")
+
+    # ── 4. UMAP/modularity/contingency/state-profile pipeline ──────────────
+    leiden_idx = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+    cell_state_soft = np.zeros(
+        (len(leiden_idx), k), dtype=np.float64
+    )  # (n_cells x K) cell -> state
+    cell_state_soft[np.arange(len(leiden_idx)), leiden_to_state[leiden_idx]] = 1.0
+    cell_state_soft[cell_state_soft < 0.1] = 0.0
+    spot_state_soft = P.copy()  # (S x K) spot -> state
+    spot_state_soft[spot_state_soft < 0.1] = 0.0
+
     cell_states = hard_assignments(cell_state_soft)
     spot_states = hard_assignments(spot_state_soft)
     state_palette = _build_state_palette(sorted(np.unique(cell_states).tolist()))
 
-    n_computed_states = int(len(np.unique(cell_states)))
-    n_mapped_states = int(len(np.unique(spot_states)))
+    cell_fractions = cell_state_fractions(cell_states, k)
+    spot_fractions = cell_state_fractions(spot_states, k)
 
-    # ── Fractions ─────────────────────────────────────────────────────────────
-    cell_fractions = cell_state_fractions(cell_states, n_leiden)
-    spot_fractions = cell_state_fractions(spot_states, n_leiden)
-
-    # ── Prepare sc data ────────────────────────────────────────────────────────
-    adata_processed = adata_sc.copy()
-    run_pca_neighbors_umap(adata_processed)
-
-    # ── Leiden reference – shared genes ───────────────────────────────────────
-    # Keep the shared-gene AnnData (with its KNN graph) for the shared modularity.
-    leiden_shared_labels, adata_shared = run_leiden_shared_genes(
-        adata_sc, shared_genes=shared_genes, resolution=leiden_resolution
+    # ── Modularity for the computed assignment ──────────────────────────────
+    # Two graphs, both precomputed on adata_sc: all genes (default obsp key)
+    # and shared genes (OBSP_CONNECTIVITIES_SHARED_GENES) — this only scores
+    # the (K-dependent) computed-state partition on the cached graphs.
+    # modularity_shared_leiden is the K-independent baseline: modularity of
+    # the raw shared-gene Leiden overclustering itself, before any merging.
+    logger.info("Computing modularity for computed assignment...")
+    modularity_all = compute_modularity(adata_sc, cell_states)
+    modularity_shared = compute_modularity(
+        adata_sc, cell_states, obsp_key=OBSP_CONNECTIVITIES_SHARED_GENES
     )
-
-    # ── Modularity for the computed assignment ────────────────────────────────
-    # Two graphs: all genes (existing) and shared genes only — the latter is the
-    # space the method actually operates in (ST is only seen through shared genes).
-    logger.info("Computing modularity for computed assignment…")
-    metrics_computed = {
-        "modularity": compute_modularity(adata_processed, cell_states),
-        "modularity_shared": compute_modularity(adata_shared, cell_states),
-    }
-    # Leiden-shared partition on the same graph ≈ ceiling (Leiden ~maximises Q)
-    modularity_shared_leiden = compute_modularity(adata_shared, leiden_shared_labels)
+    modularity_shared_leiden = compute_modularity(
+        adata_sc,
+        adata_sc.obs[OBS_LEIDEN_SHARED_GENES].astype(int).to_numpy(),
+        obsp_key=OBSP_CONNECTIVITIES_SHARED_GENES,
+    )
     logger.info(
-        "Modularity: %s | shared Leiden ref=%.4f",
-        metrics_computed,
+        "Modularity: all=%.4f shared=%.4f | shared Leiden ref=%.4f",
+        modularity_all,
+        modularity_shared,
         modularity_shared_leiden,
     )
 
-    adata_processed.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
-    adata_processed.obs["leiden_state"] = pd.Categorical(leiden_labels.astype(str))
-    adata_processed.obs["leiden_shared_state"] = pd.Categorical(
-        leiden_shared_labels.astype(str)
-    )
-
-    # ── Combined UMAP comparison ──────────────────────────────────────────────
-    plot_umap_comparison(
-        adata_processed,
-        panels=[
-            ("computed_state", "Computed cell-state assignment"),
-            ("leiden_state", f"Leiden – all genes (resolution={leiden_resolution})"),
-            (
-                "leiden_shared_state",
-                f"Leiden – shared genes (resolution={leiden_resolution})",
-            ),
-        ],
-        output_path=plots_dir / "umap_comparison.png",
-        state_palette=state_palette,
-    )
+    adata_sc.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
 
     # ── Computed-state UMAP (standalone, for side-by-side with the spatial plot)
     plot_umap_comparison(
-        adata_processed,
+        adata_sc,
         panels=[("computed_state", "Computed cell-state assignment")],
         output_path=plots_dir / "umap_computed_state.png",
         state_palette=state_palette,
     )
 
-    # ── Computed states: all-gene vs shared-gene UMAP (side by side) ──────────
-    adata_shared.obs["computed_state"] = pd.Categorical(cell_states.astype(str))
-    if "X_umap" not in adata_shared.obsm:
-        sc.tl.umap(adata_shared)
-    plot_computed_state_umaps(
-        adata_processed,
-        adata_shared,
-        output_path=plots_dir / "umap_allgenes_vs_shared.png",
+    # ── UMAP grid: {Leiden all-gene, Leiden shared-gene, computed} x {all, shared}
+    plot_umap_grid(
+        adata_sc,
+        output_path=plots_dir / "umap_grid.png",
+        leiden_resolution=float(adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES]),
         state_palette=state_palette,
-        modularity_all=metrics_computed["modularity"],
-        modularity_shared=metrics_computed["modularity_shared"],
+        modularity_all=modularity_all,
+        modularity_shared=modularity_shared,
     )
 
-    # ── Spatial cell-state plot ───────────────────────────────────────────────
+    # ── Spatial cell-state plot ──────────────────────────────────────────────
     plot_spatial_cell_states(
         adata_st,
         spot_states,
@@ -205,8 +286,8 @@ def run_analysis(
         state_palette=state_palette,
     )
 
-    # ── Cell-state profiles ───────────────────────────────────────────────────
-    logger.info("Plotting cell-state profiles…")
+    # ── Cell-state profiles ──────────────────────────────────────────────────
+    logger.info("Plotting cell-state profiles...")
     plot_state_profiles(
         adata_sc,
         cell_states,
@@ -224,33 +305,19 @@ def run_analysis(
         state_palette=state_palette,
     )
 
-    # ── Contingency matching (Leiden, all genes) ─────────────────────────────
-    logger.info("Computing contingency matching…")
-    contingency_matching = compute_contingency_matching(cell_states, leiden_labels)
-    plot_contingency_heatmap(
-        contingency_matching,
-        plots_dir / "contingency_heatmap.png",
-        spot_fractions=spot_fractions,
+    # ── Leiden-merge map: which Leiden overclusters merged into each state ───
+    plot_leiden_merge_map(
+        leiden_idx,
+        cell_states,
+        plots_dir / "leiden_merge_map.png",
+        state_palette=state_palette,
     )
 
-    n_computed_states_above_1pct = int(
-        sum(1 for f in cell_fractions.values() if f > 0.01)
-    )
-    n_mapped_states_above_1pct = int(
-        sum(1 for f in spot_fractions.values() if f > 0.01)
-    )
+    # Persist the biology metrics BEFORE the report is generated — the report's
+    # spatial/coherence sections read biology_metrics.json from disk, so it must
+    # already exist when generate_analysis_report runs.
+    with open(data_dir / "biology_metrics.json", "w") as f:
+        json.dump({"spatial": spatial, "coherence": coherence}, f, indent=2)
 
-    return {
-        "cell_states": cell_states,
-        "spot_states": spot_states,
-        "n_computed_states": n_computed_states,
-        "n_computed_states_above_1pct": n_computed_states_above_1pct,
-        "n_mapped_states": n_mapped_states,
-        "n_mapped_states_above_1pct": n_mapped_states_above_1pct,
-        "cell_fractions": cell_fractions,
-        "spot_fractions": spot_fractions,
-        "metrics_computed": metrics_computed,
-        "modularity_shared_leiden": modularity_shared_leiden,
-        "contingency_matching": contingency_matching,
-        "adata_processed": adata_processed,
-    }
+    generate_analysis_report(analysis_dir)
+    logger.info("Analysis report written to %s", analysis_dir)

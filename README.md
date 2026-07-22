@@ -5,13 +5,17 @@ Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) 
 ## Repository Structure
 
 ```
-main.py                          # Novel method — agglomerative K-sweep (single pair + batch)
-environment.yml                  # Conda env for the novel method
+main.py                          # AIM CLI + single-pair / batch drivers
+environment.yml                  # Conda env for AIM
 src/
-├── learn_mapping.py             # Learned spot→state mapping (spot/gene cossim + spot_gini warmup)
-├── dataset.py                   # h5ad → tensor preparation
-├── utils.py                     # Shared helpers
-├── analysis/                     # Post-mapping analysis (clustering, reports, plots)
+├── aim/                         # AIM method — agglomerative K-sweep
+│   ├── aim_config.py            #   AIMConfig + mapper registry / build_mapper factory
+│   ├── clustering.py            #   clustering half: Leiden over-clustering of the reference
+│   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
+│   ├── tree.py                  #   clustering half: agglomeration tree, cut at K, one-hot merge
+│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (greedy / learned)
+│   └── sweep.py                 #   the K-sweep orchestration
+├── analysis/                     # Post-mapping analysis (clustering, reports, plots) + shared utils.py
 └── metrics/                     # Evaluation metrics O2, O4
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 batch_processing/
@@ -225,12 +229,11 @@ conda activate aim_env
 python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
-    --output_folder <output/pair_0> \
+    --output_dir    <output/pair_0> \
     [--mapping greedy|learned] \
     [--leiden_resolution 3.0] \
     [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1] \
-    [--full_analysis] \
     [--logging verbose] \
     # learned-mode only:
     [--epochs 400] [--lr 0.02] \
@@ -241,17 +244,16 @@ python main.py \
 > `1 … L`, where `L` = number of Leiden clusters at `--leiden_resolution`). There
 > is no `--K` argument.
 
-Writes to `output_folder/`:
-- `summary.csv` — one row per `K` (reconstruction cosine spot/gene soft & det,
-  merge cost, state counts, mean assignment cosine, and modularity when
-  `--full_analysis`).
+Writes to `output_dir/`:
+- `summary.csv` — one row per `K`, read back from each `K_<kkk>/analysis/data/
+  objective_metrics.csv` (reconstruction cosine soft/hard, mapping sharpness,
+  state counts, modularity) plus the tree-only merge cost.
 - `recon_vs_k.png`, `tradeoff_vs_k.png`, `dendrogram.png`, `summary_across_k.png`
   — decision plots for picking `K`.
 - `K_<kkk>/` — per-`K` folder in the analysis layout: `mapping_prob.h5ad` (P),
   `leiden_merge_prob.h5ad` (hard tree cut G), `leiden_overclustering.h5ad`,
-  `leiden_to_state.csv`, `P.csv`, `config.yaml`, `loss_curves.png` (learned mode
-  only), and `analysis/` (PDF report + objective metrics, only with
-  `--full_analysis`).
+  `leiden_to_state.csv`, `P.csv`, `config.yaml`, and `analysis/` (PDF report +
+  objective metrics — the post-mapping analysis runs for every K).
 
 **Example with sample dataset:**
 ```bash
@@ -259,7 +261,7 @@ conda activate aim_env
 python main.py \
     --scdata        sample_dataset/scRNA/sample_sc.h5ad \
     --stdata        sample_dataset/ST/sample_st.h5ad \
-    --output_folder sample_output/sample
+    --output_dir    sample_output/sample
 ```
 
 > Please mind that the results from mapping this sample datasets are not to be interpreted.
@@ -283,7 +285,7 @@ python main.py \
     --output_dir <output/agglomerative> \
     [--mapping greedy|learned] \
     [--leiden_resolution 3.0] [--normalize_and_log] \
-    [--k_min 1] [--k_max <L>] [--k_step 1] [--full_analysis]
+    [--k_min 1] [--k_max <L>] [--k_step 1]
 ```
 
 **Example with sample dataset:**

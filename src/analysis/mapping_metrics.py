@@ -1,13 +1,15 @@
 """
 Mapping-level metrics for AIM's decoupled post-mapping analysis: loading the
-raw P (mapping_prob.h5ad) and G (leiden_merge_prob.h5ad) matrices, hardening
-them (argmax), validating the hard mapping, and assembling per-state gene
-expression centroids for the cosine-similarity reconstruction.
+raw P (spot_to_state_mapping.h5ad) matrix and the Leiden subcluster -> state
+label array (leiden_to_state.csv), hardening P (argmax), validating the hard
+mapping against the (always-hard, by construction) tree cut, and assembling
+per-state gene expression centroids for the cosine-similarity reconstruction.
 
 This is AIM-specific (unlike metrics.onehot / metrics.cossim, which are
 generic and shared with reference_aligners/mapping_analysis) because AIM has
-a two-level structure — Leiden subclusters merged into computed states via G,
-spots mapped onto those states via P — that reference aligners don't have.
+a two-level structure — Leiden subclusters merged into computed states via
+the tree cut, spots mapped onto those states via P — that reference aligners
+don't have.
 """
 
 from __future__ import annotations
@@ -20,150 +22,94 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from metrics.onehot import hard_mapping
+from adata_schema import OBSM_MAPPING_SOFT
 
 logger = logging.getLogger(__name__)
 
 
-def load_mapping_matrices(
-    output_folder: Path,
-) -> tuple[np.ndarray, np.ndarray, list[str], list[str], list[str], np.ndarray]:
+def load_mapping(run_dir: Path, adata_st: AnnData) -> None:
     """
-    Load the raw P (spot -> state) and G (Leiden -> state) matrices, plus the
-    per-cell Leiden cluster index, from an AIM run's saved outputs.
+    Load one K's raw P (spot -> state) matrix directly onto
+    ``adata_st.obsm[OBSM_MAPPING_SOFT]`` (S x K).
 
     Args:
-        output_folder: Folder containing mapping_prob.h5ad, leiden_merge_prob.h5ad,
-                        and leiden_overclustering.h5ad, as written by main.py.
-
-    Returns:
-        P: spot -> state matrix (S x L).
-        G: Leiden -> state matrix (L x L).
-        spot_names, leiden_names, state_names: axis labels.
-        leiden_idx: per-cell Leiden cluster index (C,), parsed from
-                    leiden_overclustering.h5ad's obs["leiden_cluster"].
-    """
-    output_folder = Path(output_folder)
-    mapping_path = output_folder / "mapping_prob.h5ad"
-    leiden_merge_path = output_folder / "leiden_merge_prob.h5ad"
-    clusters_path = output_folder / "leiden_overclustering.h5ad"
-    for path in (mapping_path, leiden_merge_path, clusters_path):
-        if not path.exists():
-            raise FileNotFoundError(f"Required mapping output missing: {path}")
-
-    mapping_ad = ad.read_h5ad(mapping_path)
-    leiden_merge_ad = ad.read_h5ad(leiden_merge_path)
-
-    P = np.asarray(mapping_ad.X, dtype=np.float64)  # (S x L)
-    G = np.asarray(leiden_merge_ad.X, dtype=np.float64)  # (L x L)
-    spot_names = mapping_ad.obs_names.tolist()
-    leiden_names = leiden_merge_ad.obs_names.tolist()
-    state_names = leiden_merge_ad.var_names.tolist()
-
-    leiden_cluster_names = ad.read_h5ad(clusters_path).obs["leiden_cluster"].to_numpy()
-    leiden_idx = np.array(
-        [int(name.rsplit("_", 1)[-1]) for name in leiden_cluster_names]
-    )
-
-    return P, G, spot_names, leiden_names, state_names, leiden_idx
-
-
-def compute_hard_mapping_validated(
-    P: np.ndarray, G: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, int, int]:
-    """
-    Hard (argmax one-hot) versions of P and G, with a consistency check.
-
-    Args:
-        P: soft spot -> state matrix (S x L).
-        G: soft Leiden -> state matrix (L x L).
-
-    Returns:
-        (P_hard, G_hard, n_active_states, n_mapped_states):
-        - P_hard, G_hard: one-hot (argmax) versions of P and G.
-        - n_active_states: number of AIM states actually aggregated out of the
-          Leiden clusters — columns of G_hard with >=1 one, i.e. at least one
-          Leiden cluster hard-maps there.
-        - n_mapped_states: number of AIM states actually used by spots —
-          columns of P_hard with >=1 one, i.e. at least one spot hard-maps
-          there.
-        Both are counts of "columns with a surviving 1 after argmax", applied
-        to G and P respectively — as opposed to L, the total number of state
-        slots (see model.py), most of which may go unused.
+        run_dir: Folder containing spot_to_state_mapping.h5ad (as written by
+                  main.py), i.e. one K_<kkk> sweep folder.
+        adata_st: the same ST AnnData the mapping was computed against.
+                  spot_to_state_mapping.h5ad's obs order is written directly
+                  from this object's obs_names (see aim.io.write_run_outputs),
+                  so P is assigned into obsm positionally — checked against
+                  adata_st.obs_names to catch any reordering since.
 
     Raises:
-        ValueError: if any spot is hard-assigned (via P_hard) to a state whose
-                    column in G_hard is entirely zero — i.e. no Leiden cluster
-                    hard-maps to that state, so it has no cells and its
-                    centroid cannot be computed.
+        ValueError: if spot_to_state_mapping.h5ad's spot order doesn't match
+                    adata_st.obs_names.
     """
-    P_hard = hard_mapping(P)
-    G_hard = hard_mapping(G)
+    run_dir = Path(run_dir)
+    mapping_path = run_dir / "spot_to_state_mapping.h5ad"
+    if not mapping_path.exists():
+        raise FileNotFoundError(f"Required mapping output missing: {mapping_path}")
 
-    states_with_leiden_support = set(np.where(G_hard.sum(axis=0) > 0)[0].tolist())
-    states_used_by_spots = set(np.where(P_hard.sum(axis=0) > 0)[0].tolist())
-    orphaned = sorted(states_used_by_spots - states_with_leiden_support)
-    if orphaned:
+    mapping_ad = ad.read_h5ad(mapping_path)
+    if not mapping_ad.obs_names.equals(adata_st.obs_names):
         raise ValueError(
-            f"Hard mapping is inconsistent: state(s) {orphaned} are hard-assigned "
-            "to by at least one spot (mapping_prob) but no Leiden cluster hard-maps "
-            "to them in leiden_merge_prob — these states have no cells, so their "
-            "centroid is undefined."
+            f"Spot order in {mapping_path} does not match adata_st.obs_names."
         )
-    return P_hard, G_hard, len(states_with_leiden_support), len(states_used_by_spots)
+    adata_st.obsm[OBSM_MAPPING_SOFT] = np.asarray(mapping_ad.X, dtype=np.float64)
 
 
-def compute_leiden_expression_sums(
-    adata_sc: AnnData, leiden_idx: np.ndarray, n_leiden: int
-) -> tuple[np.ndarray, np.ndarray]:
+def load_leiden_to_state(run_dir: Path) -> np.ndarray:
     """
-    Per-Leiden-cluster summed expression and cluster sizes, from an sc AnnData
-    and the per-cell Leiden index (mirrors main.py's old leiden_aggregates,
-    recomputed here from disk-loaded data instead of live tensors).
+    Load one K's Leiden subcluster -> state label array from leiden_to_state.csv.
+
+    Args:
+        run_dir: Folder containing leiden_to_state.csv (as written by
+                  main.py), i.e. one K_<kkk> sweep folder.
 
     Returns:
-        expr_sums: summed expression per Leiden cluster (L x G).
-        sizes: number of cells per Leiden cluster (L,).
+        labels_k: Leiden subcluster -> state label array (L,), values 0..K-1.
     """
-    X = (
-        adata_sc.X.toarray()
-        if hasattr(adata_sc.X, "toarray")
-        else np.asarray(adata_sc.X)
-    )
-    expr_sums = np.zeros((n_leiden, X.shape[1]), dtype=np.float64)
-    sizes = np.zeros(n_leiden, dtype=np.float64)
-    for l in range(n_leiden):
-        mask = leiden_idx == l
-        sizes[l] = mask.sum()
-        if mask.any():
-            expr_sums[l] = X[mask].sum(axis=0)
-    return expr_sums, sizes
+    run_dir = Path(run_dir)
+    leiden_to_state_path = run_dir / "leiden_to_state.csv"
+    if not leiden_to_state_path.exists():
+        raise FileNotFoundError(
+            f"Required mapping output missing: {leiden_to_state_path}"
+        )
+    return pd.read_csv(leiden_to_state_path)["state"].to_numpy()
 
 
 def assemble_state_centroids(
-    G: np.ndarray, expr_sums: np.ndarray, sizes: np.ndarray, eps: float = 1e-8
+    labels_k: np.ndarray,
+    k: int,
+    expr_sums: np.ndarray,
+    sizes: np.ndarray,
+    eps: float = 1e-8,
 ) -> np.ndarray:
     """
-    Assemble per-state gene expression centroids from the merge matrix G and
-    the fixed Leiden-cluster expression sums/sizes (mirrors main.py's old
-    assemble_state_gep):
+    Assemble per-state gene expression centroids from the subcluster->state
+    label array and the fixed Leiden-cluster expression sums/sizes (mirrors
+    main.py's old assemble_state_gep, and is the numpy mirror of
+    ``aim.aggregation.assemble_state_profiles_shared_genes``, which does the
+    same on torch for the in-sweep computation):
 
-        M[k] = (sum_l G[l,k] * expr_sums[l]) / (sum_l G[l,k] * sizes[l])
-
-    Works for both soft G (weighted average) and hard G (a clean mean over all
-    cells whose Leiden cluster hard-maps to state k).
+        M[s] = (sum_{l: labels_k[l]=s} expr_sums[l]) / (sum_{l: labels_k[l]=s} sizes[l])
 
     Args:
-        G: Leiden -> state matrix (L x L).
+        labels_k: Leiden subcluster -> state label array (L,), values 0..k-1.
+        k: number of computed states (rows of the returned M).
         expr_sums: summed expression per Leiden cluster (L x G_genes).
         sizes: number of cells per Leiden cluster (L,).
+        eps: added to the denominator to avoid division by zero for states
+             with no Leiden-cluster support.
 
     Returns:
-        M: state gene expression profiles (L x G_genes).
+        M: state gene expression profiles (K x G_genes).
     """
-    weighted_sum = G.T @ expr_sums  # (L x G_genes)
-    state_sizes = G.T @ sizes  # (L,)
-    return weighted_sum / (state_sizes[:, None] + eps)
+    state_sums = np.zeros((k, expr_sums.shape[1]), dtype=expr_sums.dtype)
+    np.add.at(state_sums, labels_k, expr_sums)
+    state_sizes = np.zeros(k, dtype=sizes.dtype)
+    np.add.at(state_sizes, labels_k, sizes)
+    return state_sums / (state_sizes[:, None] + eps)
 
 
 def predict_expression(mapping: np.ndarray, centroids: np.ndarray) -> np.ndarray:

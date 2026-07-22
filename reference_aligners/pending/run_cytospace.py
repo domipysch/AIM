@@ -3,7 +3,7 @@ import cytospace
 import argparse
 import logging
 import pandas as pd
-from utils import fmt_nonzero_4
+from analysis.utils import fmt_nonzero_4
 
 
 def cytospace_align_data(dataset_folder: str):

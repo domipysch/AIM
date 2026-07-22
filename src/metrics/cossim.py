@@ -40,22 +40,6 @@ SPOT_JSON = "cossim-per-spot{suffix}.json"
 # --------------------------------------------------------------------------- #
 # Core numerics
 # --------------------------------------------------------------------------- #
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two 1-D vectors, clipped to [-1, 1].
-
-    Returns ``0.0`` when either vector has zero norm (direction undefined),
-    matching scikit-learn's convention.
-    """
-    a = np.asarray(a, dtype=float).ravel()
-    b = np.asarray(b, dtype=float).ravel()
-    if a.shape != b.shape:
-        raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0.0:
-        return 0.0
-    return float(np.clip(np.dot(a, b) / denom, -1.0, 1.0))
-
-
 def _cosine_along_axis(A: np.ndarray, B: np.ndarray, axis: int) -> np.ndarray:
     """Row/column-wise cosine similarity of two equally-shaped 2-D arrays.
 

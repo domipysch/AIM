@@ -12,7 +12,13 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
-from utils import _dense_X
+from adata_schema import (
+    OBS_LEIDEN_ALL_GENES,
+    OBS_LEIDEN_SHARED_GENES,
+    OBSM_UMAP,
+    OBSM_UMAP_SHARED_GENES,
+)
+from .utils import _dense_X
 
 logger = logging.getLogger(__name__)
 
@@ -101,50 +107,90 @@ def plot_umap_comparison(
     logger.info("UMAP comparison → %s", output_path)
 
 
-def plot_computed_state_umaps(
-    adata_all: AnnData,
-    adata_shared: AnnData,
+def plot_umap_grid(
+    adata: AnnData,
     output_path: Path,
+    leiden_resolution: float,
     state_palette: dict[int, tuple] | None = None,
     modularity_all: float | None = None,
     modularity_shared: float | None = None,
 ) -> None:
     """
-    Side-by-side computed-state UMAPs: all-gene embedding vs shared-gene embedding.
+    2x2 UMAP grid comparing the Leiden overclustering and the computed AIM
+    states, on the all-gene embedding, plus the computed states on the
+    shared-gene embedding:
 
-    Both panels colour the same computed cell states (same palette).  The
-    shared-gene embedding uses only the genes also present in the ST data —
-    the space the method actually operates in — so a state that is well
-    separated on all genes but collapses on shared genes becomes visible.
+                        Leiden (all-gene      Leiden (shared-gene
+                        clustering)           clustering)
+        all-gene UMAP   [leiden_state]        [leiden_shared_state]
+                        Computed AIM states   Computed AIM states
+                        (all genes)           (shared genes)
+                        [computed_state]      [computed_state] (on
+                        (+mod_all)            shared-gene UMAP, +mod_shared)
 
-    `modularity_all` / `modularity_shared`, if given, are annotated in the matching
-    panel's caption — each is the modularity of the computed partition on the *same*
-    KNN graph that its UMAP is projected from, so the number and picture correspond.
-
-    Both AnnData objects must share the same cell order and carry
-    obs['computed_state'] and obsm['X_umap'].
+    ``adata`` must carry obs['leiden_state'], obs['leiden_shared_state'],
+    obs['computed_state'], obsm[OBSM_UMAP] (all-gene) and
+    obsm[OBSM_UMAP_SHARED_GENES] (shared-gene) — both embeddings live on the
+    same object, so only the bottom-right panel switches basis. `modularity_all`
+    / `modularity_shared`, if given, annotate the matching computed-state panel
+    — each is the modularity of the computed partition on the same KNN graph
+    its UMAP is projected from.
     """
 
     def _mod(m: float | None) -> str:
-        return f"modularity = {m:.3f}" if m is not None and m == m else ""
+        return f"\nmodularity = {m:.3f}" if m is not None and m == m else ""
 
+    _assign_computed_state_colors(adata, state_palette)
+
+    res = leiden_resolution
+    # (row, col, basis, obs key, base title, caption suffix)
     panels = [
-        (adata_all, "Computed states — all genes", _mod(modularity_all)),
         (
-            adata_shared,
-            "Computed states — shared genes (ST overlap)",
+            0,
+            0,
+            OBSM_UMAP,
+            OBS_LEIDEN_ALL_GENES,
+            f"Leiden overclusters — all genes (resolution={res})",
+            "",
+        ),
+        (
+            0,
+            1,
+            OBSM_UMAP,
+            OBS_LEIDEN_SHARED_GENES,
+            f"Leiden shared-gene clusters — all-gene UMAP (resolution={res})",
+            "",
+        ),
+        (
+            1,
+            0,
+            OBSM_UMAP,
+            "computed_state",
+            "Computed AIM states — all genes",
+            _mod(modularity_all),
+        ),
+        (
+            1,
+            1,
+            OBSM_UMAP_SHARED_GENES,
+            "computed_state",
+            "Computed AIM states — shared genes (ST overlap)",
             _mod(modularity_shared),
         ),
     ]
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    for ax, (adata, title, mod_line) in zip(axes, panels):
-        _assign_computed_state_colors(adata, state_palette)
-        count_line = _computed_state_count_line(adata)
-        caption = f"{title}\n{count_line}" + (f"\n{mod_line}" if mod_line else "")
-        sc.pl.umap(
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    for r, c, basis, key, title, suffix in panels:
+        ax = axes[r][c]
+        if key == "computed_state":
+            count_line = _computed_state_count_line(adata)
+        else:
+            count_line = f"{int(adata.obs[key].nunique())} clusters"
+        sc.pl.embedding(
             adata,
-            color="computed_state",
-            title=caption,
+            basis=basis,
+            color=key,
+            title=f"{title}\n{count_line}{suffix}",
             ax=ax,
             show=False,
             save=False,
@@ -156,7 +202,81 @@ def plot_computed_state_umaps(
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    logger.info("Computed-state UMAPs (all vs shared) → %s", output_path)
+    logger.info("UMAP grid → %s", output_path)
+
+
+def plot_leiden_merge_map(
+    leiden_labels: np.ndarray,
+    cell_states: np.ndarray,
+    output_path: Path,
+    state_palette: dict[int, tuple] | None = None,
+) -> None:
+    """
+    Visualise which Leiden overclusters were merged into each computed AIM state.
+
+    One horizontal bar per computed state, split into segments — one per Leiden
+    cluster merged into that state — each segment's width proportional to that
+    cluster's cell count and labelled with its Leiden id. A state built from a
+    single Leiden cluster shows one segment; a merged state shows several, so
+    the merge structure (and the relative sizes of what was merged) is read off
+    directly.
+    """
+    leiden_labels = np.asarray(leiden_labels)
+    cell_states = np.asarray(cell_states)
+
+    states = sorted(np.unique(cell_states).tolist())
+    # Each Leiden cluster maps to exactly one state (state = argmax of the merge
+    # matrix G for that cluster), so cell_states is constant within a cluster.
+    leiden_of_state: dict[int, list[tuple[int, int]]] = {s: [] for s in states}
+    for lc in np.unique(leiden_labels):
+        mask = leiden_labels == lc
+        s = int(cell_states[mask][0])
+        leiden_of_state[s].append((int(lc), int(mask.sum())))
+    for s in states:
+        leiden_of_state[s].sort(key=lambda t: t[1], reverse=True)
+
+    n_states = len(states)
+    fig, ax = plt.subplots(figsize=(11, max(3, n_states * 0.5 + 1.5)))
+    for row, s in enumerate(states):
+        color = (
+            state_palette.get(s, (0.6, 0.6, 0.6, 1.0))
+            if state_palette is not None
+            else (0.6, 0.6, 0.6, 1.0)
+        )
+        x = 0.0
+        for lc, size in leiden_of_state[s]:
+            ax.barh(row, size, left=x, color=color, edgecolor="white", linewidth=1.5)
+            ax.text(
+                x + size / 2,
+                row,
+                f"L{lc}",
+                va="center",
+                ha="center",
+                fontsize=7,
+                color="black",
+            )
+            x += size
+
+    ax.set_yticks(range(n_states))
+    ax.set_yticklabels(
+        [
+            f"State {s}  ({len(leiden_of_state[s])} "
+            f"cluster{'s' if len(leiden_of_state[s]) != 1 else ''})"
+            for s in states
+        ],
+        fontsize=9,
+    )
+    ax.set_xlabel(
+        "cells   (bar = one AIM state; segments = merged Leiden clusters, "
+        "width proportional to cluster size)",
+        fontsize=10,
+    )
+    ax.set_title("Leiden overclusters merged per computed AIM state", fontsize=12)
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Leiden merge map → %s", output_path)
 
 
 def plot_state_profiles(

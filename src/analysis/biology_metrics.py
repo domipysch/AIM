@@ -24,8 +24,8 @@ numbers of states):
 
 Unlike the 00_Playground prototypes this is adapted from, the Leiden -> state
 grouping is NOT recomputed / majority-voted here: in the current two-level model
-it is exactly the argmax of AIM's merge matrix G (leiden_merge_prob.h5ad), so it
-is read directly from G_hard.
+it is exactly the hard tree cut (leiden_to_state.csv), so it is read directly
+from labels_k.
 
 Classifier-based substate *separability* is intentionally not computed here (too
 expensive to run once per grid-search config).
@@ -40,6 +40,20 @@ import anndata as ad
 import numpy as np
 
 logger = logging.getLogger(__name__)
+
+
+def _import_squidpy():
+    """Import squidpy lazily (it is heavy), suppressing the spurious
+    ``SyntaxWarning``s docrep emits while parsing squidpy's docstrings
+    ('n_jobs'/'show_progress_bar' is not a valid key). That is a third-party
+    docrep/squidpy interaction, harmless to us, and fires at import time."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
+        import squidpy as sq
+    return sq
+
 
 # ── Config ──────────────────────────────────────────────────────────────────
 K_SPATIAL = 6  # neighbours for local spatial purity / Moran's I KNN graph
@@ -107,21 +121,19 @@ def local_spatial_purity(labels: np.ndarray, nbr_idx: np.ndarray) -> float:
 
 def _spatial_neighbors_graph(coords: np.ndarray, k: int) -> ad.AnnData:
     """Minimal AnnData holding a squidpy-built spatial KNN graph, reused across permutations."""
-    import squidpy as sq
+    sq = _import_squidpy()
 
     graph = ad.AnnData(
         X=np.zeros((len(coords), 1), dtype=np.float32),
         obsm={"spatial": np.asarray(coords, dtype=np.float32)},
     )
-    sq.gr.spatial_neighbors(
-        graph, n_neighs=min(k, len(coords) - 1), coord_type="generic"
-    )
+    sq.gr.spatial_neighbors_knn(graph, n_neighs=min(k, len(coords) - 1))
     return graph
 
 
 def morans_i_mean(labels: np.ndarray, graph: ad.AnnData) -> float:
     """Moran's I averaged over all states' binary indicators, via squidpy.gr.spatial_autocorr."""
-    import squidpy as sq
+    sq = _import_squidpy()
 
     states = np.unique(labels)
     if len(states) < 2:
@@ -202,16 +214,15 @@ def compute_spatial_organization(
 
 
 # ── 2. Substate merge coherence ────────────────────────────────────────────────
-def leiden_state_groups(G_hard: np.ndarray) -> dict[int, list[int]]:
-    """Map each computed state to the list of Leiden clusters hard-merged into it.
+def leiden_state_groups(labels_k: np.ndarray) -> dict[int, list[int]]:
+    """Map each computed state to the list of Leiden clusters merged into it.
 
-    G_hard is the argmax one-hot of AIM's merge matrix G (L_leiden x L_states);
-    state of Leiden cluster l is argmax(G_hard[l]). This is the exact grouping the
-    model learned — no recomputation / majority vote (as the prototypes needed).
+    labels_k[l] is the state Leiden cluster l was merged into by the tree cut
+    (values 0..k-1) — this is the exact grouping the model learned, no
+    recomputation / majority vote (as the prototypes needed).
     """
-    state_of_leiden = np.asarray(G_hard).argmax(axis=1)
     groups: dict[int, list[int]] = {}
-    for leiden_cluster, state in enumerate(state_of_leiden):
+    for leiden_cluster, state in enumerate(np.asarray(labels_k)):
         groups.setdefault(int(state), []).append(int(leiden_cluster))
     return groups
 
@@ -231,7 +242,7 @@ def _pairwise_cosine_stats(vecs: np.ndarray) -> tuple[float, float]:
 
 def compute_substate_coherence(
     centroids: np.ndarray,
-    G_hard: np.ndarray,
+    labels_k: np.ndarray,
     n_perm: int = N_PERM_COHERENCE,
     seed: int = 0,
 ) -> dict:
@@ -247,11 +258,11 @@ def compute_substate_coherence(
         centroids: per-Leiden-cluster shared-gene centroid (L x G_shared), e.g.
                    normalized+log1p expression sums / sizes. Rows for empty Leiden
                    clusters (size 0) may be all-zero; such clusters are dropped.
-        G_hard:    argmax one-hot merge matrix (L x L); defines the grouping.
+        labels_k:  Leiden subcluster -> state label array (L,); defines the grouping.
 
     Returns a dict with per-state detail and aggregate scalars.
     """
-    groups = leiden_state_groups(G_hard)
+    groups = leiden_state_groups(labels_k)
     # Leiden clusters that actually have cells (non-zero centroid) — a zero
     # centroid has undefined cosine similarity and must not seed a null draw.
     valid_leiden = {

@@ -63,7 +63,7 @@ jobs:
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_folder sample_output/novel/greedy \
+            --output_dir    sample_output/novel/greedy \
             --mapping           greedy \
             --leiden_resolution 3.0
 
@@ -72,7 +72,7 @@ jobs:
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_folder sample_output/novel/learned \
+            --output_dir    sample_output/novel/learned \
             --mapping           learned \
             --leiden_resolution 3.0 \
             --epochs            5
