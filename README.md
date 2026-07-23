@@ -1,6 +1,6 @@
 # Spatial Transcriptomics Alignment
 
-Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots by learning a joint cell-to-cell-state and spot-to-state assignment.
+Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`greedy` nearest-centroid or `learned` soft assignment).
 
 ## Repository Structure
 
@@ -8,15 +8,18 @@ Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) 
 main.py                          # AIM CLI + single-pair / batch drivers
 environment.yml                  # Conda env for AIM
 src/
+├── adata_schema.py              # Canonical obs/var/uns/obsm/obsp/layers key names for the sc/st AnnData objects
 ├── aim/                         # AIM method — agglomerative K-sweep
 │   ├── aim_config.py            #   AIMConfig + mapper registry / build_mapper factory
-│   ├── clustering.py            #   clustering half: Leiden over-clustering of the reference
+│   ├── clustering.py            #   clustering half: Leiden over-clustering (all genes + shared genes)
 │   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
-│   ├── tree.py                  #   clustering half: agglomeration tree, cut at K, one-hot merge
+│   ├── tree.py                  #   clustering half: agglomeration tree + cut at K -> labels_k
 │   ├── mapping/                 #   mapping half: unified SpotStateMapper API (greedy / learned)
+│   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
 │   └── sweep.py                 #   the K-sweep orchestration
-├── analysis/                     # Post-mapping analysis (clustering, reports, plots) + shared utils.py
-└── metrics/                     # Evaluation metrics O2, O4
+├── analysis/                    # Post-mapping analysis: orchestration + loaders + typst PDF report
+├── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
+└── plots/                       # Matplotlib figure generation shared across the analyses
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 batch_processing/
 ├── run_pre_check_all_pairs.py   # Batch pre-alignment checks
@@ -245,15 +248,15 @@ python main.py \
 > is no `--K` argument.
 
 Writes to `output_dir/`:
-- `summary.csv` — one row per `K`, read back from each `K_<kkk>/analysis/data/
-  objective_metrics.csv` (reconstruction cosine soft/hard, mapping sharpness,
-  state counts, modularity) plus the tree-only merge cost.
-- `recon_vs_k.png`, `tradeoff_vs_k.png`, `dendrogram.png`, `summary_across_k.png`
-  — decision plots for picking `K`.
-- `K_<kkk>/` — per-`K` folder in the analysis layout: `mapping_prob.h5ad` (P),
-  `leiden_merge_prob.h5ad` (hard tree cut G), `leiden_overclustering.h5ad`,
-  `leiden_to_state.csv`, `P.csv`, `config.yaml`, and `analysis/` (PDF report +
-  objective metrics — the post-mapping analysis runs for every K).
+- `config.yaml` — the run configuration (mapping choice, hyperparameters, `K` range).
+- `leiden_overclustering.h5ad` — per-cell Leiden over-cluster label; written once and
+  reused by every `K`.
+- `k_<kkk>/` — one folder per `K`, in the layout the post-mapping analysis consumes:
+  - `spot_to_state_mapping.h5ad` — the spot→state matrix `P` (spots × `K`).
+  - `spot_to_state_mapping.csv` — `P` as CSV (tiny values zeroed, rounded) for eyeballing.
+  - `leiden_to_state.csv` — the subcluster→state tree cut (`labels_k`).
+  - `analysis/` — the post-mapping analysis for that `K`: `report.pdf` (typst) plus
+    `plots/` and `data/`. The post-mapping analysis runs for every `K`.
 
 **Example with sample dataset:**
 ```bash

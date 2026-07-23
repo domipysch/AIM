@@ -1,22 +1,6 @@
-"""
-Learned spot->state mapping for the agglomerative method.
-
-Given fixed per-state gene-expression profiles M (assembled from a hard cut of
-the agglomeration tree), this learns ONLY the spot->state matrix P (S x K) by
-gradient descent — a soft deconvolution of the ST data against the fixed
-profiles. The merge tree plays the role of the cluster->state map; only P is
-learned here.
-
-The only losses are:
-    rec_spot  — spot-wise cosine distance (1 - cos over genes)
-    rec_gene  — gene-wise cosine distance (1 - cos over spots)
-    spot_gini — quadratic (Gini / Tsallis-2) per-spot sharpening on P, with an
-                optional linear warmup so it engages only after reconstruction
-                has settled.
-
-``LearnedMapper`` is the ``--mapping learned`` implementation of the
-``SpotStateMapper`` API.
-"""
+"""Learned spot->state mapping: given fixed per-state profiles M, learn a soft P (S x K)
+by gradient descent, minimizing spot- and gene-wise cosine distance with a spot_gini
+sharpener."""
 
 import logging
 
@@ -41,19 +25,11 @@ def _cosine_distance_loss(
 def _gini_weight_at(
     epoch: int, epochs: int, lambda_spot_gini: float, warmup_frac: float
 ) -> float:
-    """Effective spot_gini weight at a given epoch under the warmup schedule.
+    """Effective spot_gini weight at ``epoch`` under the warmup schedule.
 
-    warmup_frac <= 0  -> constant lambda_spot_gini for all epochs (no warmup).
-    warmup_frac  > 0  -> weight is 0 for the first warmup_frac*epochs (pure
-                         reconstruction), then ramps LINEARLY from 0 up to
-                         lambda_spot_gini over the remaining epochs, reaching the
-                         full value at the final epoch.
-
-    The warmup exists because sharpening P from a random init makes each spot
-    commit to an arbitrary state before reconstruction has found the right one,
-    and softmax saturation then freezes that (bad) choice. Letting reconstruction
-    settle first, then ramping the sharpener in, sharpens toward the *correct*
-    per-spot winner instead.
+    warmup_frac <= 0 gives a constant ``lambda_spot_gini``. Otherwise the weight is 0
+    for the first ``warmup_frac*epochs``, then ramps linearly up to ``lambda_spot_gini``
+    at the final epoch, so the sharpener engages only after reconstruction has settled.
     """
     if warmup_frac <= 0.0:
         return lambda_spot_gini
@@ -65,7 +41,7 @@ def _gini_weight_at(
 
 
 class LearnedMapper(SpotStateMapper):
-    """Gradient-descent soft mapper: trains P per K via ``train_spot_to_state``."""
+    """Gradient-descent soft mapper: learns P per K by minimizing cosine distance."""
 
     name = "learned"
 
@@ -83,19 +59,12 @@ class LearnedMapper(SpotStateMapper):
 
     def map(self, Z_shared: torch.Tensor, M_shared: torch.Tensor) -> torch.Tensor:
         """
-        Learn ONLY the spot->state matrix P (S x K) that reconstructs the ST data
-        from fixed state profiles M_shared (K x G_shared): minimize spot + gene
-        cosine distance, with a quadratic (Gini / Tsallis-2) per-spot sharpener.
+        Learn the soft spot->state matrix P (S x K) reconstructing the ST data from
+        fixed profiles M_shared (K x G_shared).
 
-        The sharpener is mean per-spot Gini impurity (1 - sum_k P^2), normalised by
-        (1 - 1/K). Its gradient is -2*P_k, which keeps pushing leftover second-place
-        mass to zero — the strong one-hot lever. spot_gini_warmup_frac schedules it:
-        with a value > 0 it stays off for the first warmup_frac*epochs (reconstruction
-        settles into the fit-optimal soft solution) and then ramps in linearly, so it
-        sharpens toward the correct per-spot winner rather than an arbitrary early
-        one. 0.0 = constant weight from the first epoch (no warmup). See _gini_weight_at.
-
-        Returns the spot->state soft assignment P (S x K), rows sum to 1.
+        Minimizes spot- plus gene-wise cosine distance, plus a per-spot Gini sharpener
+        (mean 1 - sum_k P^2, normalized by 1 - 1/K) weighted per the warmup schedule.
+        Returns P (S x K) with rows summing to 1.
         """
         n_spots = Z_shared.shape[0]
         n_states = M_shared.shape[0]

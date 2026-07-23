@@ -1,11 +1,5 @@
-"""
-Spot->state mapping: one unified API, several implementations.
-
-    from aim.mapping import SpotStateMapper, GreedyMapper, LearnedMapper
-
-Add a new strategy by subclassing ``SpotStateMapper``; register it in the
-``_MAPPERS`` table in ``aim.aim_config`` so ``build_mapper`` can construct it.
-"""
+"""Spot->state mapping: the ``SpotStateMapper`` API and its ``GreedyMapper`` and
+``LearnedMapper`` implementations."""
 
 from .base import SpotStateMapper
 from .greedy import GreedyMapper

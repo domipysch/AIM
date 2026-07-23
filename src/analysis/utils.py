@@ -1,13 +1,4 @@
-"""Shared helpers for the post-mapping analysis.
-
-Small utilities used across the ``analysis`` package (and by
-``reference_aligners/mapping_analysis``, which imports ``run_pca_neighbors_umap``
-and ``fmt_nonzero_4`` from here). Pure array/AnnData helpers with no method- or
-disk-layout-specific logic — the actual metric computations live in ``metrics``.
-
-``to_dense`` (the project-wide densification idiom) lives here; ``metrics`` and
-``plots`` import it from this module.
-"""
+"""Shared array/AnnData helpers for the post-mapping analysis."""
 
 from __future__ import annotations
 import logging
@@ -25,14 +16,11 @@ __all__ = [
 
 
 def to_dense(x, dtype=np.float32) -> np.ndarray:
-    """Return ``x`` as a dense ``ndarray``.
-
-    Accepts an AnnData (its ``.X`` is used), a scipy-sparse matrix, or anything
-    array-like. Sparse inputs are materialized via ``.toarray()``.
-    """
-    if hasattr(x, "X"):  # AnnData / AnnData view
+    """Return ``x`` as a dense ndarray, unwrapping AnnData ``.X`` and densifying
+    scipy-sparse inputs."""
+    if hasattr(x, "X"):
         x = x.X
-    if hasattr(x, "toarray"):  # scipy sparse
+    if hasattr(x, "toarray"):
         x = x.toarray()
     return np.asarray(x, dtype=dtype)
 
@@ -50,11 +38,10 @@ def hard_assignments(matrix: "torch.Tensor | np.ndarray") -> np.ndarray:
 
 
 def cell_state_fractions(cell_states: np.ndarray, n_states: int) -> dict[int, float]:
-    """Fraction of cells/spots assigned to each state (keys 0 .. n_states-1).
+    """Fraction of cells/spots assigned to each state, keyed 0 .. n_states-1.
 
-    ``n_states`` is the full slot range (= L, the number of subclusters), not the
-    number of states actually in use: bincount needs the full range since
-    hard-argmax indices can land on any slot.
+    ``n_states`` is the full slot range (= L, the number of subclusters) so
+    bincount covers every possible argmax index.
     """
     counts = np.bincount(cell_states, minlength=n_states)
     return {k: float(counts[k]) / len(cell_states) for k in range(n_states)}

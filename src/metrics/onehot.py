@@ -1,17 +1,11 @@
-"""Generic one-hotness metrics for any soft row-stochastic assignment matrix.
-
-Works on any (n_rows x n_cols) matrix whose rows are probability-like vectors
-that should sum to ~1 — a spot->cell-type mapping, a Leiden->computed-state
-merge matrix, etc. Shared between reference_aligners/mapping_analysis and
-analysis so both use identical math.
-"""
+"""One-hotness metrics for a soft row-stochastic assignment matrix (rows are
+probability-like vectors summing to ~1)."""
 
 from __future__ import annotations
 
 import numpy as np
 
-# Dominance thresholds reported by the "fraction of rows >= threshold" plot —
-# see plots.onehot.plot_dominance_thresholds.
+# Thresholds for the "fraction of rows with max prob >= threshold" reporting.
 DOMINANCE_THRESHOLDS = (
     0.99,
     0.95,
@@ -29,23 +23,16 @@ DOMINANCE_THRESHOLDS = (
 
 
 def onehot_metrics(mapping: np.ndarray) -> dict:
-    """
-    Per-row "how one-hot is this row" metrics for a soft assignment matrix.
+    """Per-row one-hotness of a soft assignment matrix (n_rows x n_cols).
 
-    Args:
-        mapping: Soft row-stochastic matrix (n_rows x n_cols), rows ~sum to 1.
-
-    Returns:
-        dict with:
-            n_rows, n_cols
-            max_prob, gini_impurity, entropy: per-row arrays (n_rows,)
-            summary: mean/median/std of each, plus the fraction of rows with
-                     max_prob above 0.5 / 0.9 / 0.99.
+    Returns a dict with ``n_rows``, ``n_cols``, the per-row arrays ``max_prob``,
+    ``gini_impurity`` and ``entropy``, and a ``summary`` of mean/median/std plus
+    the fraction of rows whose max prob exceeds 0.5 / 0.9 / 0.99.
     """
     mapping = np.clip(np.asarray(mapping, dtype=np.float64), 0.0, None)
     row_sums = mapping.sum(axis=1, keepdims=True)
     row_sums[row_sums == 0] = 1.0
-    p = mapping / row_sums  # re-normalize defensively
+    p = mapping / row_sums
 
     n_rows, n_cols = p.shape
     max_prob = p.max(axis=1)
@@ -81,12 +68,3 @@ def onehot_metrics(mapping: np.ndarray) -> dict:
             "frac_max_prob_above_0.99": float(np.mean(max_prob > 0.99)),
         },
     }
-
-
-def hard_mapping(mapping: np.ndarray) -> np.ndarray:
-    """Row-wise argmax one-hot version of a soft assignment matrix (n_rows x n_cols)."""
-    mapping = np.asarray(mapping)
-    idx = mapping.argmax(axis=1)
-    one_hot = np.zeros_like(mapping, dtype=np.float32)
-    one_hot[np.arange(mapping.shape[0]), idx] = 1.0
-    return one_hot

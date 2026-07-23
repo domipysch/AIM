@@ -1,30 +1,4 @@
-"""Biological / topological metrics for the post-mapping analysis.
-
-Three questions, each producing a scalar objective (every permutation-tested
-metric is reported with an observed value AND a null z-score; the z-score is the
-dataset-comparable objective, since raw purity / Moran's I / cosine values are
-not comparable across pairs with different numbers of states):
-
-1. Spatial organisation of the mapped spots (P's argmax state per spot)
-   - Local Spatial Purity (LSP): mean fraction of the k nearest spatial
-     neighbours sharing the same mapped state — local compactness.
-   - Moran's I averaged over the per-state binary indicators — global spatial
-     clustering (via squidpy).
-   - Null: shuffle the spot-state labels N_PERM times.
-
-2. Coherence of the subclusters merged into one computed state
-   - For each computed state that aggregates >=2 subclusters: are those
-     subclusters' shared-gene centroids MORE mutually similar (higher mean
-     pairwise cosine) than a same-sized random draw of subclusters from OTHER
-     states? If yes (high z-score, low p), the merge looks coherent in the gene
-     subspace the method actually operates in.
-   - Null: N_PERM random same-sized draws of subclusters from other states.
-
-3. Modularity of the computed-state partition on a precomputed KNN graph.
-
-These are generic given their inputs (label arrays, centroids, a graph), so they
-live in ``metrics`` rather than in the AIM-specific ``analysis`` package.
-"""
+"""Spatial organisation of the mapped spots for the post-mapping analysis."""
 
 from __future__ import annotations
 
@@ -78,11 +52,12 @@ def analyse_spatial_organization(
     seed: int = 0,
 ):
     """Local spatial purity + mean Moran's I of the mapped spot states, each with
-    a permutation-null z-score. Metrics that cannot be computed (no coordinates,
-    <2 states, squidpy unavailable) are returned as NaN rather than raising.
+    a permutation-null z-score. Individually undefined metrics come back as NaN;
+    asserts len(coords) == len(spot_states) and len(spot_states) > k.
 
-    Reads the per-spot hard (argmax) states from ``adata_st.obs[OBS_MAPPING_HARD]``
-    and the spatial coordinates from ``adata_st.obsm[OBSM_SPATIAL]``.
+    Requires: adata_st.obs[OBS_MAPPING_HARD], adata_st.obsm[OBSM_SPATIAL].
+    Writes topology_metrics.json under output_data_dir and
+    spatial_cell_states.png under output_plots_dir.
     """
     spot_states = adata_st.obs[OBS_MAPPING_HARD].to_numpy()
     coords = np.asarray(adata_st.obsm[OBSM_SPATIAL])
@@ -102,25 +77,21 @@ def analyse_spatial_organization(
 
     rng = np.random.default_rng(seed)
 
-    # Compute local purity
     nbr_idx = knn_indices(coords, k)
     obs_lsp = local_spatial_purity(spot_states, nbr_idx)
     result["local_purity"] = permutation_test(
         obs_lsp, spot_states, lambda l: local_spatial_purity(l, nbr_idx), n_perm, rng
     )
 
-    # Compute morans i
     graph = spatial_neighbors_graph(coords, k)
     obs_mi = morans_i_mean(spot_states, graph)
     result["morans_i"] = permutation_test(
         obs_mi, spot_states, lambda l: morans_i_mean(l, graph), n_perm, rng
     )
 
-    # Save to file
     with open(output_data_dir / "topology_metrics.json", "w") as f:
         json.dump(result, f, indent=4)
 
-    # ── Spatial cell-state plot ──────────────────────────────────────────────
     plot_spatial_cell_states(
         adata_st,
         spot_states,

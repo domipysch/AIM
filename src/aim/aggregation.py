@@ -1,16 +1,5 @@
-"""
-Reference aggregation for the AIM method (clustering half, part 1).
-
-    compute_leiden_aggregates  adata + shared genes -> per-cluster expression
-                               sums, sizes, and centroids (raw + normalized),
-                               stored on adata_sc.uns
-    assemble_state_profiles    labels_k              -> size-weighted per-state
-                               profiles M (per K)
-
-`assemble_state_profiles` is the torch mirror of
-``metrics.reconstruction.assemble_state_centroids`` (which does the same on
-numpy for the disk-based analysis).
-"""
+"""Reference aggregation: per-Leiden-cluster expression sums, sizes, and centroids,
+and the size-weighted per-state expression profiles M for a given K cut."""
 
 import numpy as np
 import torch
@@ -31,6 +20,7 @@ from adata_schema import (
 def _sum_by_cluster(
     expr: np.ndarray, labels: np.ndarray, n_clusters: int
 ) -> np.ndarray:
+    """Sum rows of ``expr`` into ``n_clusters`` buckets given per-row cluster labels."""
     sums = np.zeros((n_clusters, expr.shape[1]), dtype=np.float32)
     np.add.at(sums, labels, expr)
     return sums
@@ -38,30 +28,19 @@ def _sum_by_cluster(
 
 def compute_leiden_aggregates(adata_sc: AnnData) -> None:
     """
-    Aggregate the reference over its Leiden clusters (on the shared genes) and
-    store the results on ``adata_sc.uns``, raw (``.X``) and normalized
-    (``obsm[OBSM_LOGNORM_SHARED_GENES]``) alike:
+    Aggregate the reference over its Leiden clusters on the shared genes, raw and
+    normalized, storing the per-cluster sums, sizes, and centroids (all L x G_shared,
+    column-aligned to UNS_SHARED_GENES).
 
-        uns["shared_genes"]                   list[str]      the exact gene order the
-                                                               arrays below are aligned to
-        uns["leiden_expr_sums_shared"]        (L x G_shared)  summed raw expression per cluster
-        uns["leiden_sizes"]                   (L,)            number of cells per cluster
-        uns["leiden_centroids_shared"]        (L x G_shared)  per-cluster mean raw expression
-        uns["leiden_expr_sums_shared_norm"]   (L x G_shared)  summed normalized expression per cluster
-        uns["leiden_centroids_shared_norm"]   (L x G_shared)  per-cluster mean normalized expression
+    Requires: adata_sc.uns[UNS_SHARED_GENES], adata_sc.obsm[OBSM_LOGNORM_SHARED_GENES],
+    adata_sc.obs[OBS_LEIDEN_ALL_GENES].
+    Adds: adata_sc.uns[UNS_LEIDEN_SIZES], adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES],
+    adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES],
+    adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM],
+    adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM].
 
-    Reads raw counts from ``adata_sc[:, shared_genes].X``, the normalized
-    variant from ``adata_sc.obsm[OBSM_LOGNORM_SHARED_GENES]`` (as written by
-    ``aim.sweep.pre_processing`` — already column-aligned to ``shared_genes``,
-    so unlike the raw side it needs no further gene slicing here), and cluster
-    labels from ``adata_sc.obs[OBS_LEIDEN_ALL_GENES]`` (as written by
-    ``aim.clustering.run_leiden_clustering``). Genes are column-aligned to
-    ``shared_genes``, which is itself stored so downstream consumers (e.g. the
-    post-mapping analysis) reuse this exact gene order instead of recomputing
-    (and potentially reordering) the sc/st gene intersection. All-zero raw
-    centroid rows are nudged to a tiny uniform value so their cosine distance
-    stays defined for ``tree.build_agglomeration_tree`` (the normalized variant
-    isn't used there, so it isn't nudged).
+    All-zero raw centroid rows are nudged to a tiny uniform value so their cosine
+    distance stays defined for the agglomeration tree; the normalized centroids are not.
     """
     adata_shared = adata_sc[:, adata_sc.uns[UNS_SHARED_GENES]]
 
@@ -103,12 +82,10 @@ def assemble_state_profiles_shared_genes(
     eps: float = 1e-8,
 ) -> torch.Tensor:
     """
-    Size-weighted per-state gene expression profiles from the subcluster->state
-    label array (as returned by ``tree.labels_at_k``) and the per-cluster
-    expression sums (L x G) / sizes (L,) stored on ``adata_sc.uns`` by
-    ``compute_leiden_aggregates``:
+    Size-weighted per-state expression profiles M (k x G_shared) for a subcluster->state
+    label array: M[s] = sum of expr_sums over its subclusters / sum of their sizes.
 
-        M[s] = (sum_{l: labels_k[l]=s} expr_sums[l]) / (sum_{l: labels_k[l]=s} sizes[l])
+    Requires: adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES], adata_sc.uns[UNS_LEIDEN_SIZES].
     """
     expr_sums = adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES]
     sizes = adata_sc.uns[UNS_LEIDEN_SIZES]

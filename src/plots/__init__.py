@@ -1,16 +1,4 @@
-"""Plotting for the AIM pipeline — all matplotlib figure generation lives here.
-
-Pure rendering: takes already-computed numbers / AnnData objects (from
-``metrics`` and the ``analysis`` orchestration) and writes PNGs to disk. Kept
-separate from ``metrics`` (which does computation only) and ``analysis`` (which
-orchestrates) so both the AIM post-mapping analysis and the reference-aligner
-analysis draw the shared figures from one place.
-
-    onehot  plot_onehot_distribution, plot_dominance_thresholds
-    cossim  plot_cossim_boxplots
-    states  UMAP comparison/grid, Leiden merge map, state profiles/fractions,
-            spatial cell states
-"""
+"""Matplotlib figure generation for the AIM pipeline; renders precomputed values and AnnData to PNGs."""
 
 from .cossim import plot_cossim_boxplots
 from .onehot import plot_dominance_thresholds, plot_onehot_distribution

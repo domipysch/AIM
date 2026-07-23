@@ -22,7 +22,7 @@ import scanpy as sc
 from anndata import AnnData
 
 from metrics.cossim import CossimResult, compute_and_save_cossim
-from metrics.onehot import hard_mapping, onehot_metrics
+from metrics.onehot import onehot_metrics
 
 from .metrics import (
     celltype_centroids,
@@ -41,6 +41,15 @@ from .plots import (
 from .report import generate_report
 
 logger = logging.getLogger(__name__)
+
+
+def hard_mapping(mapping: np.ndarray) -> np.ndarray:
+    """Row-wise argmax one-hot version of a soft assignment matrix (n_rows x n_cols)."""
+    mapping = np.asarray(mapping)
+    idx = mapping.argmax(axis=1)
+    one_hot = np.zeros_like(mapping, dtype=np.float32)
+    one_hot[np.arange(mapping.shape[0]), idx] = 1.0
+    return one_hot
 
 
 def analyze_mapping(

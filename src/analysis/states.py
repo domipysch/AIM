@@ -29,16 +29,20 @@ def create_states_plots(
     output_plots_dir: Path,
     state_palette: dict[int, tuple] | None = None,
 ):
+    """Plot cell-state profiles, state fractions, and the Leiden->state merge map.
+
+    Requires: adata_st.obsm[OBSM_MAPPING_SOFT], adata_st.obs[OBS_MAPPING_HARD],
+        adata_sc.obs[OBS_LEIDEN_ALL_GENES], adata_sc.obs[OBS_COMPUTED_STATE].
+    Writes cell_state_profiles.png, cell_state_fractions.png and
+    leiden_merge_map.png under output_plots_dir.
+    """
 
     k = adata_st.obsm[OBSM_MAPPING_SOFT].shape[1]
-    leiden_idx = (
-        adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
-    )  # (n_cells,) cell -> leiden
+    leiden_idx = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
     cell_fractions = cell_state_fractions(cell_states, k)
     spot_fractions = cell_state_fractions(adata_st.obs[OBS_MAPPING_HARD].to_numpy(), k)
 
-    # ── Cell-state profiles ──────────────────────────────────────────────────
     logger.info("Plotting cell-state profiles...")
     plot_state_profiles(
         adata_sc,
@@ -56,7 +60,6 @@ def create_states_plots(
         state_palette=state_palette,
     )
 
-    # ── Leiden-merge map: which Leiden overclusters merged into each state ───
     plot_leiden_merge_map(
         leiden_idx,
         cell_states,

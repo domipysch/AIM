@@ -1,13 +1,5 @@
-"""
-The agglomerative-K sweep: over-cluster once, build the tree once, then for every
-K cut the tree, assemble state profiles, map spots onto states, and run the full
-post-mapping analysis for that K.
-
-This module wires together the clustering half (``aggregation`` + ``tree``), the
-modular mapping half (a ``SpotStateMapper``), the per-K disk I/O, and the
-post-mapping analysis (``analysis.analysis.run_analysis``, called once per K
-right after that K's outputs are written).
-"""
+"""The K sweep: over-cluster once, build the tree once, then for every K cut the tree,
+assemble state profiles, map spots onto states, write outputs, and run the analysis."""
 
 import logging
 from pathlib import Path
@@ -26,6 +18,7 @@ from adata_schema import (
     OBSM_UMAP_SHARED_GENES,
 )
 from analysis.analysis import run_analysis
+from analysis.utils import to_dense
 from .aggregation import (
     assemble_state_profiles_shared_genes,
     compute_leiden_aggregates,
@@ -45,12 +38,18 @@ def pre_processing(
     adata_sc: anndata.AnnData,
     adata_st: anndata.AnnData,
 ):
+    """
+    Normalize and log1p the inputs into separate layers, keeping ``.X`` raw.
 
-    # Compute shared genes
+    Adds: adata_sc.uns[UNS_SHARED_GENES], adata_sc.layers[LAYER_LOGNORM],
+    adata_st.layers[LAYER_LOGNORM], adata_sc.obsm[OBSM_LOGNORM_SHARED_GENES],
+    adata_st.obsm[OBSM_LOGNORM_SHARED_GENES]. The shared-gene variants recompute
+    the size factor from shared-gene counts alone, so they cannot live in .layers.
+    """
+
     shared_genes = list(adata_sc.var_names.intersection(adata_st.var_names))
     adata_sc.uns[UNS_SHARED_GENES] = shared_genes
 
-    # Compute log layers (Normalize + log1p into a separate layer so adata_sc.X keeps the raw counts)
     adata_sc.layers[LAYER_LOGNORM] = adata_sc.X.copy()
     sc.pp.normalize_total(adata_sc, target_sum=1e4, layer=LAYER_LOGNORM)
     sc.pp.log1p(adata_sc, layer=LAYER_LOGNORM)
@@ -59,10 +58,6 @@ def pre_processing(
     sc.pp.normalize_total(adata_st, target_sum=1e4, layer=LAYER_LOGNORM)
     sc.pp.log1p(adata_st, layer=LAYER_LOGNORM)
 
-    # Normalize + log1p restricted to the shared genes only (size factor computed
-    # from shared-gene counts alone, not the full transcriptome/panel). G_shared
-    # != n_vars, so this can't live in .layers -> stored in obsm instead, column-
-    # aligned to shared_genes (== uns[UNS_SHARED_GENES]).
     adata_sc_shared = adata_sc[:, shared_genes].copy()
     adata_sc_shared.uns.pop("log1p", None)  # prevent scanpy warning
     sc.pp.normalize_total(adata_sc_shared, target_sum=1e4)
@@ -86,30 +81,26 @@ def run(
     k_max: int | None = None,
     k_step: int = 1,
 ):
+    """Run the full AIM sweep for one sc/ST pair, writing one folder per K under
+    ``output_folder`` and running the post-mapping analysis on each."""
 
-    # Write folder where to write output to
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    # Load input single-cell and spatial data (raw, unnormalized)
     adata_sc = anndata.read_h5ad(sc_path)
     adata_st = anndata.read_h5ad(st_path)
     pre_processing(adata_sc, adata_st)
 
-    # Compute Leiden over-clustering on single-cell data on all genes and only on shared genes
     logger.info("Computing Leiden over-clustering...")
     run_leiden_clustering_all_genes(adata_sc, resolution=leiden_resolution)
     run_leiden_clustering_shared_genes(adata_sc, resolution=leiden_resolution)
 
-    # Save the leiden overclustering to file
     write_leiden_overclustering_all_genes(output_folder, adata_sc)
 
-    # Aggregate the sc data over its Leiden clusters, raw and normalized (stored on adata_sc.uns).
-    # Use Leiden clustering computed on all genes, but normalized values from only shared genes.
+    # Cluster labels come from the all-genes Leiden; expression from shared genes.
     compute_leiden_aggregates(adata_sc)
 
-    # Compute UMAP coordinates considering all genes and shared genes only
-    # (not necessary for mapping, but for analysis)
+    # UMAP is used only by the analysis, not by the mapping.
     sc.tl.umap(adata_sc, key_added=OBSM_UMAP)
     sc.tl.umap(
         adata_sc,
@@ -117,12 +108,10 @@ def run(
         key_added=OBSM_UMAP_SHARED_GENES,
     )
 
-    # Build agglomerative clustering of Leiden clusters based on centroids only on shared genes
     agglomerative_clustering = build_agglomeration_tree(
         adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES]
     )
 
-    # Get range of Ks to run the mapping on
     n_leiden_clusters = adata_sc.uns[UNS_LEIDEN_NUMBER_STATES_ALL_GENES]
     k_hi = min(n_leiden_clusters, k_max) if k_max else n_leiden_clusters
     k_lo = max(1, k_min) if k_min else 1
@@ -135,29 +124,21 @@ def run(
         len(ks),
     )
 
-    # Compute spot to state mapping for every k
     for k in ks:
 
-        # Reconstruct cluster for given k ouf hierarchical cluster (L,)
         labels_k = labels_at_k(agglomerative_clustering, k, n_leiden_clusters)
-
-        # Get cluster centroid expressions on shared genes (K, G_shared)
         m_shared = assemble_state_profiles_shared_genes(labels_k, k, adata_sc)
 
-        # Compute mapping with given mapper (S x K)
-        # Using shared genes raw count data
+        # Densify: adata_st.X is often sparse and torch.tensor can't consume it.
+        z_shared = to_dense(adata_st[:, adata_sc.uns[UNS_SHARED_GENES]])
         spot_to_state = mapper.map(
-            torch.tensor(
-                adata_st[:, adata_sc.uns[UNS_SHARED_GENES]].X, dtype=torch.float32
-            ),
+            torch.tensor(z_shared, dtype=torch.float32),
             m_shared,
         )
 
-        # Create folder for this k-run
         run_dir = output_folder / f"k_{k:03d}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write outputs for this k-run to folder
         write_run_outputs(
             run_dir=run_dir,
             spot_to_state=spot_to_state,
@@ -168,5 +149,4 @@ def run(
         )
         logger.info("K=%3d mapped -> %s", k, run_dir)
 
-        # Run analysis for this run
         run_analysis(adata_sc, adata_st, run_dir)

@@ -1,30 +1,5 @@
-"""Biological / topological metrics for the post-mapping analysis.
-
-Three questions, each producing a scalar objective (every permutation-tested
-metric is reported with an observed value AND a null z-score; the z-score is the
-dataset-comparable objective, since raw purity / Moran's I / cosine values are
-not comparable across pairs with different numbers of states):
-
-1. Spatial organisation of the mapped spots (P's argmax state per spot)
-   - Local Spatial Purity (LSP): mean fraction of the k nearest spatial
-     neighbours sharing the same mapped state — local compactness.
-   - Moran's I averaged over the per-state binary indicators — global spatial
-     clustering (via squidpy).
-   - Null: shuffle the spot-state labels N_PERM times.
-
-2. Coherence of the subclusters merged into one computed state
-   - For each computed state that aggregates >=2 subclusters: are those
-     subclusters' shared-gene centroids MORE mutually similar (higher mean
-     pairwise cosine) than a same-sized random draw of subclusters from OTHER
-     states? If yes (high z-score, low p), the merge looks coherent in the gene
-     subspace the method actually operates in.
-   - Null: N_PERM random same-sized draws of subclusters from other states.
-
-3. Modularity of the computed-state partition on a precomputed KNN graph.
-
-These are generic given their inputs (label arrays, centroids, a graph), so they
-live in ``metrics`` rather than in the AIM-specific ``analysis`` package.
-"""
+"""Spatial-organisation metrics over spot state labels: a label-shuffling
+permutation test, local spatial purity, and mean Moran's I across states."""
 
 from __future__ import annotations
 
@@ -45,10 +20,10 @@ def permutation_test(
     n_perm: int,
     rng: np.random.Generator,
 ) -> dict:
-    """Shuffle ``labels`` n_perm times, recompute ``metric_fn`` each time.
+    """Shuffle ``labels`` ``n_perm`` times, recomputing ``metric_fn`` each time.
 
-    Returns observed value plus p-value (fraction of null >= observed), z-score,
-    and the null mean/std. Full null draws are not retained (keeps the JSON small).
+    Returns a dict with ``observed``, ``p_value`` (fraction of null >= observed),
+    ``z_score``, ``null_mean`` and ``null_std``; non-finite cases yield NaNs.
     """
     if not np.isfinite(observed):
         return {
@@ -78,13 +53,16 @@ def permutation_test(
 
 
 def local_spatial_purity(labels: np.ndarray, nbr_idx: np.ndarray) -> float:
-    """Mean fraction of k nearest spatial neighbours sharing the same state label,
-    using precomputed neighbour indices (so the permutation null is cheap)."""
+    """Mean fraction of each spot's precomputed neighbours (``nbr_idx``) that
+    share its state label."""
     return float((labels[nbr_idx] == labels[:, None]).mean())
 
 
 def morans_i_mean(labels: np.ndarray, graph: ad.AnnData) -> float:
-    """Moran's I averaged over all states' binary indicators, via squidpy.gr.spatial_autocorr."""
+    """Moran's I averaged over each state's binary indicator, via
+    ``squidpy.gr.spatial_autocorr``. Requires ``graph.obsp['spatial_connectivities']``;
+    writes ``state_*`` columns onto ``graph.obs``. Returns NaN if fewer than 2 states.
+    """
 
     states = np.unique(labels)
     if len(states) < 2:

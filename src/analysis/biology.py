@@ -1,30 +1,4 @@
-"""Biological / topological metrics for the post-mapping analysis.
-
-Three questions, each producing a scalar objective (every permutation-tested
-metric is reported with an observed value AND a null z-score; the z-score is the
-dataset-comparable objective, since raw purity / Moran's I / cosine values are
-not comparable across pairs with different numbers of states):
-
-1. Spatial organisation of the mapped spots (P's argmax state per spot)
-   - Local Spatial Purity (LSP): mean fraction of the k nearest spatial
-     neighbours sharing the same mapped state — local compactness.
-   - Moran's I averaged over the per-state binary indicators — global spatial
-     clustering (via squidpy).
-   - Null: shuffle the spot-state labels N_PERM times.
-
-2. Coherence of the subclusters merged into one computed state
-   - For each computed state that aggregates >=2 subclusters: are those
-     subclusters' shared-gene centroids MORE mutually similar (higher mean
-     pairwise cosine) than a same-sized random draw of subclusters from OTHER
-     states? If yes (high z-score, low p), the merge looks coherent in the gene
-     subspace the method actually operates in.
-   - Null: N_PERM random same-sized draws of subclusters from other states.
-
-3. Modularity of the computed-state partition on a precomputed KNN graph.
-
-These are generic given their inputs (label arrays, centroids, a graph), so they
-live in ``metrics`` rather than in the AIM-specific ``analysis`` package.
-"""
+"""Substate merge coherence and computed-state modularity for the post-mapping analysis."""
 
 from __future__ import annotations
 
@@ -52,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 N_PERM_COHERENCE = 200  # permutations for the substate-coherence null
-SIG_ALPHA = 0.05  # p-value threshold for "significant" counts
+SIG_ALPHA = 0.05  # p-value threshold for "significant"
 
 
 def analyse_substate_coherence(
@@ -62,26 +36,20 @@ def analyse_substate_coherence(
     n_perm: int = N_PERM_COHERENCE,
     seed: int = 0,
 ):
-    """Shared-gene centroid coherence of the subclusters merged into each state.
+    """Coherence of the subclusters merged into each state.
 
-    For every computed state that aggregates >=2 subclusters (and with at least
-    one subcluster belonging to another state, to draw a null from): compute the
-    mean/median pairwise cosine similarity of the merged subclusters' shared-gene
-    centroids, and permutation-test it against ``n_perm`` random same-sized draws
-    of subclusters from OTHER states.
+    For every state merging >=2 subclusters (with at least one subcluster in
+    another state), permutation-tests the mean/median pairwise cosine similarity
+    of the merged subclusters' ``centroids`` (L x G_shared) against ``n_perm``
+    same-sized random draws of subclusters from other states. All-zero (empty)
+    centroid rows are dropped. ``labels_k`` (L,) is the subcluster->state grouping.
 
-    Args:
-        centroids: per-subcluster shared-gene centroid (L x G_shared), e.g.
-                   normalized+log1p expression sums / sizes. Rows for empty
-                   subclusters (size 0) may be all-zero; such rows are dropped.
-        labels_k:  subcluster -> state label array (L,); defines the grouping.
-
-    Returns a dict with per-state detail and aggregate scalars.
+    Writes biology_metrics.json under output_data_dir.
     """
 
     groups = leiden_state_groups(labels_k)
-    # Subclusters that actually have cells (non-zero centroid) — a zero centroid
-    # has undefined cosine similarity and must not seed a null draw.
+    # Only subclusters with a non-zero centroid: a zero centroid has undefined
+    # cosine similarity.
     valid_leiden = {
         int(l) for l in range(len(centroids)) if np.any(centroids[l] != 0.0)
     }
@@ -144,8 +112,7 @@ def analyse_substate_coherence(
             "frac_significant": float("nan"),
         }
 
-    # Save to file
-    with open(output_data_dir / "topology_metrics.json", "w") as f:
+    with open(output_data_dir / "biology_metrics.json", "w") as f:
         json.dump(
             {"n_perm": int(n_perm), "aggregate": aggregate, "per_state": per_state},
             f,
@@ -159,6 +126,14 @@ def analyse_modularities(
     output_plots_dir: Path,
     state_palette: dict[int, tuple] | None = None,
 ):
+    """Modularity of the computed-state partition on the reference KNN graphs.
+
+    Requires: adata_sc.obs[OBS_COMPUTED_STATE], adata_sc.obs[OBS_LEIDEN_SHARED_GENES],
+        adata_sc.obsp[OBSP_CONNECTIVITIES_SHARED_GENES],
+        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES].
+    Writes modularity_metrics.json under output_data_dir, and
+    umap_computed_state.png / umap_grid.png under output_plots_dir.
+    """
 
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
 
@@ -189,7 +164,6 @@ def analyse_modularities(
             indent=4,
         )
 
-    # ── Computed-state UMAP (standalone, for side-by-side with the spatial plot)
     plot_umap_comparison(
         adata_sc,
         panels=[(OBS_COMPUTED_STATE, "Computed cell-state assignment")],
@@ -197,7 +171,6 @@ def analyse_modularities(
         state_palette=state_palette,
     )
 
-    # ── UMAP grid: {Leiden all-gene, Leiden shared-gene, computed} x {all, shared}
     plot_umap_grid(
         adata_sc,
         output_path=output_plots_dir / "umap_grid.png",

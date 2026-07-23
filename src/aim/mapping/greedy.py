@@ -1,14 +1,5 @@
-"""
-Greedy spot->state mapping: zero-parameter nearest-centroid classifier.
-
-Each spot is assigned to the state whose (size-weighted) centroid is most
-cosine-similar to it on the shared genes:
-
-    P[s] = one_hot( argmax_k cos(Z_shared[s], M[k]) )
-
-No training; P is one-hot by construction, so the soft and deterministic
-reconstructions coincide.
-"""
+"""Greedy spot->state mapping: assign each spot to its most cosine-similar state
+centroid, producing a one-hot P."""
 
 import torch
 
@@ -22,14 +13,7 @@ class GreedyMapper(SpotStateMapper):
     name = "greedy"
 
     def map(self, Z_shared: torch.Tensor, M_shared: torch.Tensor) -> torch.Tensor:
-        """
-        Assign nearest centroid
-
-        Assign each spot to the state whose centroid is most cosine-similar to it,
-        on the shared genes.
-
-        Returns a one-hot spot->state assignment P (S x K).
-        """
+        """Assign each spot to its most cosine-similar state centroid; returns a one-hot P (S x K)."""
 
         Zn = Z_shared / (Z_shared.norm(dim=1, keepdim=True) + self.eps)
         Mn = M_shared / (M_shared.norm(dim=1, keepdim=True) + self.eps)

@@ -1,17 +1,4 @@
-"""
-PDF report generation via Typst for post-mapping analysis.
-
-Public API
-----------
-generate_analysis_report(analysis_dir) -> Path | None
-
-Reads whatever it needs directly from analysis_dir/plots and analysis_dir/data
-(as written by analysis.analysis.run_analysis) rather than taking it as a
-separate parameter.
-
-Returns None (with a warning) when `typst` is not on PATH or compilation fails.
-The .typ source file is kept alongside the PDF for debugging.
-"""
+"""Typst PDF report generation for the post-mapping analysis."""
 
 from __future__ import annotations
 
@@ -26,9 +13,6 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _TODAY = date.today().isoformat()
-
-
-# ─── Low-level helpers ────────────────────────────────────────────────────────
 
 
 def _esc(s: str) -> str:
@@ -137,8 +121,7 @@ def _two_col_table(
 
 
 def _onehot_summary_table(json_path: Path, row_label: str) -> str:
-    """Two-column Typst table from the metrics.onehot summary JSON written by
-    analysis.onehot.save_onehot for the spot->state mapping P."""
+    """Two-column Typst table from a one-hotness summary JSON."""
     with open(json_path, encoding="utf-8") as fh:
         d = json.load(fh)
     s = d["summary"]
@@ -163,9 +146,8 @@ def _onehot_section(
     title: str,
     row_label: str,
 ) -> str:
-    """One-hotness section for the spot->state mapping P (the onehot_*_mapping.*
-    files written by analysis.onehot.save_onehot). Empty string if the
-    distribution plot is missing."""
+    """One-hotness section for the spot->state mapping P from the
+    onehot_*_mapping.* files. Empty string if the distribution plot is missing."""
     dist_png = plots_dir / "onehot_distribution_mapping.png"
     if not dist_png.exists():
         return ""
@@ -204,30 +186,11 @@ def _img(p: Path, base: Path, width: str = "100%") -> str:
     return f'#image("{_img_path(p, base)}", width: {width})'
 
 
-def _img_fit(p: Path, base: Path, height: str = "20cm") -> str:
-    """Return a Typst image boxed to a fixed height (width: 100%), scaled down
-    to fit while preserving aspect ratio — for plots whose size varies with
-    the number of states/clusters and could otherwise overflow the page."""
-    return (
-        f"#box(width: 100%, height: {height})["
-        f'#image("{_img_path(p, base)}", width: 100%, height: 100%, fit: "contain")'
-        f"]"
-    )
-
-
 def _section_img(p: Path, title: str, base: Path, width: str = "100%") -> str:
     """Return a Typst heading + image section, or '' if the file is absent."""
     if not p.exists():
         return ""
     return f"\n= {title}\n\n{_img(p, base, width)}\n"
-
-
-def _section_img_fit(p: Path, title: str, base: Path, height: str = "20cm") -> str:
-    """Like _section_img, but scales the image to fit within a fixed height
-    (preserving aspect ratio) instead of stretching it to full page width."""
-    if not p.exists():
-        return ""
-    return f"\n= {title}\n\n{_img_fit(p, base, height)}\n"
 
 
 def _compile(source: str, out_pdf: Path) -> bool:
@@ -255,10 +218,10 @@ _PAGE_SETUP = """\
 """
 
 
-def _load_biology(data_dir: Path) -> dict | None:
-    """Load biology_metrics.json (written by analysis.analysis.run_analysis), or
-    None if it is absent or unreadable."""
-    json_path = data_dir / "biology_metrics.json"
+def _load_metrics_json(data_dir: Path, filename: str) -> dict | None:
+    """Load a metrics JSON from the analysis data dir, or None if it is absent
+    or unreadable."""
+    json_path = data_dir / filename
     if not json_path.exists():
         return None
     try:
@@ -269,12 +232,11 @@ def _load_biology(data_dir: Path) -> dict | None:
 
 
 def _spatial_organization_section(data_dir: Path) -> str:
-    """Spatial-organisation-of-mapped-spots section, from biology_metrics.json.
-    Returns '' if the file or the spatial block is absent."""
-    bio = _load_biology(data_dir)
-    if bio is None:
+    """Spatial-organisation-of-mapped-spots section from topology_metrics.json.
+    Returns '' if the file or the spatial metrics are absent."""
+    sp = _load_metrics_json(data_dir, "topology_metrics.json")
+    if sp is None:
         return ""
-    sp = bio.get("spatial", {})
     lsp, mi = sp.get("local_purity"), sp.get("morans_i")
     if not (lsp or mi):
         return ""
@@ -307,12 +269,11 @@ def _spatial_organization_section(data_dir: Path) -> str:
 
 
 def _substate_coherence_section(data_dir: Path) -> str:
-    """Substate-merge-coherence section, from biology_metrics.json. Returns ''
-    if the file or the coherence aggregate is absent."""
-    bio = _load_biology(data_dir)
-    if bio is None:
+    """Substate-merge-coherence section from biology_metrics.json.
+    Returns '' if the file or the coherence aggregate is absent."""
+    coh = _load_metrics_json(data_dir, "biology_metrics.json")
+    if coh is None:
         return ""
-    coh = bio.get("coherence", {})
     agg = coh.get("aggregate", {})
     per_state = coh.get("per_state", {})
     if not agg:
@@ -372,9 +333,6 @@ def _substate_coherence_section(data_dir: Path) -> str:
     )
 
 
-# ─── Analysis report ──────────────────────────────────────────────────────────
-
-
 def generate_analysis_report(
     analysis_dir: Path,
 ) -> Path | None:
@@ -386,7 +344,6 @@ def generate_analysis_report(
 
     parts: list[str] = [_PAGE_SETUP]
 
-    # Title block
     parts.append(f"""
 #align(center)[
   #text(size: 22pt, weight: "bold")[Analysis Report]
@@ -398,9 +355,9 @@ def generate_analysis_report(
 #v(0.5em)
 """)
 
-    base = analysis_dir  # .typ lives here; image paths are relative to it
+    base = analysis_dir  # image paths in the .typ are relative to this dir
 
-    # 1. Spatial distribution of AIM states (computed-state UMAP beside it)
+    # Spatial distribution of AIM states (computed-state UMAP beside it)
     spatial_png = plots_dir / "spatial_cell_states.png"
     umap_cs_png = plots_dir / "umap_computed_state.png"
     if spatial_png.exists() and umap_cs_png.exists():
@@ -416,7 +373,7 @@ def generate_analysis_report(
         if sec:
             parts.append(sec)
 
-    # 2. Cell- and spot-state fractions
+    # Cell- and spot-state fractions
     sec = _section_img(
         plots_dir / "cell_state_fractions.png",
         "Cell- and Spot-State Fractions (AIM States)",
@@ -425,7 +382,7 @@ def generate_analysis_report(
     if sec:
         parts.append(sec)
 
-    # 3. UMAP 2x2 grid — Leiden overclusters vs computed states, all vs shared genes
+    # UMAP grid — Leiden overclusters vs computed states, all vs shared genes
     sec = _section_img(
         plots_dir / "umap_grid.png",
         "UMAP — Leiden Overclusters vs Computed States (all & shared genes)",
@@ -434,7 +391,7 @@ def generate_analysis_report(
     if sec:
         parts.append(sec)
 
-    # 4. Which Leiden overclusters were merged into each AIM state
+    # Which Leiden overclusters were merged into each AIM state
     sec = _section_img(
         plots_dir / "leiden_merge_map.png",
         "Leiden Overclusters Merged per AIM State",
@@ -443,10 +400,10 @@ def generate_analysis_report(
     if sec:
         parts.append(sec)
 
-    # 5. Spatial organisation of the mapped spots (permutation-tested)
+    # Spatial organisation of the mapped spots
     parts.append(_spatial_organization_section(data_dir))
 
-    # 6. Reconstruction cosine similarity
+    # Reconstruction cosine similarity
     cossim_csv = data_dir / "cossim_summary.csv"
     if cossim_csv.exists():
         boxplot_png = plots_dir / "cossim_boxplots.png"
@@ -465,14 +422,14 @@ semantics). "raw" compares raw counts; "norm" compares total-count-normalized
 {_csv_table(cossim_csv)}
 {boxplot_block}""")
 
-    # 7. AIM-state profiles
+    # AIM-state profiles
     sec = _section_img(
         plots_dir / "cell_state_profiles.png", "AIM-State Profiles", base
     )
     if sec:
         parts.append(sec)
 
-    # 8. Mapping sharpness — spot -> AIM state mapping
+    # Mapping sharpness — spot -> AIM state mapping
     parts.append(
         _onehot_section(
             plots_dir,
@@ -483,7 +440,7 @@ semantics). "raw" compares raw counts; "norm" compares total-count-normalized
         )
     )
 
-    # 9. Substate merge coherence (kept last)
+    # Substate merge coherence
     parts.append(_substate_coherence_section(data_dir))
 
     source = "\n".join(p for p in parts if p)

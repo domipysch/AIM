@@ -1,20 +1,11 @@
-"""
-Run configuration for AIM.
-
-``AIMConfig`` bundles the per-run knobs (mapping choice + hyperparameters + K
-range) parsed from the CLI. The mapper registry (``_MAPPERS`` / ``MAPPING_CHOICES``)
-and the ``build_mapper`` factory live here too, so the one place that knows the
-set of mapping strategies is also the place that turns a config into a mapper.
-
-Add a new strategy by subclassing ``aim.mapping.SpotStateMapper`` and registering
-it in ``_MAPPERS`` below.
-"""
+"""Run configuration for AIM: the ``AIMConfig`` knobs, the mapper registry, and the
+``build_mapper`` factory that turns a config into a ``SpotStateMapper``."""
 
 from dataclasses import dataclass
 
 from .mapping import GreedyMapper, LearnedMapper, SpotStateMapper
 
-# Registry of available mapping strategies, keyed by CLI name.
+# Mapping strategies keyed by CLI name.
 _MAPPERS: dict[str, type[SpotStateMapper]] = {
     GreedyMapper.name: GreedyMapper,
     LearnedMapper.name: LearnedMapper,
@@ -25,7 +16,7 @@ MAPPING_CHOICES = tuple(_MAPPERS)
 
 @dataclass
 class AIMConfig:
-    """Per-run knobs for the AIM agglomerative sweep (mapping choice + hyperparams)."""
+    """Per-run knobs for the AIM sweep: mapping choice, hyperparameters, and K range."""
 
     mapping: str = "greedy"
     leiden_resolution: float = 3.0
@@ -41,7 +32,7 @@ class AIMConfig:
     k_step: int = 1
 
     def build_mapper(self) -> SpotStateMapper:
-        """Instantiate the configured spot->state mapper."""
+        """Build the ``SpotStateMapper`` named by ``self.mapping``."""
         if self.mapping not in _MAPPERS:
             raise ValueError(
                 f"mapping must be one of {MAPPING_CHOICES}, got {self.mapping!r}"

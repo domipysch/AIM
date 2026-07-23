@@ -1,5 +1,4 @@
-"""Plots for metrics.onehot — shared between reference_aligners/mapping_analysis
-and analysis so both pipelines' "how one-hot is this mapping" figures match."""
+"""Plots for metrics.onehot: mapping-sharpness figures."""
 
 from __future__ import annotations
 
@@ -17,8 +16,10 @@ logger = logging.getLogger(__name__)
 def plot_onehot_distribution(
     metrics: dict, output_path: Path, row_label: str = "spot"
 ) -> None:
-    """Histogram of per-row max-probability ("how one-hot"), annotated with
-    mean/median and the Gini-impurity / entropy summary stats."""
+    """Histogram of per-row max-probability annotated with mean/median and Gini/entropy summaries; saves to output_path.
+
+    metrics must supply "max_prob", "summary", "n_rows", and "n_cols".
+    """
     max_prob = metrics["max_prob"]
     summary = metrics["summary"]
 
@@ -55,12 +56,9 @@ def plot_onehot_distribution(
 def plot_dominance_thresholds(
     metrics: dict, output_path: Path, row_label: str = "spot"
 ) -> None:
-    """
-    Bar chart of the fraction of rows whose max-probability ("dominance") is
-    >= each of a fixed set of thresholds.
+    """Bar chart of the fraction of rows whose max-probability meets each DOMINANCE_THRESHOLDS level; saves to output_path.
 
-    Mirrors src/00_Playground/assess_one_hotness.py's plot_report(), reusing
-    its threshold set and styling.
+    metrics must supply "max_prob" and "n_rows".
     """
     max_prob = metrics["max_prob"]
     fracs = [(t, float(np.mean(max_prob >= t))) for t in DOMINANCE_THRESHOLDS]

@@ -1,126 +1,74 @@
-"""
-Single source of truth — and a map — for every obs/var/uns/obsm/obsp/layers
-key the AIM sweep and its post-mapping analysis read or write on the sc/st
-AnnData objects. Two purposes in one file:
-
-  1. Avoid duplicating the same string key in the module that writes it and
-     the module(s) that read it back (e.g. aim.aggregation writes
-     UNS_LEIDEN_SIZES on adata_sc.uns; analysis.analysis.run_analysis reads it
-     back — both import the same name from here instead of retyping the string).
-  2. Read top to bottom, this file is a schema: everything that ends up on
-     adata_sc / adata_st by the time a sweep has run.
-
-Has no dependencies of its own, so both the ``aim`` and ``analysis`` packages
-can import from it freely without a circular import — ``aim.sweep`` already
-imports ``analysis.analysis.run_analysis``, so the reverse (``analysis``
-importing directly from ``aim``) would deadlock on that cycle.
+"""Canonical obs/var/uns/obsm/obsp/layers key names for the sc/st AnnData
+objects, each with a one-line description of what it holds. ``L`` = number of
+Leiden subclusters, ``G_shared`` = number of shared genes, ``K`` = number of
+states at the current cut.
 """
 
-# ── adata_sc — mutated in place at every stage, never copied ───────────────
+# ── adata_sc ───────────────────────────────────────────────────────────────
 
-# obs — written by aim.clustering.run_leiden_clustering.
-OBS_LEIDEN_ALL_GENES = (
-    "leiden"  # (n_cells,) int — the Leiden over-clustering label (0..L-1)
-)
+# obs
+OBS_LEIDEN_ALL_GENES = "leiden"  # (n_cells,) int — Leiden label (0..L-1) from all genes
 OBS_LEIDEN_SHARED_GENES = (
-    "leiden_shared_genes"  # (n_cells,) int — the Leiden over-clustering label (0..L-1)
+    "leiden_shared_genes"  # (n_cells,) int — Leiden label from shared genes only
+)
+OBS_COMPUTED_STATE = (
+    "computed_state"  # (n_cells,) str categorical — cell's state at the current K
 )
 
-# obs — one K's computed cell -> state assignment (n_cells, string categorical):
-# each cell's Leiden subcluster routed through that K's tree cut
-# (leiden_to_state). Written by analysis.analysis.run_analysis; K-dependent and
-# overwritten once per K — the sc-side mirror of adata_st's OBS_MAPPING_HARD.
-# plots.states reads it (and sets its scanpy "{key}_colors" uns companion) so the
-# state palette stays consistent across the UMAP/spatial figures.
-OBS_COMPUTED_STATE = "computed_state"
-
-# uns — written by aim.clustering.run_leiden_clustering, alongside obs[OBS_LEIDEN].
-# Read back by analysis.analysis.run_analysis (off the in-memory adata_sc.uns)
-# instead of re-reading the run's config.yaml (main.py still writes
-# leiden_resolution there too, but only as a human-readable provenance record).
-UNS_LEIDEN_RESOLUTION_ALL_GENES = (
-    "leiden_resolution"  # float — resolution the Leiden over-clustering was run at
+# uns — Leiden run parameters
+UNS_LEIDEN_RESOLUTION_ALL_GENES = "leiden_resolution"  # float — resolution (all genes)
+UNS_LEIDEN_NUMBER_STATES_ALL_GENES = (
+    "leiden_number_states"  # int — cluster count L (all genes)
 )
-UNS_LEIDEN_NUMBER_STATES_ALL_GENES = "leiden_number_states"
+UNS_LEIDEN_RESOLUTION_SHARED_GENES = (
+    "leiden_resolution_shared_genes"  # float — resolution (shared genes)
+)
+UNS_LEIDEN_NUMBER_STATES_SHARED_GENES = (
+    "leiden_number_states_shared_genes"  # int — cluster count (shared genes)
+)
 
-# uns — written by aim.clustering.run_leiden_clustering_shared_genes, alongside
-# obs[OBS_LEIDEN_SHARED_GENES]. Mirrors UNS_LEIDEN_RESOLUTION/NUMBER_STATES
-# above but for the shared-genes-only clustering run.
-UNS_LEIDEN_RESOLUTION_SHARED_GENES = "leiden_resolution_shared_genes"  # float — resolution the shared-genes Leiden over-clustering was run at
-UNS_LEIDEN_NUMBER_STATES_SHARED_GENES = "leiden_number_states_shared_genes"
+# obsm/uns/obsp — shared-gene PCA + neighbor graph
+OBSM_PCA_SHARED_GENES = (
+    "X_pca_shared_genes"  # (n_cells x n_comps) — PCA of the shared-gene lognorm matrix
+)
+UNS_NEIGHBORS_SHARED_GENES = (
+    "neighbors_shared_genes"  # dict — scanpy neighbors params for the shared-gene graph
+)
+OBSP_DISTANCES_SHARED_GENES = "neighbors_shared_genes_distances"  # (n_cells x n_cells) sparse — neighbor distances
+OBSP_CONNECTIVITIES_SHARED_GENES = "neighbors_shared_genes_connectivities"  # (n_cells x n_cells) sparse — neighbor connectivities
 
-# obsm — PCA embedding of the shared-genes-only normalized matrix
-# (obsm[OBSM_LOGNORM_SHARED_GENES]), written by
-# aim.clustering.run_leiden_clustering_shared_genes. Mirrors OBSM_PCA below,
-# which is computed on all genes instead.
-OBSM_PCA_SHARED_GENES = "X_pca_shared_genes"
+# uns — per-Leiden-cluster aggregates, all column-aligned to UNS_SHARED_GENES
+UNS_SHARED_GENES = "shared_genes"  # list[str] — sc/st gene intersection; column order for every *_SHARED array
+UNS_LEIDEN_SIZES = "leiden_sizes"  # (L,) — cells per Leiden cluster
+UNS_LEIDEN_EXPR_SUMS_SHARED_GENES = (
+    "leiden_expr_sums_shared"  # (L x G_shared) — summed raw expression per cluster
+)
+UNS_LEIDEN_CENTROIDS_SHARED_GENES = "leiden_centroids_shared"  # (L x G_shared) — mean raw expression per cluster (all-zero rows set to 1e-6)
+UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM = "leiden_expr_sums_shared_norm"  # (L x G_shared) — summed lognorm expression per cluster
+UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM = "leiden_centroids_shared_norm"  # (L x G_shared) — mean lognorm expression per cluster
 
-# uns/obsp — neighbor graph over obsm[OBSM_PCA_SHARED_GENES], written by the
-# same function. uns[UNS_NEIGHBORS_SHARED_GENES] holds scanpy's neighbors
-# params dict; obsp[OBSP_DISTANCES_SHARED_GENES] /
-# obsp[OBSP_CONNECTIVITIES_SHARED_GENES] hold the actual graph matrices
-# (scanpy's own key_added + "_distances" / "_connectivities" naming
-# convention — see sc.pp.neighbors(key_added=...)).
-UNS_NEIGHBORS_SHARED_GENES = "neighbors_shared_genes"
-OBSP_DISTANCES_SHARED_GENES = "neighbors_shared_genes_distances"
-OBSP_CONNECTIVITIES_SHARED_GENES = "neighbors_shared_genes_connectivities"
+# ── adata_st ───────────────────────────────────────────────────────────────
 
-# layers — written by aim.sweep.pre_processing on both adata_sc and adata_st
-# (X stays the raw counts main.py loaded) — same key, same transform, on
-# whichever object needs it.
+# obsm/obs — one K's spot->state mapping
+OBSM_SPATIAL = "spatial"  # (n_spots x 2) — spatial coordinates
+OBSM_MAPPING_SOFT = (
+    "mapping_soft"  # (n_spots x K) — soft spot->state assignment P at the current K
+)
+OBS_MAPPING_HARD = (
+    "mapping_hard"  # (n_spots,) int — argmax state index (0..K-1) at the current K
+)
+
+# ── shared across adata_sc and adata_st ─────────────────────────────────────
+
 LAYER_LOGNORM = (
-    "lognorm"  # (n_obs x n_genes) — normalize_total(target_sum=1e4) + log1p, all genes
+    "lognorm"  # (n_obs x n_vars) — normalize_total(1e4) + log1p over all genes
 )
+OBSM_LOGNORM_SHARED_GENES = "lognorm_shared"  # (n_obs x G_shared) — normalize_total(1e4) + log1p over shared genes only, aligned to UNS_SHARED_GENES
 
-# obsm — normalize_total(target_sum=1e4) + log1p computed on the shared genes
-# only (sc/st gene intersection), so the size factor differs from
-# LAYER_LOGNORM (which normalizes over all genes first, then gets sliced down
-# elsewhere). Written on both adata_sc and adata_st by aim.sweep.pre_processing.
-# Column count is G_shared, not n_vars, so this can't live in .layers; column
-# order matches UNS_SHARED_GENES (defined below).
-OBSM_LOGNORM_SHARED_GENES = "lognorm_shared"
+# ── scanpy default keys, referenced by name ─────────────────────────────────
 
-# obsm — scanpy's own convention name, but referenced explicitly by name in
-# both aim.clustering (use_rep=) and plots.states (plot_umap_grid's basis),
-# so it's named here rather than left as a bare string in both.
-OBSM_PCA = "X_pca"
-OBSM_UMAP = "X_umap"
-OBSM_UMAP_SHARED_GENES = "X_umap_shared_genes"
-
-# uns — raw and normalized variants alike are written once, by
-# aim.aggregation.compute_leiden_aggregates, before the K sweep runs. All
-# four arrays are column-aligned to UNS_SHARED_GENES.
-UNS_SHARED_GENES = "shared_genes"  # list[str] — sc/st gene intersection; the exact
-# column order every array below is aligned to.
-UNS_LEIDEN_EXPR_SUMS_SHARED_GENES = "leiden_expr_sums_shared"  # (L x G_shared) — summed raw expression per Leiden cluster
-UNS_LEIDEN_SIZES = "leiden_sizes"  # (L,) — number of cells per Leiden cluster
-UNS_LEIDEN_CENTROIDS_SHARED_GENES = (
-    "leiden_centroids_shared"  # (L x G_shared) — per-cluster mean raw expression
+OBSM_PCA = "X_pca"  # (n_cells x n_comps) — PCA of the all-gene lognorm layer
+OBSM_UMAP = "X_umap"  # (n_cells x 2) — UMAP from the all-gene neighbor graph
+OBSM_UMAP_SHARED_GENES = (
+    "X_umap_shared_genes"  # (n_cells x 2) — UMAP from the shared-gene neighbor graph
 )
-UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM = "leiden_expr_sums_shared_norm"  # (L x G_shared) — summed normalized expression per cluster
-UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM = "leiden_centroids_shared_norm"  # (L x G_shared) — per-cluster mean normalized expression
-
-# ── adata_st — read-only from main.py's h5ad load through the whole sweep,
-# except for one addition: ─────────────────────────────────────────────────
-
-# obsm — supplied by the input h5ad itself (see the ST h5ad format
-# requirements in CLAUDE.md); read by metrics.biology / plots.states for the
-# spatial plot.
-OBSM_SPATIAL = (
-    "spatial"  # (n_spots x 2) — spatial coordinates, as loaded from the input h5ad
-)
-
-# obsm — one K's spot -> computed-state soft mapping (P, S x k), written by
-# analysis.loading.load_mapping when it reads spot_to_state_mapping.h5ad
-# (as written by aim.io.write_run_outputs) back in for the post-mapping
-# analysis. Overwritten once per K inside aim.sweep's K loop (which calls
-# analysis.analysis.run_analysis) — not meant to persist across K's. Column
-# order is state_0..state_{k-1}; no separate name list is kept since nothing
-# consumes state identity beyond that.
-OBSM_MAPPING_SOFT = "mapping_soft"
-
-# obs — one K's spot -> winning-state index (S,, int, values 0..k-1) —
-# i.e. argmax(OBSM_MAPPING_SOFT, axis=1). A plain per-spot label, so it lives
-# in obs rather than obsm. Written by analysis.analysis.run_analysis alongside
-# OBSM_MAPPING_SOFT; same overwrite-per-K lifetime.
-OBS_MAPPING_HARD = "mapping_hard"

@@ -18,15 +18,15 @@ def analyse_spot_to_state_one_hotness(
     plots_dir: Path,
     data_dir: Path,
 ):
-    """Compute one-hotness metrics for the spot->state mapping P and write its
-    artifacts (per-row CSV, summary JSON, distribution + threshold plots).
+    """One-hotness metrics for the spot->state mapping P.
 
-    Reads P from ``adata_st.obsm[OBSM_MAPPING_SOFT]``"""
+    Requires: adata_st.obsm[OBSM_MAPPING_SOFT].
+    Writes onehot_per_row_mapping.csv and onehot_summary_mapping.json under
+    data_dir, plus the distribution and threshold plots under plots_dir.
+    """
 
-    # Compute one-hotness metrics for spot to state mapping
     m = onehot_metrics(adata_st.obsm[OBSM_MAPPING_SOFT])
 
-    # Save to file
     pd.DataFrame(
         {
             "id": adata_st.obs_names,
@@ -42,7 +42,6 @@ def analyse_spot_to_state_one_hotness(
             indent=2,
         )
 
-    # Generate plots
     plot_onehot_distribution(
         m, plots_dir / "onehot_distribution_mapping.png", row_label="spot"
     )
