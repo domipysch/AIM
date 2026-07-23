@@ -10,23 +10,29 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scanpy as sc
+import squidpy as sq
 from anndata import AnnData
 
 from adata_schema import (
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_ALL_GENES,
     OBS_LEIDEN_SHARED_GENES,
+    OBS_MAPPING_STATE_CAT,
     OBSM_UMAP,
     OBSM_UMAP_SHARED_GENES,
+    UNS_NHOOD_ENRICHMENT,
     UNS_SHARED_GENES,
+    OBS_MAPPING_HARD,
 )
 from analysis.utils import to_dense
 
 logger = logging.getLogger(__name__)
 
 
-def _build_state_palette(unique_states: list[int]) -> dict[int, tuple]:
+def _build_state_palette(adata_sc: AnnData) -> dict[int, tuple]:
     """Return a tab20 colour palette keyed by integer state id."""
+    cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
+    unique_states = sorted(np.unique(cell_states).tolist())
     cmap_base = plt.get_cmap("tab20")
     return {s: cmap_base(i % 20) for i, s in enumerate(unique_states)}
 
@@ -384,8 +390,7 @@ def plot_state_fractions(
 
 def plot_spatial_cell_states(
     adata_st: AnnData,
-    spot_states: np.ndarray,
-    output_path: Path,
+    output_dir: Path,
     dot_size: float = 8.0,
     state_palette: dict[int, tuple] | None = None,
 ) -> None:
@@ -396,6 +401,8 @@ def plot_spatial_cell_states(
     if "spatial" not in adata_st.obsm:
         logger.warning("adata_st has no obsm['spatial'] — skipping spatial plot.")
         return
+
+    spot_states = adata_st.obs[OBS_MAPPING_HARD].to_numpy()
 
     coords = np.asarray(adata_st.obsm["spatial"])
     unique_states = sorted(np.unique(spot_states).tolist())
@@ -443,6 +450,30 @@ def plot_spatial_cell_states(
     )
 
     fig.tight_layout()
+    fig.savefig(output_dir / "spatial_cell_states.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Spatial cell-state plot → %s", output_dir / "spatial_cell_states.png")
+
+
+def plot_nhood_enrichment(adata_st: AnnData, output_plots_dir: Path) -> None:
+    """Heatmap of the spatial neighbourhood-enrichment z-scores between mapped
+    states (squidpy sq.pl.nhood_enrichment).
+
+    Reads adata_st.uns[UNS_NHOOD_ENRICHMENT] populated by analyse_spatial_organization;
+    a no-op if the enrichment was not computed (fewer than 2 mapped states).
+    Writes nhood_enrichment.png under output_plots_dir.
+    """
+    if UNS_NHOOD_ENRICHMENT not in adata_st.uns:
+        return
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sq.pl.nhood_enrichment(
+        adata_st,
+        cluster_key=OBS_MAPPING_STATE_CAT,
+        title="Spatial neighbourhood enrichment (z-score)",
+        ax=ax,
+    )
+    output_path = output_plots_dir / "nhood_enrichment.png"
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    logger.info("Spatial cell-state plot → %s", output_path)
+    logger.info("Neighbourhood enrichment heatmap → %s", output_path)

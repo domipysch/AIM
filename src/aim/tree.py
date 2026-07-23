@@ -5,9 +5,11 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 
 
-def build_agglomeration_tree(centroids: np.ndarray) -> np.ndarray:
+def build_agglomeration_tree(
+    centroids: np.ndarray, method: str, metric: str
+) -> np.ndarray:
     """Average-linkage linkage matrix over centroids using cosine distance."""
-    return linkage(centroids, method="average", metric="cosine")
+    return linkage(centroids, method=method, metric=metric)
 
 
 def labels_at_k(linkage_z: np.ndarray, k: int, n_leiden: int) -> np.ndarray:

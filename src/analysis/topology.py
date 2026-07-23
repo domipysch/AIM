@@ -7,57 +7,55 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import anndata as ad
 import squidpy as sq
 
-from adata_schema import OBS_MAPPING_HARD, OBSM_SPATIAL
-from metrics.topology import local_spatial_purity, permutation_test, morans_i_mean
-from plots import plot_spatial_cell_states
+from adata_schema import (
+    OBS_MAPPING_HARD,
+    OBS_MAPPING_STATE_CAT,
+    OBSM_SPATIAL,
+    OBSP_SPATIAL_CONNECTIVITIES,
+    UNS_NHOOD_ENRICHMENT,
+)
+from metrics.topology import local_spatial_purity, permutation_test
 
 logger = logging.getLogger(__name__)
 
 
-K_SPATIAL = 6  # neighbours for local spatial purity / Moran's I KNN graph
+K_SPATIAL = 6  # neighbours for the squidpy spatial KNN graph
 N_PERM_SPATIAL = 200  # permutations for the spatial-organisation null
 
 
-def knn_indices(coords: np.ndarray, k: int) -> np.ndarray:
-    """(n_spots, k) indices of each spot's k nearest spatial neighbours (self excluded)."""
-    from sklearn.neighbors import NearestNeighbors
+def spatial_connectivities(adata_st: ad.AnnData, k: int):
+    """Squidpy spatial KNN connectivity matrix, built once and cached on adata_st.
 
-    k = min(k, len(coords) - 1)
-    knn = NearestNeighbors(n_neighbors=k + 1, algorithm="ball_tree").fit(coords)
-    _, idx = knn.kneighbors(coords)
-    return idx[:, 1:]
-
-
-def spatial_neighbors_graph(coords: np.ndarray, k: int) -> ad.AnnData:
-    """Minimal AnnData holding a squidpy-built spatial KNN graph, reused across permutations."""
-
-    graph = ad.AnnData(
-        X=np.zeros((len(coords), 1), dtype=np.float32),
-        obsm={"spatial": np.asarray(coords, dtype=np.float32)},
-    )
-    sq.gr.spatial_neighbors_knn(graph, n_neighs=min(k, len(coords) - 1))
-    return graph
+    Depends only on the spot coordinates, which are constant across the K-sweep,
+    so it is computed on the first K and reused for every later K. Serves both the
+    local spatial purity metric and the neighbourhood enrichment. Returns the
+    (n_spots x n_spots) sparse adjacency in adata_st.obsp[OBSP_SPATIAL_CONNECTIVITIES].
+    """
+    if OBSP_SPATIAL_CONNECTIVITIES not in adata_st.obsp:
+        sq.gr.spatial_neighbors(adata_st, coord_type="generic", n_neighs=k)
+    return adata_st.obsp[OBSP_SPATIAL_CONNECTIVITIES]
 
 
 def analyse_spatial_organization(
     adata_st: ad.AnnData,
     output_data_dir: Path,
-    output_plots_dir: Path,
-    state_palette: dict[int, tuple] | None = None,
     k: int = K_SPATIAL,
     n_perm: int = N_PERM_SPATIAL,
     seed: int = 0,
 ):
-    """Local spatial purity + mean Moran's I of the mapped spot states, each with
-    a permutation-null z-score. Individually undefined metrics come back as NaN;
-    asserts len(coords) == len(spot_states) and len(spot_states) > k.
+    """Local spatial purity + neighbourhood enrichment of the mapped spot states.
+
+    Local spatial purity comes with a permutation-null z-score; neighbourhood
+    enrichment (squidpy) summarises how much each state preferentially borders
+    itself. Individually undefined metrics come back as NaN/None; asserts
+    len(coords) == len(spot_states) and len(spot_states) > k.
 
     Requires: adata_st.obs[OBS_MAPPING_HARD], adata_st.obsm[OBSM_SPATIAL].
-    Writes topology_metrics.json under output_data_dir and
-    spatial_cell_states.png under output_plots_dir.
+    Writes topology_metrics.json under output_data_dir.
     """
     spot_states = adata_st.obs[OBS_MAPPING_HARD].to_numpy()
     coords = np.asarray(adata_st.obsm[OBSM_SPATIAL])
@@ -68,7 +66,7 @@ def analyse_spatial_organization(
         "k": int(k),
         "n_perm": int(n_perm),
         "local_purity": None,
-        "morans_i": None,
+        "nhood_enrichment": None,
     }
     assert len(coords) == len(
         spot_states
@@ -77,24 +75,55 @@ def analyse_spatial_organization(
 
     rng = np.random.default_rng(seed)
 
-    nbr_idx = knn_indices(coords, k)
-    obs_lsp = local_spatial_purity(spot_states, nbr_idx)
+    conn = spatial_connectivities(adata_st, k)
+    obs_lsp = local_spatial_purity(spot_states, conn)
     result["local_purity"] = permutation_test(
-        obs_lsp, spot_states, lambda l: local_spatial_purity(l, nbr_idx), n_perm, rng
+        obs_lsp, spot_states, lambda l: local_spatial_purity(l, conn), n_perm, rng
     )
 
-    graph = spatial_neighbors_graph(coords, k)
-    obs_mi = morans_i_mean(spot_states, graph)
-    result["morans_i"] = permutation_test(
-        obs_mi, spot_states, lambda l: morans_i_mean(l, graph), n_perm, rng
+    result["nhood_enrichment"] = _nhood_enrichment(
+        adata_st, spot_states, k, n_perm, seed
     )
 
     with open(output_data_dir / "topology_metrics.json", "w") as f:
         json.dump(result, f, indent=4)
 
-    plot_spatial_cell_states(
+
+def _nhood_enrichment(
+    adata_st: ad.AnnData,
+    spot_states: np.ndarray,
+    k: int,
+    n_perm: int,
+    seed: int,
+) -> dict | None:
+    """Compute squidpy neighbourhood enrichment of the mapped states and return a
+    small summary. Needs >= 2 mapped states (returns None otherwise).
+
+    Populates adata_st.obs[OBS_MAPPING_STATE_CAT] (categorical states), the squidpy
+    spatial graph, and adata_st.uns[UNS_NHOOD_ENRICHMENT] (consumed by
+    plot_nhood_enrichment). The summary reports the mean diagonal (self) and
+    off-diagonal (cross) z-scores: a high self value means states preferentially
+    border their own kind.
+    """
+    if len(np.unique(spot_states)) < 2:
+        return None
+
+    adata_st.obs[OBS_MAPPING_STATE_CAT] = pd.Categorical(spot_states.astype(str))
+    spatial_connectivities(adata_st, k)  # ensure the (cached) spatial graph exists
+    sq.gr.nhood_enrichment(
         adata_st,
-        spot_states,
-        output_path=output_plots_dir / "spatial_cell_states.png",
-        state_palette=state_palette,
+        cluster_key=OBS_MAPPING_STATE_CAT,
+        n_perms=n_perm,
+        seed=seed,
+        show_progress_bar=False,
     )
+
+    zscore = np.asarray(adata_st.uns[UNS_NHOOD_ENRICHMENT]["zscore"], dtype=float)
+    off = ~np.eye(zscore.shape[0], dtype=bool)
+    return {
+        "n_states": int(zscore.shape[0]),
+        "mean_self_zscore": float(np.nanmean(np.diag(zscore))),
+        "mean_cross_zscore": (
+            float(np.nanmean(zscore[off])) if off.any() else float("nan")
+        ),
+    }

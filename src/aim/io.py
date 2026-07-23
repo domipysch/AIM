@@ -27,7 +27,10 @@ def write_leiden_overclustering_all_genes(
     anndata.AnnData(
         X=np.zeros((len(cell_cluster_names), 0), dtype=np.float32),
         obs=pd.DataFrame(
-            {"leiden_cluster": cell_cluster_names}, index=adata_sc.obs_names
+            # Store as categorical up front so anndata does not auto-convert it
+            # on write (which logs "storing 'leiden_cluster' as categorical").
+            {"leiden_cluster": pd.Categorical(cell_cluster_names)},
+            index=adata_sc.obs_names,
         ),
     ).write_h5ad(output_folder / "leiden_overclustering.h5ad")
 
@@ -46,19 +49,8 @@ def write_run_outputs(
         run_dir / "leiden_to_state.csv", index=False
     )
 
-    state_names = [f"state_{i}" for i in range(k)]
-
     anndata.AnnData(
         X=spot_to_state.numpy(),
         obs=pd.DataFrame(index=adata_st.obs_names),
-        var=pd.DataFrame(index=state_names),
-    ).write_h5ad(run_dir / "spot_to_state_mapping.h5ad")
-
-    # The CSV copy is thresholded and rounded for readability.
-    p_csv = spot_to_state.numpy()
-    p_csv[p_csv < 0.001] = 0.0
-    pd.DataFrame(
-        p_csv.round(4),
-        index=adata_st.obs_names.tolist(),
-        columns=state_names,
-    ).to_csv(run_dir / "spot_to_state_mapping.csv")
+        var=pd.DataFrame(index=[f"state_{i}" for i in range(k)]),
+    ).write_h5ad(run_dir / "spot_to_state_mapping_soft.h5ad")

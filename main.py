@@ -26,8 +26,26 @@ import argparse
 import csv
 import logging
 import sys
+import warnings
 from dataclasses import asdict
 from pathlib import Path
+
+# conda ships both Intel (libiomp) and LLVM (libomp) OpenMP runtimes; threadpoolctl
+# warns about the duplicate load on every sklearn/scanpy call. It is harmless for
+# our numeric usage, so silence that one RuntimeWarning before the heavy imports.
+warnings.filterwarnings(
+    "ignore",
+    message=r"(?s).*Found Intel OpenMP.*LLVM OpenMP",
+    category=RuntimeWarning,
+)
+
+# docrep (pulled in by squidpy) emits a SyntaxWarning for every unrecognised
+# docstring key (e.g. 'n_jobs', 'show_progress_bar'); harmless doc-parsing noise.
+warnings.filterwarnings(
+    "ignore",
+    message=r".*is not a valid key!",
+    category=SyntaxWarning,
+)
 
 import pandas as pd
 import yaml
@@ -52,6 +70,7 @@ def run_one_pair(
         st_path=st_path,
         output_folder=output_folder,
         mapper=config.build_mapper(),
+        generate_pdf=True,
         leiden_resolution=config.leiden_resolution,
         k_min=config.k_min,
         k_max=config.k_max,

@@ -231,14 +231,14 @@ def _load_metrics_json(data_dir: Path, filename: str) -> dict | None:
         return None
 
 
-def _spatial_organization_section(data_dir: Path) -> str:
+def _spatial_organization_section(data_dir: Path, plots_dir: Path, base: Path) -> str:
     """Spatial-organisation-of-mapped-spots section from topology_metrics.json.
     Returns '' if the file or the spatial metrics are absent."""
     sp = _load_metrics_json(data_dir, "topology_metrics.json")
     if sp is None:
         return ""
-    lsp, mi = sp.get("local_purity"), sp.get("morans_i")
-    if not (lsp or mi):
+    lsp = sp.get("local_purity")
+    if not lsp:
         return ""
 
     def _spatial_row(name: str, d: dict | None) -> list[str]:
@@ -255,16 +255,31 @@ def _spatial_organization_section(data_dir: Path) -> str:
     header: tuple[str, ...] = ("Metric", "Observed", "Null mean", "z-score", "p-value")
     rows = [
         _spatial_row("Local spatial purity", lsp),
-        _spatial_row("Moran's I (mean over states)", mi),
     ]
+
+    # Neighbourhood enrichment (squidpy): mean diagonal z-score summarises how much
+    # each mapped state preferentially borders its own kind.
+    nh = sp.get("nhood_enrichment")
+    nhood_block = ""
+    if nh:
+        nhood_png = plots_dir / "nhood_enrichment.png"
+        img = f"\n{_img(nhood_png, base, width='70%')}\n" if nhood_png.exists() else ""
+        nhood_block = (
+            f"\nNeighbourhood enrichment (squidpy, {nh.get('n_states', '?')} states): "
+            f"mean self z-score = {_num(nh.get('mean_self_zscore'), 2)}, "
+            f"mean cross z-score = {_num(nh.get('mean_cross_zscore'), 2)}. "
+            "A high self value = states preferentially border their own kind.\n" + img
+        )
+
     return (
         "\n= Spatial Organisation of Mapped Spots\n\n"
         "Mapped spot states (argmax of P) scored against a label-shuffle null "
         f"(spots: {sp.get('n_spots', '?')}, k neighbours: {sp.get('k', '?')}, "
-        f"permutations: {sp.get('n_perm', '?')}). Higher purity / Moran's I / "
+        f"permutations: {sp.get('n_perm', '?')}). Higher purity / "
         "z-score = mapped states are more spatially coherent than chance.\n\n"
         + _multi_col_table(header, rows)
         + "\n"
+        + nhood_block
     )
 
 
@@ -401,7 +416,7 @@ def generate_analysis_report(
         parts.append(sec)
 
     # Spatial organisation of the mapped spots
-    parts.append(_spatial_organization_section(data_dir))
+    parts.append(_spatial_organization_section(data_dir, plots_dir, base))
 
     # Reconstruction cosine similarity
     cossim_csv = data_dir / "cossim_summary.csv"

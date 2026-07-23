@@ -7,13 +7,19 @@ import json
 from pathlib import Path
 
 import numpy as np
+import scanpy as sc
 from anndata import AnnData
 
 from adata_schema import (
+    LAYER_LOGNORM,
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_SHARED_GENES,
+    OBS_MAPPING_HARD,
     OBSP_CONNECTIVITIES_SHARED_GENES,
+    OBSP_ST_EXPR_CONNECTIVITIES,
     UNS_LEIDEN_RESOLUTION_ALL_GENES,
+    UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM,
+    UNS_MODULARITY_SHARED_LEIDEN,
 )
 from metrics.biology import (
     _pairwise_cosine_stats,
@@ -30,7 +36,7 @@ SIG_ALPHA = 0.05  # p-value threshold for "significant"
 
 
 def analyse_substate_coherence(
-    centroids: np.ndarray,
+    adata_sc: AnnData,
     labels_k: np.ndarray,
     output_data_dir: Path,
     n_perm: int = N_PERM_COHERENCE,
@@ -47,6 +53,7 @@ def analyse_substate_coherence(
     Writes biology_metrics.json under output_data_dir.
     """
 
+    centroids = adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM]
     groups = leiden_state_groups(labels_k)
     # Only subclusters with a non-zero centroid: a zero centroid has undefined
     # cosine similarity.
@@ -120,19 +127,54 @@ def analyse_substate_coherence(
         )
 
 
+def _spatial_expression_modularity(adata_st: AnnData) -> float:
+    """Modularity of the hard spot->state labels on the ST expression KNN graph.
+
+    Measures transcriptional coherence of the mapping within the spatial data:
+    builds an expression KNN graph over all genes of ``adata_st`` (PCA of the
+    lognorm layer + scanpy neighbors, matching the reference all-genes graph)
+    and computes the modularity of ``adata_st.obs[OBS_MAPPING_HARD]`` on it.
+
+    Requires: adata_st.layers[LAYER_LOGNORM], adata_st.obs[OBS_MAPPING_HARD].
+    """
+    # The expression KNN graph is K-independent (only the hard labels change per
+    # K), so build it once and cache the connectivities on adata_st.
+    if OBSP_ST_EXPR_CONNECTIVITIES not in adata_st.obsp:
+        # Throwaway AnnData so the PCA / neighbor graph never touches adata_st.
+        st_expr = AnnData(
+            X=adata_st.layers[LAYER_LOGNORM].copy(),
+            obs=adata_st.obs[[]].copy(),
+            var=adata_st.var[[]].copy(),
+        )
+        n = min(30, st_expr.n_obs - 1, st_expr.n_vars - 1)
+        sc.pp.pca(st_expr, n_comps=n)
+        sc.pp.neighbors(st_expr)
+        adata_st.obsp[OBSP_ST_EXPR_CONNECTIVITIES] = st_expr.obsp["connectivities"]
+
+    graph = AnnData(
+        X=np.zeros((adata_st.n_obs, 1), dtype=np.float32),
+        obsp={"connectivities": adata_st.obsp[OBSP_ST_EXPR_CONNECTIVITIES]},
+    )
+    hard_labels = adata_st.obs[OBS_MAPPING_HARD].astype(int).to_numpy()
+    return compute_modularity(graph, hard_labels)
+
+
 def analyse_modularities(
     adata_sc: AnnData,
+    adata_st: AnnData,
     output_data_dir: Path,
-    output_plots_dir: Path,
-    state_palette: dict[int, tuple] | None = None,
 ):
     """Modularity of the computed-state partition on the reference KNN graphs.
 
+    Also measures transcriptional coherence of the mapping within the spatial
+    data via ``_spatial_expression_modularity`` (hard spot->state labels on the
+    ST expression KNN graph over all genes).
+
     Requires: adata_sc.obs[OBS_COMPUTED_STATE], adata_sc.obs[OBS_LEIDEN_SHARED_GENES],
         adata_sc.obsp[OBSP_CONNECTIVITIES_SHARED_GENES],
-        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES].
-    Writes modularity_metrics.json under output_data_dir, and
-    umap_computed_state.png / umap_grid.png under output_plots_dir.
+        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES],
+        adata_st.layers[LAYER_LOGNORM], adata_st.obs[OBS_MAPPING_HARD].
+    Writes modularity_metrics.json under output_data_dir.
     """
 
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
@@ -141,16 +183,22 @@ def analyse_modularities(
     modularity_shared = compute_modularity(
         adata_sc, cell_states, obsp_key=OBSP_CONNECTIVITIES_SHARED_GENES
     )
-    modularity_shared_leiden = compute_modularity(
-        adata_sc,
-        adata_sc.obs[OBS_LEIDEN_SHARED_GENES].astype(int).to_numpy(),
-        obsp_key=OBSP_CONNECTIVITIES_SHARED_GENES,
-    )
+    # The shared-gene Leiden partition does not depend on K, so compute its
+    # modularity once and cache it on adata_sc.
+    if UNS_MODULARITY_SHARED_LEIDEN not in adata_sc.uns:
+        adata_sc.uns[UNS_MODULARITY_SHARED_LEIDEN] = compute_modularity(
+            adata_sc,
+            adata_sc.obs[OBS_LEIDEN_SHARED_GENES].astype(int).to_numpy(),
+            obsp_key=OBSP_CONNECTIVITIES_SHARED_GENES,
+        )
+    modularity_shared_leiden = adata_sc.uns[UNS_MODULARITY_SHARED_LEIDEN]
+    modularity_st_expression = _spatial_expression_modularity(adata_st)
     logger.info(
-        "Modularity: all=%.4f shared=%.4f | shared Leiden ref=%.4f",
+        "Modularity: all=%.4f shared=%.4f | shared Leiden ref=%.4f | ST expression=%.4f",
         modularity_all,
         modularity_shared,
         modularity_shared_leiden,
+        modularity_st_expression,
     )
 
     with open(output_data_dir / "modularity_metrics.json", "w") as f:
@@ -159,10 +207,31 @@ def analyse_modularities(
                 "modularity_all": float(modularity_all),
                 "modularity_shared": float(modularity_shared),
                 "modularity_shared_leiden": float(modularity_shared_leiden),
+                "modularity_st_expression": float(modularity_st_expression),
             },
             f,
             indent=4,
         )
+
+
+def plot_modularities(
+    adata_sc: AnnData,
+    output_plots_dir: Path,
+    output_data_dir: Path,
+    state_palette: dict[int, tuple] | None = None,
+):
+    """Render the computed-state UMAP figures from the metrics on disk.
+
+    Reads modularity_metrics.json (written by analyse_modularities) from
+    output_data_dir, and writes umap_computed_state.png / umap_grid.png under
+    output_plots_dir.
+
+    Requires: adata_sc.obs[OBS_COMPUTED_STATE],
+        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES].
+    """
+
+    with open(output_data_dir / "modularity_metrics.json") as f:
+        modularity = json.load(f)
 
     plot_umap_comparison(
         adata_sc,
@@ -176,6 +245,6 @@ def analyse_modularities(
         output_path=output_plots_dir / "umap_grid.png",
         leiden_resolution=float(adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES]),
         state_palette=state_palette,
-        modularity_all=modularity_all,
-        modularity_shared=modularity_shared,
+        modularity_all=modularity["modularity_all"],
+        modularity_shared=modularity["modularity_shared"],
     )

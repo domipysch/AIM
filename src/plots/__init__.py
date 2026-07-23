@@ -5,6 +5,7 @@ from .onehot import plot_dominance_thresholds, plot_onehot_distribution
 from .states import (
     _build_state_palette,
     plot_leiden_merge_map,
+    plot_nhood_enrichment,
     plot_spatial_cell_states,
     plot_state_fractions,
     plot_state_profiles,
@@ -23,4 +24,5 @@ __all__ = [
     "plot_state_profiles",
     "plot_state_fractions",
     "plot_spatial_cell_states",
+    "plot_nhood_enrichment",
 ]

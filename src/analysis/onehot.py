@@ -15,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 def analyse_spot_to_state_one_hotness(
     adata_st: AnnData,
-    plots_dir: Path,
     data_dir: Path,
 ):
     """One-hotness metrics for the spot->state mapping P.
@@ -41,6 +40,31 @@ def analyse_spot_to_state_one_hotness(
             f,
             indent=2,
         )
+
+
+def plot_spot_to_state_one_hotness(
+    plots_dir: Path,
+    data_dir: Path,
+):
+    """Render the spot->state one-hotness figures from the metrics on disk.
+
+    Reads onehot_per_row_mapping.csv and onehot_summary_mapping.json (written by
+    analyse_spot_to_state_one_hotness) from data_dir, and writes the distribution
+    and threshold plots under plots_dir.
+    """
+
+    per_row = pd.read_csv(data_dir / "onehot_per_row_mapping.csv")
+    with open(data_dir / "onehot_summary_mapping.json") as f:
+        summary = json.load(f)
+
+    m = {
+        "max_prob": per_row["max_prob"].to_numpy(),
+        "gini_impurity": per_row["gini_impurity"].to_numpy(),
+        "entropy": per_row["entropy"].to_numpy(),
+        "n_rows": summary["n_rows"],
+        "n_cols": summary["n_cols"],
+        "summary": summary["summary"],
+    }
 
     plot_onehot_distribution(
         m, plots_dir / "onehot_distribution_mapping.png", row_label="spot"

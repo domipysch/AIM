@@ -3,12 +3,13 @@
 
 from dataclasses import dataclass
 
-from .mapping import GreedyMapper, LearnedMapper, SpotStateMapper
+from .mapping import GreedyMapper, LearnedMapper, SpotStateMapper, ReferenceMapper
 
 # Mapping strategies keyed by CLI name.
 _MAPPERS: dict[str, type[SpotStateMapper]] = {
     GreedyMapper.name: GreedyMapper,
     LearnedMapper.name: LearnedMapper,
+    ReferenceMapper.name: ReferenceMapper,
 }
 
 MAPPING_CHOICES = tuple(_MAPPERS)
@@ -21,6 +22,8 @@ class AIMConfig:
     mapping: str = "greedy"
     leiden_resolution: float = 3.0
     normalize_and_log: bool = False
+    # reference mode only
+    reference_method: str = "tangram"
     # learned-mode only
     epochs: int = 400
     lr: float = 0.02
@@ -43,5 +46,9 @@ class AIMConfig:
                 lr=self.lr,
                 lambda_spot_gini=self.lambda_spot_gini,
                 spot_gini_warmup_frac=self.spot_gini_warmup_frac,
+            )
+        if self.mapping == "reference":
+            return ReferenceMapper(
+                reference_method=self.reference_method,
             )
         return _MAPPERS[self.mapping]()
