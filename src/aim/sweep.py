@@ -129,9 +129,17 @@ def run(
         len(ks),
     )
 
+    # Each K's subcluster->state cut, computed once and reused below. Also handed
+    # to the mapper's one-time prepare() hook (the reference mapper materialises
+    # its per-K state-labelled inputs from it).
+    labels_by_k = {
+        k: labels_at_k(agglomerative_clustering, k, n_leiden_clusters) for k in ks
+    }
+    mapper.prepare(adata_sc, adata_st, labels_by_k)
+
     for k in ks:
 
-        labels_k = labels_at_k(agglomerative_clustering, k, n_leiden_clusters)
+        labels_k = labels_by_k[k]
         m_shared = assemble_state_profiles_shared_genes(labels_k, k, adata_sc)
 
         # Densify: adata_st.X is often sparse and torch.tensor can't consume it.

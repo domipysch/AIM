@@ -36,7 +36,7 @@ def spatial_connectivities(adata_st: ad.AnnData, k: int):
     (n_spots x n_spots) sparse adjacency in adata_st.obsp[OBSP_SPATIAL_CONNECTIVITIES].
     """
     if OBSP_SPATIAL_CONNECTIVITIES not in adata_st.obsp:
-        sq.gr.spatial_neighbors(adata_st, coord_type="generic", n_neighs=k)
+        sq.gr.spatial_neighbors_knn(adata_st, n_neighs=k)
     return adata_st.obsp[OBSP_SPATIAL_CONNECTIVITIES]
 
 

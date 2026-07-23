@@ -171,6 +171,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "default) or 'learned' (gradient-descent soft P). The learned-mode flags "
         "below are ignored when --mapping greedy.",
     )
+    parser.add_argument(
+        "--reference_method",
+        choices=["tangram", "tacco", "dot"],
+        default="tangram",
+        help="[reference] external aligner to delegate the spot-to-state step to "
+        "(only used when --mapping reference). Each runs out-of-process in its own "
+        "conda env (tangram_env / tacco_env / dot_env), once per K.",
+    )
     parser.add_argument("--leiden_resolution", type=float, default=3.0)
     parser.add_argument("--normalize_and_log", action="store_true", default=False)
     parser.add_argument("--k_min", type=int, default=None)
@@ -207,6 +215,7 @@ def _config_from_args(args: argparse.Namespace) -> AIMConfig:
         mapping=args.mapping,
         leiden_resolution=args.leiden_resolution,
         normalize_and_log=args.normalize_and_log,
+        reference_method=args.reference_method,
         epochs=args.epochs,
         lr=args.lr,
         lambda_spot_gini=args.lambda_spot_gini,

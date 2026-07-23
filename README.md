@@ -226,6 +226,12 @@ ST spot onto them. The spot→state mapping is **modular** (`--mapping`):
 - **`learned`** — a soft `P` trained by gradient descent, minimizing spot-wise +
   gene-wise cosine distance with a quadratic `spot_gini` sharpener (optional
   warmup). Adds `--epochs / --lr / --lambda_spot_gini / --spot_gini_warmup_frac`.
+- **`reference`** — delegates the spot→state step to an external aligner
+  (`--reference_method tangram|tacco|dot`). For each `K` the reference cells are
+  labelled by their AIM state and the aligner maps ST spots onto those states.
+  The aligners run **out-of-process** via `conda run` in their own env
+  (`tangram_env` / `tacco_env` / `dot_env`), so those envs must exist and `conda`
+  must be on `PATH`; one alignment runs **per K**, so a full sweep is slow.
 
 ```bash
 conda activate aim_env
@@ -233,14 +239,16 @@ python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
     --output_dir    <output/pair_0> \
-    [--mapping greedy|learned] \
+    [--mapping greedy|learned|reference] \
     [--leiden_resolution 3.0] \
     [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1] \
     [--logging verbose] \
     # learned-mode only:
     [--epochs 400] [--lr 0.02] \
-    [--lambda_spot_gini 1.0] [--spot_gini_warmup_frac 0.5]
+    [--lambda_spot_gini 1.0] [--spot_gini_warmup_frac 0.5] \
+    # reference-mode only:
+    [--reference_method tangram|tacco|dot]
 ```
 
 > `K` is not a single value — the run sweeps every `K` in `[k_min, k_max]` (default
