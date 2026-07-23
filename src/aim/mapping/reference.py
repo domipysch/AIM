@@ -200,7 +200,4 @@ class ReferenceMapper(SpotStateMapper):
         return torch.tensor(frame.to_numpy(dtype=np.float32), dtype=torch.float32)
 
     def config(self) -> dict:
-        return {
-            "mapping": self.name,
-            "reference_method": self.reference_method,
-        }
+        return {"mapping": self.reference_method}
