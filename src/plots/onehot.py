@@ -9,7 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .onehot import DOMINANCE_THRESHOLDS
+from metrics.onehot import DOMINANCE_THRESHOLDS
 
 logger = logging.getLogger(__name__)
 

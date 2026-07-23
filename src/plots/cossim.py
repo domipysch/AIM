@@ -8,7 +8,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from .cossim import CossimResult
+from metrics.cossim import CossimResult
 
 logger = logging.getLogger(__name__)
 

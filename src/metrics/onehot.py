@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 # Dominance thresholds reported by the "fraction of rows >= threshold" plot —
-# see metrics.onehot_plots.plot_dominance_thresholds.
+# see plots.onehot.plot_dominance_thresholds.
 DOMINANCE_THRESHOLDS = (
     0.99,
     0.95,
@@ -81,3 +81,12 @@ def onehot_metrics(mapping: np.ndarray) -> dict:
             "frac_max_prob_above_0.99": float(np.mean(max_prob > 0.99)),
         },
     }
+
+
+def hard_mapping(mapping: np.ndarray) -> np.ndarray:
+    """Row-wise argmax one-hot version of a soft assignment matrix (n_rows x n_cols)."""
+    mapping = np.asarray(mapping)
+    idx = mapping.argmax(axis=1)
+    one_hot = np.zeros_like(mapping, dtype=np.float32)
+    one_hot[np.arange(mapping.shape[0]), idx] = 1.0
+    return one_hot

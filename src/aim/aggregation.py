@@ -8,7 +8,7 @@ Reference aggregation for the AIM method (clustering half, part 1).
                                profiles M (per K)
 
 `assemble_state_profiles` is the torch mirror of
-``analysis.mapping_metrics.assemble_state_centroids`` (which does the same on
+``metrics.reconstruction.assemble_state_centroids`` (which does the same on
 numpy for the disk-based analysis).
 """
 

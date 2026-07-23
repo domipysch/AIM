@@ -30,6 +30,8 @@ import anndata
 import numpy as np
 from anndata import AnnData
 
+from analysis.utils import to_dense
+
 logger = logging.getLogger(__name__)
 
 # JSON filenames written by CossimResult.save(); consumed by the analysis reports.
@@ -96,11 +98,6 @@ def _write_json(path: Path, values: Dict[str, float]) -> None:
 # --------------------------------------------------------------------------- #
 # Computation
 # --------------------------------------------------------------------------- #
-def _dense(adata: AnnData) -> np.ndarray:
-    X = adata.X
-    return X.toarray() if hasattr(X, "toarray") else np.asarray(X)
-
-
 def _align(ground_truth: AnnData, prediction: AnnData) -> Tuple[AnnData, AnnData]:
     """Restrict both (spots x genes) AnnData to shared genes and spots, aligned.
 
@@ -135,8 +132,8 @@ def compute_cossim(ground_truth: AnnData, prediction: AnnData) -> CossimResult:
     """
     gt, pred = _align(ground_truth, prediction.transpose())
 
-    GT = _dense(gt)  # spots x genes
-    PR = _dense(pred)  # spots x genes
+    GT = to_dense(gt)  # spots x genes
+    PR = to_dense(pred)  # spots x genes
 
     genes = list(gt.var_names)
     spots = list(gt.obs_names)

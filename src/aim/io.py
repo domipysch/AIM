@@ -2,7 +2,7 @@
 Per-K disk outputs for the agglomerative sweep.
 
 Each K folder is written in the exact layout the post-mapping analysis expects,
-so ``analysis.run_from_output`` consumes it unchanged:
+so ``analysis.analysis.run_analysis`` consumes it unchanged:
 
     spot_to_state_mapping.h5ad — P, obs = spots, var = computed states (S x K)
     spot_to_state_mapping.csv  — P as a CSV (thresholded, rounded) for eyeballing

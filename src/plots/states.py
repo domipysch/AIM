@@ -13,12 +13,14 @@ import scanpy as sc
 from anndata import AnnData
 
 from adata_schema import (
+    OBS_COMPUTED_STATE,
     OBS_LEIDEN_ALL_GENES,
     OBS_LEIDEN_SHARED_GENES,
     OBSM_UMAP,
     OBSM_UMAP_SHARED_GENES,
+    UNS_SHARED_GENES,
 )
-from .utils import _dense_X
+from analysis.utils import to_dense
 
 logger = logging.getLogger(__name__)
 
@@ -29,37 +31,22 @@ def _build_state_palette(unique_states: list[int]) -> dict[int, tuple]:
     return {s: cmap_base(i % 20) for i, s in enumerate(unique_states)}
 
 
-def plot_umap(
-    adata: AnnData,
-    labels: np.ndarray,
-    title: str,
-    output_path: Path,
-    color_key: str = "_cluster",
-) -> None:
-    """Add labels to adata.obs[color_key] and save a UMAP figure."""
-    adata.obs[color_key] = pd.Categorical(labels.astype(str))
-    fig = sc.pl.umap(adata, color=color_key, title=title, show=False, return_fig=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("UMAP → %s", output_path)
-
-
 def _assign_computed_state_colors(
     adata: AnnData,
     state_palette: dict[int, tuple] | None,
 ) -> None:
     """Pre-assign adata.uns['computed_state_colors'] so scanpy uses our palette."""
-    if state_palette is None or "computed_state" not in adata.obs:
+    if state_palette is None or OBS_COMPUTED_STATE not in adata.obs:
         return
-    cats = adata.obs["computed_state"].cat.categories.tolist()
-    adata.uns["computed_state_colors"] = [
+    cats = adata.obs[OBS_COMPUTED_STATE].cat.categories.tolist()
+    adata.uns[f"{OBS_COMPUTED_STATE}_colors"] = [
         mcolors.to_hex(state_palette.get(int(c), (0.7, 0.7, 0.7, 1.0))) for c in cats
     ]
 
 
 def _computed_state_count_line(adata: AnnData) -> str:
     """Annotation like '9 states' for the computed_state panel."""
-    n_total = int(adata.obs["computed_state"].nunique())
+    n_total = int(adata.obs[OBS_COMPUTED_STATE].nunique())
     return f"{n_total} states"
 
 
@@ -85,7 +72,7 @@ def plot_umap_comparison(
     if n == 1:
         axes = [axes]
     for ax, (color_key, title) in zip(axes, panels):
-        if color_key == "computed_state":
+        if color_key == OBS_COMPUTED_STATE:
             count_line = _computed_state_count_line(adata)
         else:
             count_line = f"{int(adata.obs[color_key].nunique())} clusters"
@@ -165,7 +152,7 @@ def plot_umap_grid(
             1,
             0,
             OBSM_UMAP,
-            "computed_state",
+            OBS_COMPUTED_STATE,
             "Computed AIM states — all genes",
             _mod(modularity_all),
         ),
@@ -173,7 +160,7 @@ def plot_umap_grid(
             1,
             1,
             OBSM_UMAP_SHARED_GENES,
-            "computed_state",
+            OBS_COMPUTED_STATE,
             "Computed AIM states — shared genes (ST overlap)",
             _mod(modularity_shared),
         ),
@@ -182,7 +169,7 @@ def plot_umap_grid(
     fig, axes = plt.subplots(2, 2, figsize=(16, 12))
     for r, c, basis, key, title, suffix in panels:
         ax = axes[r][c]
-        if key == "computed_state":
+        if key == OBS_COMPUTED_STATE:
             count_line = _computed_state_count_line(adata)
         else:
             count_line = f"{int(adata.obs[key].nunique())} clusters"
@@ -282,7 +269,6 @@ def plot_leiden_merge_map(
 def plot_state_profiles(
     adata_sc: AnnData,
     cell_states: np.ndarray,
-    shared_genes: list[str],
     output_path: Path,
     cell_fractions: dict[int, float] | None = None,
     spot_fractions: dict[int, float] | None = None,
@@ -296,12 +282,13 @@ def plot_state_profiles(
     first).  Expression is z-scored per gene across states so that the colour
     encodes how distinctively each state expresses every gene.
     """
+    shared_genes = list(adata_sc.uns[UNS_SHARED_GENES])
     available = [g for g in shared_genes if g in adata_sc.var_names]
     if len(available) < 2:
         logger.warning("Too few shared genes for state-profile plot — skipping.")
         return
 
-    X = _dense_X(adata_sc[:, available])
+    X = to_dense(adata_sc[:, available])
     gene_names = np.array(available)
     gene_order = np.argsort(X.var(axis=0))[::-1]
 

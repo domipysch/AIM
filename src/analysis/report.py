@@ -136,27 +136,15 @@ def _two_col_table(
     return "\n".join(lines)
 
 
-def _onehot_summary_table(
-    json_path: Path, row_label: str, n_active_states: int | None = None
-) -> str:
-    """Two-column Typst table from a metrics.onehot summary JSON (as written
-    by analysis.run_from_output for mapping_prob / leiden_merge_prob).
-
-    n_active_states, if given, adds an "AIM states" row: the number of
-    columns of this matrix's hard (argmax) version that are actually in use
-    (>=1 one) — n_mapped_states for mapping_prob (states used by spots),
-    n_active_states for leiden_merge_prob (states aggregated out of Leiden
-    clusters). Same "columns with a surviving 1" definition, applied to
-    whichever matrix this table describes.
-    """
+def _onehot_summary_table(json_path: Path, row_label: str) -> str:
+    """Two-column Typst table from the metrics.onehot summary JSON written by
+    analysis.onehot.save_onehot for the spot->state mapping P."""
     with open(json_path, encoding="utf-8") as fh:
         d = json.load(fh)
     s = d["summary"]
     unit = row_label.capitalize()
-    rows = [(f"{unit}s", str(d["n_rows"]))]
-    if n_active_states is not None:
-        rows.append(("AIM states", str(n_active_states)))
-    rows += [
+    rows = [
+        (f"{unit}s", str(d["n_rows"])),
         ("Max-prob mean", f"{s['max_prob']['mean']:.4f}"),
         ("Max-prob median", f"{s['max_prob']['median']:.4f}"),
         ("Gini impurity mean", f"{s['gini_impurity']['mean']:.4f}"),
@@ -172,20 +160,16 @@ def _onehot_section(
     plots_dir: Path,
     data_dir: Path,
     base: Path,
-    key: str,
     title: str,
     row_label: str,
-    n_active_states: int | None = None,
 ) -> str:
-    """
-    One-hotness section for one matrix (key = 'mapping_prob' or
-    'leiden_merge_prob' — matches the filenames written by
-    analysis.run_from_output). Empty string if the plot is missing.
-    """
-    dist_png = plots_dir / f"onehot_distribution_mapping.png"
+    """One-hotness section for the spot->state mapping P (the onehot_*_mapping.*
+    files written by analysis.onehot.save_onehot). Empty string if the
+    distribution plot is missing."""
+    dist_png = plots_dir / "onehot_distribution_mapping.png"
     if not dist_png.exists():
         return ""
-    thresh_png = plots_dir / f"onehot_thresholds_mapping.png"
+    thresh_png = plots_dir / "onehot_thresholds_mapping.png"
     if thresh_png.exists():
         img_block = (
             "#grid(columns: 2, column-gutter: 8pt, align: horizon,\n"
@@ -196,9 +180,9 @@ def _onehot_section(
     else:
         img_block = f"{_img(dist_png, base)}\n"
     sec = f"\n= {title}\n\n{img_block}"
-    summary_json = data_dir / f"onehot_summary_mapping.json"
+    summary_json = data_dir / "onehot_summary_mapping.json"
     table_block = (
-        "\n" + _onehot_summary_table(summary_json, row_label, n_active_states) + "\n"
+        "\n" + _onehot_summary_table(summary_json, row_label) + "\n"
         if summary_json.exists()
         else ""
     )
@@ -272,8 +256,8 @@ _PAGE_SETUP = """\
 
 
 def _load_biology(data_dir: Path) -> dict | None:
-    """Load biology_metrics.json (written by analysis.run_from_output), or None
-    if it is absent or unreadable."""
+    """Load biology_metrics.json (written by analysis.analysis.run_analysis), or
+    None if it is absent or unreadable."""
     json_path = data_dir / "biology_metrics.json"
     if not json_path.exists():
         return None
@@ -488,13 +472,12 @@ semantics). "raw" compares raw counts; "norm" compares total-count-normalized
     if sec:
         parts.append(sec)
 
-    # 8. Mapping sharpness — spot -> AIM state mapping (mapping_prob.h5ad)
+    # 8. Mapping sharpness — spot -> AIM state mapping
     parts.append(
         _onehot_section(
             plots_dir,
             data_dir,
             base,
-            "mapping_prob",
             'Mapping Sharpness — Spot → AIM State Mapping ("How One-Hot")',
             "spot",
         )

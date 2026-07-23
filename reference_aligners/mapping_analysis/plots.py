@@ -12,8 +12,11 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
-from metrics.onehot_plots import plot_dominance_thresholds, plot_onehot_distribution
-from metrics.cossim_plots import plot_cossim_boxplots
+from plots import (
+    plot_cossim_boxplots,
+    plot_dominance_thresholds,
+    plot_onehot_distribution,
+)
 from analysis.utils import run_pca_neighbors_umap
 
 logger = logging.getLogger(__name__)
