@@ -1,29 +1,29 @@
 # Spatial Transcriptomics Alignment
 
-Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots by learning a joint cell-to-cell-state and spot-to-state assignment.
+Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`greedy` nearest-centroid or `learned` soft assignment).
 
 ## Repository Structure
 
 ```
-main.py                          # Novel method — single-pair entry point
-environment.yml                  # Conda env for the novel method
+main.py                          # AIM CLI + single-pair / batch drivers
+environment.yml                  # Conda env for AIM
 src/
-├── model.py                     # AIMModel (learnable A, B matrices)
-├── loss.py                      # Multi-term loss (rec_spot, rec_gene, entropy, …)
-├── dataset.py                   # h5ad → tensor preparation
-├── spatial_graph.py             # KNN / Delaunay / Radius graph builders
-├── sc_embedding.py              # PCA / scVI cell embeddings
-├── utils.py                     # Shared helpers
-├── analysis/                     # Post-mapping analysis (clustering, reports, plots)
-└── metrics/                     # Evaluation metrics O2, O4
+├── adata_schema.py              # Canonical obs/var/uns/obsm/obsp/layers key names for the sc/st AnnData objects
+├── aim/                         # AIM method — agglomerative K-sweep
+│   ├── aim_config.py            #   AIMConfig + mapper registry / build_mapper factory
+│   ├── clustering.py            #   clustering half: Leiden over-clustering (all genes + shared genes)
+│   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
+│   ├── tree.py                  #   clustering half: agglomeration tree + cut at K -> labels_k
+│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (greedy / learned)
+│   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
+│   └── sweep.py                 #   the K-sweep orchestration
+├── analysis/                    # Post-mapping analysis: orchestration + loaders + typst PDF report
+├── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
+└── plots/                       # Matplotlib figure generation shared across the analyses
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 batch_processing/
 ├── run_pre_check_all_pairs.py   # Batch pre-alignment checks
-├── run_reference_aligner_all_pairs.py  # Batch baseline aligners
-└── grid_search/
-    ├── grid_search.py           # Grid search — single pair
-    ├── grid_search_config.yaml  # Grid search hyperparameter config
-    └── run_grid_search_all_pairs.py    # Grid search — all pairs, multi-GPU
+└── run_reference_aligner_all_pairs.py  # Batch baseline aligners
 data_preparation/                # Dataset utilities (validate, convert, split, …)
 pre_check/                       # Pre-alignment compatibility diagnostics
 sample_dataset/                  # Minimal dataset mirroring the database layout (scRNA/, ST/, pairs.csv)
@@ -215,33 +215,48 @@ python -m batch_processing.run_reference_aligner_all_pairs \
 
 ### 5. Run the novel method (single pair)
 
+The method Leiden over-clusters the reference into `L` subclusters, builds one
+agglomeration tree (average-linkage on shared-gene cosine distance), and for
+every `K` from `L` down to `1` cuts the tree into `K` cell states and maps each
+ST spot onto them. The spot→state mapping is **modular** (`--mapping`):
+
+- **`greedy`** (default) — zero-parameter nearest-centroid: each spot is assigned
+  to the state whose profile is most cosine-similar to it. No training; the
+  assignment is one-hot, so soft and deterministic reconstructions coincide.
+- **`learned`** — a soft `P` trained by gradient descent, minimizing spot-wise +
+  gene-wise cosine distance with a quadratic `spot_gini` sharpener (optional
+  warmup). Adds `--epochs / --lr / --lambda_spot_gini / --spot_gini_warmup_frac`.
+
 ```bash
 conda activate aim_env
 python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
-    --output_folder <output/pair_0> \
-    [--lr 0.008] \
-    [--epochs 1000] \
+    --output_dir    <output/pair_0> \
+    [--mapping greedy|learned] \
     [--leiden_resolution 3.0] \
-    [--lambda_rec_spot 0.5] \
-    [--lambda_rec_gene 0.5] \
-    [--lambda_state_entropy 0.1] \
-    [--lambda_spot_entropy 0.08] \
-    [--lambda_merge_entropy 1.0] \
-    [--lambda_merge_coherence 0.5] \
-    [--gpu_limit_gb 48] \
-    [--logging verbose]
+    [--normalize_and_log] \
+    [--k_min 1] [--k_max <L>] [--k_step 1] \
+    [--logging verbose] \
+    # learned-mode only:
+    [--epochs 400] [--lr 0.02] \
+    [--lambda_spot_gini 1.0] [--spot_gini_warmup_frac 0.5]
 ```
 
-> `K` (number of cell states) is derived automatically from the Leiden over-clustering: `K = number of Leiden clusters` at the given `--leiden_resolution`. There is no `--K` argument.
+> `K` is not a single value — the run sweeps every `K` in `[k_min, k_max]` (default
+> `1 … L`, where `L` = number of Leiden clusters at `--leiden_resolution`). There
+> is no `--K` argument.
 
-Writes to `output_folder/`:
-- `gep_prob.h5ad` / `gep_det.h5ad` — probabilistic and deterministic predicted GEPs (G × S)
-- `mapping_prob.h5ad` / `mapping_det.h5ad` — spot-to-state assignment matrices (L × S), soft and one-hot
-- `loss/` — per-epoch loss curves and final values CSV
-- `intermediate/` — G merge matrix, B cell→state assignment, M state profiles, and state usage JSON/CSV (only when `--store_intermediate` is set). The spot→state matrix C is not duplicated here — it is `mapping_prob.h5ad` transposed.
-- `analysis/` — post-mapping analysis: UMAP comparison, spatial cell-state plot, state profiles, substate metrics, contingency heatmap in a PDF report (generated with `typst`)
+Writes to `output_dir/`:
+- `config.yaml` — the run configuration (mapping choice, hyperparameters, `K` range).
+- `leiden_overclustering.h5ad` — per-cell Leiden over-cluster label; written once and
+  reused by every `K`.
+- `k_<kkk>/` — one folder per `K`, in the layout the post-mapping analysis consumes:
+  - `spot_to_state_mapping.h5ad` — the spot→state matrix `P` (spots × `K`).
+  - `spot_to_state_mapping.csv` — `P` as CSV (tiny values zeroed, rounded) for eyeballing.
+  - `leiden_to_state.csv` — the subcluster→state tree cut (`labels_k`).
+  - `analysis/` — the post-mapping analysis for that `K`: `report.pdf` (typst) plus
+    `plots/` and `data/`. The post-mapping analysis runs for every `K`.
 
 **Example with sample dataset:**
 ```bash
@@ -249,7 +264,7 @@ conda activate aim_env
 python main.py \
     --scdata        sample_dataset/scRNA/sample_sc.h5ad \
     --stdata        sample_dataset/ST/sample_st.h5ad \
-    --output_folder sample_output/sample
+    --output_dir    sample_output/sample
 ```
 
 > Please mind that the results from mapping this sample datasets are not to be interpreted.
@@ -258,97 +273,30 @@ python main.py \
 
 ---
 
-### 6. Run grid search (single pair)
+### 6. Run the novel method (all pairs)
 
-Hyperparameters are defined in a YAML config. List values create grid axes;
-all combinations are executed sequentially.
-
-```bash
-conda activate aim_env
-python -m batch_processing.grid_search.grid_search \
-    -c              batch_processing/grid_search/grid_search_config.yaml \
-    --scdata        <path/to/sc.h5ad> \
-    --stdata        <path/to/st.h5ad> \
-    --output_folder <output/grid_search/pair_0> \
-    [--gpu_limit_gb 48] \
-    [--logging verbose]
-```
-
-Results are written to numbered subdirectories (`0/`, `1/`, …) with a `summary.csv` at the top level.
-
-**Example with sample dataset:**
-```bash
-conda activate aim_env
-python -m batch_processing.grid_search.grid_search \
-    -c              batch_processing/grid_search/grid_search_config.yaml \
-    --scdata        sample_dataset/scRNA/sample_sc.h5ad \
-    --stdata        sample_dataset/ST/sample_st.h5ad \
-    --output_folder sample_output/grid_search/sample
-```
-
-**Config format** (`grid_search_config.yaml`):
-
-```yaml
-training:
-  lr: 0.008
-  epochs: 1000
-  reference_leiden_clustering_resolution: [1.0, 3.0, 5.0]   # list → grid axis; controls K implicitly
-loss_weights:
-  - lambda_rec_spot: 0.5
-    lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.01
-    lambda_spot_entropy: 0.08
-    lambda_merge_entropy: 1.0
-    lambda_merge_coherence: 0.5
-  - lambda_rec_spot: 0.5
-    lambda_rec_gene: 0.5
-    lambda_state_entropy: 0.3
-    lambda_spot_entropy: 0.08
-    lambda_merge_entropy: 1.0
-    lambda_merge_coherence: 0.5
-```
-
-> `K` is **not** a config key. It is always derived dynamically from `reference_leiden_clustering_resolution`. Use a list of resolutions as the grid axis to search over the number of cell states.
-
----
-
-### 7. Run grid search (all pairs, multi-GPU)
-
-Runs the full grid search for every pair in `pairs.csv`. One pair runs per GPU in parallel.
+`main.py` also runs every row in `pairs.csv` sequentially — pass the batch flags
+instead of the single-pair ones. Each pair is written to
+`<output_dir>/<PairID>_<scName>__<stName>/` in the same layout as above.
 
 ```bash
 conda activate aim_env
-python -m batch_processing.grid_search.run_grid_search_all_pairs \
-    -c              batch_processing/grid_search/grid_search_config.yaml \
-    --pairs_csv     <path/to/pairs.csv> \
-    --sc_dir        <path/to/scRNA> \
-    --st_dir        <path/to/ST> \
-    --output_dir    <output/grid_search> \
-    --gpus 0 1 2 3 \
-    [--gpu_limit_gb 48]
-```
-
-Output layout:
-
-```
-<output_dir>/
-  configs/          # per-pair YAML configs derived from the template
-  pair_0/
-    summary.csv
-    analysis_overview.csv
-    0/, 1/, …       # one subdirectory per grid-search run
-  pair_1/
-    …
+python main.py \
+    --pairs_csv  <path/to/pairs.csv> \
+    --sc_dir     <path/to/scRNA> \
+    --st_dir     <path/to/ST> \
+    --output_dir <output/agglomerative> \
+    [--mapping greedy|learned] \
+    [--leiden_resolution 3.0] [--normalize_and_log] \
+    [--k_min 1] [--k_max <L>] [--k_step 1]
 ```
 
 **Example with sample dataset:**
 ```bash
 conda activate aim_env
-python -m batch_processing.grid_search.run_grid_search_all_pairs \
-    -c           batch_processing/grid_search/grid_search_config.yaml \
+python main.py \
     --pairs_csv  sample_dataset/pairs.csv \
     --sc_dir     sample_dataset/scRNA \
     --st_dir     sample_dataset/ST \
-    --output_dir output/grid_search/sample \
-    --gpus 0
+    --output_dir sample_output/agglomerative/sample
 ```

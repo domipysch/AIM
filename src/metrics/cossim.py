@@ -1,22 +1,6 @@
-"""Cosine-similarity metrics for spatial-mapping predictions.
-
-Compares a predicted gene-expression profile (GEP) against the observed
-spatial-transcriptomics (ST) counts, **per gene** and **per spot**. The same
-API works for every aligner in this project (AIM, Tangram, DOT, TACCO): each
-produces a genes x spots GEP as an ``AnnData``, which is all this module needs.
-
-No normalization or log-transformation is applied — cosine similarity is
-computed on the values exactly as given. Genes/spots shared between the
-prediction and the ST reference are matched by name; everything else is
-ignored.
-
-Typical use::
-
-    from metrics.cossim import compute_and_save_cossim
-
-    result = compute_and_save_cossim(st_path, predicted_gep, metrics_folder)
-    print(result.median_gene, result.median_spot)
-"""
+"""Per-gene and per-spot cosine similarity between a predicted gene-expression
+profile and observed ST counts. Values are compared as given, without
+normalization; genes and spots are matched by name."""
 
 from __future__ import annotations
 
@@ -30,38 +14,19 @@ import anndata
 import numpy as np
 from anndata import AnnData
 
+from analysis.utils import to_dense
+
 logger = logging.getLogger(__name__)
 
-# JSON filenames written by CossimResult.save(); consumed by the analysis reports.
 GENE_JSON = "cossim-per-gene{suffix}.json"
 SPOT_JSON = "cossim-per-spot{suffix}.json"
 
 
-# --------------------------------------------------------------------------- #
-# Core numerics
-# --------------------------------------------------------------------------- #
-def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    """Cosine similarity between two 1-D vectors, clipped to [-1, 1].
-
-    Returns ``0.0`` when either vector has zero norm (direction undefined),
-    matching scikit-learn's convention.
-    """
-    a = np.asarray(a, dtype=float).ravel()
-    b = np.asarray(b, dtype=float).ravel()
-    if a.shape != b.shape:
-        raise ValueError(f"Shape mismatch: {a.shape} vs {b.shape}")
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom == 0.0:
-        return 0.0
-    return float(np.clip(np.dot(a, b) / denom, -1.0, 1.0))
-
-
 def _cosine_along_axis(A: np.ndarray, B: np.ndarray, axis: int) -> np.ndarray:
-    """Row/column-wise cosine similarity of two equally-shaped 2-D arrays.
+    """Cosine similarity of two equally-shaped 2-D arrays reduced along ``axis``.
 
-    ``axis=0`` reduces over rows -> one value per column (per gene);
-    ``axis=1`` reduces over columns -> one value per row (per spot).
-    Zero-norm vectors yield ``0.0``.
+    ``axis=0`` gives one value per column, ``axis=1`` one per row. Zero-norm
+    vectors yield ``0.0``.
     """
     dot = np.sum(A * B, axis=axis)
     denom = np.linalg.norm(A, axis=axis) * np.linalg.norm(B, axis=axis)
@@ -70,9 +35,6 @@ def _cosine_along_axis(A: np.ndarray, B: np.ndarray, axis: int) -> np.ndarray:
     return np.clip(cs, -1.0, 1.0)
 
 
-# --------------------------------------------------------------------------- #
-# Result container
-# --------------------------------------------------------------------------- #
 @dataclass
 class CossimResult:
     """Per-gene and per-spot cosine similarities for one prediction."""
@@ -89,9 +51,8 @@ class CossimResult:
         return _median(self.per_spot)
 
     def save(self, output_folder: Union[str, Path], suffix: str = "") -> None:
-        """Write ``cossim-per-gene{suffix}.json`` and ``cossim-per-spot{suffix}.json``.
-
-        Each file has the shape ``{"median": float | None, "values": {name: float}}``.
+        """Write ``cossim-per-gene{suffix}.json`` and ``cossim-per-spot{suffix}.json``
+        into ``output_folder``, each shaped ``{"median": float|None, "values": {name: float}}``.
         """
         output_folder = Path(output_folder)
         output_folder.mkdir(parents=True, exist_ok=True)
@@ -109,19 +70,10 @@ def _write_json(path: Path, values: Dict[str, float]) -> None:
         json.dump(payload, f, indent=4)
 
 
-# --------------------------------------------------------------------------- #
-# Computation
-# --------------------------------------------------------------------------- #
-def _dense(adata: AnnData) -> np.ndarray:
-    X = adata.X
-    return X.toarray() if hasattr(X, "toarray") else np.asarray(X)
-
-
 def _align(ground_truth: AnnData, prediction: AnnData) -> Tuple[AnnData, AnnData]:
-    """Restrict both (spots x genes) AnnData to shared genes and spots, aligned.
-
-    Genes and spots are matched by name and returned in the ground-truth order.
-    """
+    """Restrict both (spots x genes) AnnData to their shared genes and spots,
+    matched by name and returned in ground-truth order. Raises if genes or spots
+    do not overlap."""
     pred_genes = set(prediction.var_names)
     shared_genes = [g for g in ground_truth.var_names if g in pred_genes]
     if not shared_genes:
@@ -139,20 +91,13 @@ def _align(ground_truth: AnnData, prediction: AnnData) -> Tuple[AnnData, AnnData
 
 
 def compute_cossim(ground_truth: AnnData, prediction: AnnData) -> CossimResult:
-    """Compute per-gene and per-spot cosine similarity.
-
-    Args:
-        ground_truth: Observed ST counts as ``AnnData`` (spots x genes).
-        prediction: Predicted GEP as ``AnnData`` (genes x spots), as written by
-            every aligner in this project. It is transposed internally.
-
-    Returns:
-        A :class:`CossimResult` with values keyed by gene / spot name.
-    """
+    """Per-gene and per-spot cosine similarity between observed ST counts
+    (``ground_truth``, spots x genes) and a predicted GEP (``prediction``,
+    genes x spots; transposed internally)."""
     gt, pred = _align(ground_truth, prediction.transpose())
 
-    GT = _dense(gt)  # spots x genes
-    PR = _dense(pred)  # spots x genes
+    GT = to_dense(gt)
+    PR = to_dense(pred)
 
     genes = list(gt.var_names)
     spots = list(gt.obs_names)
@@ -168,18 +113,11 @@ def compute_and_save_cossim(
     output_folder: Union[str, Path, None] = None,
     suffix: str = "",
 ) -> CossimResult:
-    """Compute cosine similarities and (optionally) save them to JSON.
+    """Compute cosine similarities and, if ``output_folder`` is given, write the
+    per-gene and per-spot JSON files there (``suffix`` is inserted before ``.json``).
 
-    Args:
-        st: Observed ST data as an ``AnnData`` or a path to an ``.h5ad`` file
-            (spots x genes, raw counts).
-        prediction: Predicted GEP as ``AnnData`` (genes x spots).
-        output_folder: If given, write the per-gene and per-spot JSON files here.
-        suffix: Appended to the JSON filenames before ``.json`` (e.g. ``"-det"``).
-
-    Returns:
-        The computed :class:`CossimResult`.
-    """
+    ``st`` is an ``AnnData`` or an ``.h5ad`` path (spots x genes); ``prediction``
+    is the predicted GEP (genes x spots)."""
     ground_truth = st if isinstance(st, AnnData) else anndata.read_h5ad(Path(st))
     result = compute_cossim(ground_truth, prediction)
 

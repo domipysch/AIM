@@ -18,4 +18,4 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
-        args: [src, data_preparation, reference_aligners]
+        args: [src, data_preparation, reference_aligners, pre_check]

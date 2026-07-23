@@ -1,5 +1,4 @@
-"""Boxplot of cosine-similarity reconstruction results — shared between
-reference_aligners/mapping_analysis and analysis."""
+"""Boxplot of cosine-similarity reconstruction results."""
 
 from __future__ import annotations
 
@@ -8,7 +7,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from .cossim import CossimResult
+from metrics.cossim import CossimResult
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +15,9 @@ logger = logging.getLogger(__name__)
 def plot_cossim_boxplots(
     cossim_results: dict[str, CossimResult], output_path: Path
 ) -> None:
-    """
-    Two-panel boxplot (gene-wise, spot-wise) of the full cosine-similarity
-    distributions for the soft/hard x raw/norm reconstruction combos.
+    """Two-panel (gene-wise, spot-wise) boxplot of cosine-similarity distributions per soft/hard x raw/norm combo; saves to output_path.
 
-    Boxes are ordered raw-soft, raw-hard, norm-soft, norm-hard within each
-    panel, so the soft/hard pair for each (raw|norm) group sits side by side.
-
-    Args:
-        cossim_results: label ("soft-raw"/"hard-raw"/"soft-norm"/"hard-norm")
-                        -> CossimResult, as returned by compute_and_save_cossim.
+    cossim_results maps each label ("soft-raw"/"hard-raw"/"soft-norm"/"hard-norm") to a CossimResult.
     """
     order = ["soft-raw", "hard-raw", "soft-norm", "hard-norm"]
     labels = [lbl for lbl in order if lbl in cossim_results]

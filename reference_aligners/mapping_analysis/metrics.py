@@ -14,7 +14,11 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
+from metrics.reconstruction import predict_expression
+
 logger = logging.getLogger(__name__)
+
+__all__ = ["celltype_centroids", "top_marker_genes", "predict_expression"]
 
 
 def celltype_centroids(
@@ -72,8 +76,3 @@ def top_marker_genes(adata_norm: AnnData, cell_type_key: str, n_top: int) -> lis
             seen.add(g)
             unique_markers.append(g)
     return unique_markers
-
-
-def predict_expression(mapping: np.ndarray, centroids: pd.DataFrame) -> np.ndarray:
-    """Predicted spot expression Z' = mapping @ centroids (S x G)."""
-    return np.asarray(mapping) @ centroids.to_numpy()

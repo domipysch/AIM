@@ -1,4 +1,4 @@
-"""Visualisation functions: UMAP comparisons, crosstab heatmap, state profiles."""
+"""Cell-state figures: UMAP comparisons, Leiden merge map, state profiles/fractions, and spatial plots."""
 
 from __future__ import annotations
 
@@ -12,48 +12,41 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
-from utils import _dense_X
+from adata_schema import (
+    OBS_COMPUTED_STATE,
+    OBS_LEIDEN_ALL_GENES,
+    OBS_LEIDEN_SHARED_GENES,
+    OBSM_UMAP,
+    OBSM_UMAP_SHARED_GENES,
+    UNS_SHARED_GENES,
+)
+from analysis.utils import to_dense
 
 logger = logging.getLogger(__name__)
 
 
 def _build_state_palette(unique_states: list[int]) -> dict[int, tuple]:
-    """Consistent tab20 colour palette keyed by integer state id."""
+    """Return a tab20 colour palette keyed by integer state id."""
     cmap_base = plt.get_cmap("tab20")
     return {s: cmap_base(i % 20) for i, s in enumerate(unique_states)}
-
-
-def plot_umap(
-    adata: AnnData,
-    labels: np.ndarray,
-    title: str,
-    output_path: Path,
-    color_key: str = "_cluster",
-) -> None:
-    """Add labels to adata.obs[color_key] and save a UMAP figure."""
-    adata.obs[color_key] = pd.Categorical(labels.astype(str))
-    fig = sc.pl.umap(adata, color=color_key, title=title, show=False, return_fig=True)
-    fig.savefig(output_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("UMAP → %s", output_path)
 
 
 def _assign_computed_state_colors(
     adata: AnnData,
     state_palette: dict[int, tuple] | None,
 ) -> None:
-    """Pre-assign adata.uns['computed_state_colors'] so scanpy uses our palette."""
-    if state_palette is None or "computed_state" not in adata.obs:
+    """Write the palette into adata.uns[f"{OBS_COMPUTED_STATE}_colors"] so scanpy uses it."""
+    if state_palette is None or OBS_COMPUTED_STATE not in adata.obs:
         return
-    cats = adata.obs["computed_state"].cat.categories.tolist()
-    adata.uns["computed_state_colors"] = [
+    cats = adata.obs[OBS_COMPUTED_STATE].cat.categories.tolist()
+    adata.uns[f"{OBS_COMPUTED_STATE}_colors"] = [
         mcolors.to_hex(state_palette.get(int(c), (0.7, 0.7, 0.7, 1.0))) for c in cats
     ]
 
 
 def _computed_state_count_line(adata: AnnData) -> str:
-    """Annotation like '9 states' for the computed_state panel."""
-    n_total = int(adata.obs["computed_state"].nunique())
+    """Annotation string like '9 states' for the computed-state panel."""
+    n_total = int(adata.obs[OBS_COMPUTED_STATE].nunique())
     return f"{n_total} states"
 
 
@@ -63,14 +56,10 @@ def plot_umap_comparison(
     output_path: Path,
     state_palette: dict[int, tuple] | None = None,
 ) -> None:
-    """
-    Save multiple UMAP panels side by side for visual comparison.
+    """Save UMAP panels side by side, one per (color_key, title) in panels; saves to output_path.
 
-    Parameters
-    ----------
-    panels           : list of (color_key, title) pairs — all keys must exist in adata.obs.
-    state_palette    : if provided, pre-assigned to adata.uns for the computed_state panel
-                       so colours stay consistent with the spatial plot.
+    Every color_key must exist in adata.obs. If state_palette is given, it colours the
+    OBS_COMPUTED_STATE panel.
     """
     _assign_computed_state_colors(adata, state_palette)
 
@@ -79,7 +68,7 @@ def plot_umap_comparison(
     if n == 1:
         axes = [axes]
     for ax, (color_key, title) in zip(axes, panels):
-        if color_key == "computed_state":
+        if color_key == OBS_COMPUTED_STATE:
             count_line = _computed_state_count_line(adata)
         else:
             count_line = f"{int(adata.obs[color_key].nunique())} clusters"
@@ -101,50 +90,75 @@ def plot_umap_comparison(
     logger.info("UMAP comparison → %s", output_path)
 
 
-def plot_computed_state_umaps(
-    adata_all: AnnData,
-    adata_shared: AnnData,
+def plot_umap_grid(
+    adata: AnnData,
     output_path: Path,
+    leiden_resolution: float,
     state_palette: dict[int, tuple] | None = None,
     modularity_all: float | None = None,
     modularity_shared: float | None = None,
 ) -> None:
-    """
-    Side-by-side computed-state UMAPs: all-gene embedding vs shared-gene embedding.
+    """2x2 UMAP grid: top row Leiden overclusters (all-gene and shared-gene) on the all-gene UMAP, bottom row computed AIM states on the all-gene and shared-gene UMAPs; saves to output_path.
 
-    Both panels colour the same computed cell states (same palette).  The
-    shared-gene embedding uses only the genes also present in the ST data —
-    the space the method actually operates in — so a state that is well
-    separated on all genes but collapses on shared genes becomes visible.
-
-    `modularity_all` / `modularity_shared`, if given, are annotated in the matching
-    panel's caption — each is the modularity of the computed partition on the *same*
-    KNN graph that its UMAP is projected from, so the number and picture correspond.
-
-    Both AnnData objects must share the same cell order and carry
-    obs['computed_state'] and obsm['X_umap'].
+    adata must carry obs[OBS_LEIDEN_ALL_GENES], obs[OBS_LEIDEN_SHARED_GENES],
+    obs[OBS_COMPUTED_STATE], obsm[OBSM_UMAP], and obsm[OBSM_UMAP_SHARED_GENES].
+    modularity_all / modularity_shared, when given, annotate the matching computed-state panel.
     """
 
     def _mod(m: float | None) -> str:
-        return f"modularity = {m:.3f}" if m is not None and m == m else ""
+        return f"\nmodularity = {m:.3f}" if m is not None and m == m else ""
 
+    _assign_computed_state_colors(adata, state_palette)
+
+    res = leiden_resolution
+    # (row, col, basis, obs key, base title, caption suffix)
     panels = [
-        (adata_all, "Computed states — all genes", _mod(modularity_all)),
         (
-            adata_shared,
-            "Computed states — shared genes (ST overlap)",
+            0,
+            0,
+            OBSM_UMAP,
+            OBS_LEIDEN_ALL_GENES,
+            f"Leiden overclusters — all genes (resolution={res})",
+            "",
+        ),
+        (
+            0,
+            1,
+            OBSM_UMAP,
+            OBS_LEIDEN_SHARED_GENES,
+            f"Leiden shared-gene clusters — all-gene UMAP (resolution={res})",
+            "",
+        ),
+        (
+            1,
+            0,
+            OBSM_UMAP,
+            OBS_COMPUTED_STATE,
+            "Computed AIM states — all genes",
+            _mod(modularity_all),
+        ),
+        (
+            1,
+            1,
+            OBSM_UMAP_SHARED_GENES,
+            OBS_COMPUTED_STATE,
+            "Computed AIM states — shared genes (ST overlap)",
             _mod(modularity_shared),
         ),
     ]
-    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    for ax, (adata, title, mod_line) in zip(axes, panels):
-        _assign_computed_state_colors(adata, state_palette)
-        count_line = _computed_state_count_line(adata)
-        caption = f"{title}\n{count_line}" + (f"\n{mod_line}" if mod_line else "")
-        sc.pl.umap(
+
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    for r, c, basis, key, title, suffix in panels:
+        ax = axes[r][c]
+        if key == OBS_COMPUTED_STATE:
+            count_line = _computed_state_count_line(adata)
+        else:
+            count_line = f"{int(adata.obs[key].nunique())} clusters"
+        sc.pl.embedding(
             adata,
-            color="computed_state",
-            title=caption,
+            basis=basis,
+            color=key,
+            title=f"{title}\n{count_line}{suffix}",
             ax=ax,
             show=False,
             save=False,
@@ -156,32 +170,92 @@ def plot_computed_state_umaps(
     fig.tight_layout()
     fig.savefig(output_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
-    logger.info("Computed-state UMAPs (all vs shared) → %s", output_path)
+    logger.info("UMAP grid → %s", output_path)
+
+
+def plot_leiden_merge_map(
+    leiden_labels: np.ndarray,
+    cell_states: np.ndarray,
+    output_path: Path,
+    state_palette: dict[int, tuple] | None = None,
+) -> None:
+    """One horizontal bar per computed state, segmented by the Leiden clusters merged into it (segment width proportional to cell count, labelled with the Leiden id); saves to output_path."""
+    leiden_labels = np.asarray(leiden_labels)
+    cell_states = np.asarray(cell_states)
+
+    states = sorted(np.unique(cell_states).tolist())
+    # cell_states is constant within a Leiden cluster, so each cluster maps to one state.
+    leiden_of_state: dict[int, list[tuple[int, int]]] = {s: [] for s in states}
+    for lc in np.unique(leiden_labels):
+        mask = leiden_labels == lc
+        s = int(cell_states[mask][0])
+        leiden_of_state[s].append((int(lc), int(mask.sum())))
+    for s in states:
+        leiden_of_state[s].sort(key=lambda t: t[1], reverse=True)
+
+    n_states = len(states)
+    fig, ax = plt.subplots(figsize=(11, max(3, n_states * 0.5 + 1.5)))
+    for row, s in enumerate(states):
+        color = (
+            state_palette.get(s, (0.6, 0.6, 0.6, 1.0))
+            if state_palette is not None
+            else (0.6, 0.6, 0.6, 1.0)
+        )
+        x = 0.0
+        for lc, size in leiden_of_state[s]:
+            ax.barh(row, size, left=x, color=color, edgecolor="white", linewidth=1.5)
+            ax.text(
+                x + size / 2,
+                row,
+                f"L{lc}",
+                va="center",
+                ha="center",
+                fontsize=7,
+                color="black",
+            )
+            x += size
+
+    ax.set_yticks(range(n_states))
+    ax.set_yticklabels(
+        [
+            f"State {s}  ({len(leiden_of_state[s])} "
+            f"cluster{'s' if len(leiden_of_state[s]) != 1 else ''})"
+            for s in states
+        ],
+        fontsize=9,
+    )
+    ax.set_xlabel(
+        "cells   (bar = one AIM state; segments = merged Leiden clusters, "
+        "width proportional to cluster size)",
+        fontsize=10,
+    )
+    ax.set_title("Leiden overclusters merged per computed AIM state", fontsize=12)
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Leiden merge map → %s", output_path)
 
 
 def plot_state_profiles(
     adata_sc: AnnData,
     cell_states: np.ndarray,
-    shared_genes: list[str],
     output_path: Path,
     cell_fractions: dict[int, float] | None = None,
     spot_fractions: dict[int, float] | None = None,
     state_palette: dict[int, tuple] | None = None,
 ) -> None:
-    """
-    Cluster-mean expression heatmap for each computed cell state, with optional
-    cell-fraction and spot-fraction bar charts on the right.
+    """Heatmap of per-state mean expression (genes from UNS_SHARED_GENES, sorted by variance, z-scored per gene across states), with optional cell/spot-fraction bar charts; saves to output_path.
 
-    Genes are restricted to shared_genes and sorted by SC variance (highest
-    first).  Expression is z-scored per gene across states so that the colour
-    encodes how distinctively each state expresses every gene.
+    adata_sc must carry uns[UNS_SHARED_GENES].
     """
+    shared_genes = list(adata_sc.uns[UNS_SHARED_GENES])
     available = [g for g in shared_genes if g in adata_sc.var_names]
     if len(available) < 2:
         logger.warning("Too few shared genes for state-profile plot — skipping.")
         return
 
-    X = _dense_X(adata_sc[:, available])
+    X = to_dense(adata_sc[:, available])
     gene_names = np.array(available)
     gene_order = np.argsort(X.var(axis=0))[::-1]
 
@@ -266,13 +340,7 @@ def plot_state_fractions(
     output_path: Path,
     state_palette: dict[int, tuple] | None = None,
 ) -> None:
-    """
-    Standalone export of the cell-fraction and spot-fraction bar charts.
-
-    Produces the same bar plots that appear on the right side of
-    cell_state_profiles.png, but as a self-contained image with proper
-    y-axis state labels.
-    """
+    """Standalone cell-fraction and spot-fraction bar charts per state; saves to output_path."""
     panels = [
         (cell_fractions, "Cell fraction", "steelblue"),
         (spot_fractions, "Spot fraction", "darkorange"),
@@ -321,11 +389,9 @@ def plot_spatial_cell_states(
     dot_size: float = 8.0,
     state_palette: dict[int, tuple] | None = None,
 ) -> None:
-    """
-    Scatter plot of ST spots in physical space, coloured by computed cell-state.
+    """Scatter of ST spots in physical space coloured by spot_states; saves to output_path.
 
-    Coordinates are read from adata_st.obsm["spatial"]. state_palette syncs
-    colours with the UMAP.
+    Coordinates are read from adata_st.obsm["spatial"]; the plot is skipped if absent.
     """
     if "spatial" not in adata_st.obsm:
         logger.warning("adata_st has no obsm['spatial'] — skipping spatial plot.")
@@ -335,7 +401,6 @@ def plot_spatial_cell_states(
     unique_states = sorted(np.unique(spot_states).tolist())
     n_states = len(unique_states)
 
-    # Use provided palette or fall back to tab20
     if state_palette is not None:
         state_to_color = {
             s: state_palette[s] for s in unique_states if s in state_palette
@@ -367,7 +432,6 @@ def plot_spatial_cell_states(
         fontsize=12,
     )
 
-    # Legend: compact when many states
     legend_fs = max(5, min(9, 120 // n_states))
     ncol = max(1, n_states // 20)
     ax.legend(
