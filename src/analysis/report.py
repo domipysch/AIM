@@ -293,9 +293,9 @@ def _confidence_section(plots_dir: Path, data_dir: Path, base: Path) -> str:
     sec = (
         "\n= Mapping Confidence — Per-Spot Assignment\n\n"
         "Per-spot confidence in [0, 1] that the mapper reported for its "
-        "assignment (higher = more decisive): the top-state margin for "
-        "nearest / nearest_scaled, and the vote one-hotness (Shannon entropy) "
-        "for majority_vote.\n\n"
+        "assignment (higher = more decisive): the top-state distance margin for "
+        "the nearest* mappers, and the vote one-hotness (Shannon entropy) for the "
+        "majority_vote* mappers.\n\n"
         f"{_img(png, base, width='75%')}\n"
     )
     summary = _load_metrics_json(data_dir, "confidence_summary.json")

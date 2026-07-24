@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from .mapping import (
     NearestMapper,
     NearestScaledMapper,
+    NearestEuclideanMapper,
+    NearestEuclideanScaledMapper,
     LearnedMapper,
     MajorityVoteMapper,
+    MajorityVoteEuclideanMapper,
     SpotStateMapper,
     ReferenceMapper,
 )
@@ -16,8 +19,11 @@ from .mapping import (
 _MAPPERS: dict[str, type[SpotStateMapper]] = {
     NearestMapper.name: NearestMapper,
     NearestScaledMapper.name: NearestScaledMapper,
+    NearestEuclideanMapper.name: NearestEuclideanMapper,
+    NearestEuclideanScaledMapper.name: NearestEuclideanScaledMapper,
     LearnedMapper.name: LearnedMapper,
     MajorityVoteMapper.name: MajorityVoteMapper,
+    MajorityVoteEuclideanMapper.name: MajorityVoteEuclideanMapper,
 }
 # External reference aligners, all served by ReferenceMapper and selected by name.
 _REFERENCE_METHODS = ("tangram", "tacco", "dot")
@@ -54,10 +60,18 @@ class AIMConfig:
             raise ValueError(
                 f"mapping must be one of {MAPPING_CHOICES}, got {self.mapping!r}"
             )
-        if self.mapping == "nearest_scaled":
-            return NearestScaledMapper(dispersion_shrinkage=self.dispersion_shrinkage)
-        if self.mapping == "majority_vote":
-            return MajorityVoteMapper(n_neighbors=self.n_neighbors)
+        if self.mapping in ("nearest_scaled", "nearest_euclidean_scaled"):
+            scaled_cls = {
+                "nearest_scaled": NearestScaledMapper,
+                "nearest_euclidean_scaled": NearestEuclideanScaledMapper,
+            }[self.mapping]
+            return scaled_cls(dispersion_shrinkage=self.dispersion_shrinkage)
+        if self.mapping in ("majority_vote", "majority_vote_euclidean"):
+            vote_cls = {
+                "majority_vote": MajorityVoteMapper,
+                "majority_vote_euclidean": MajorityVoteEuclideanMapper,
+            }[self.mapping]
+            return vote_cls(n_neighbors=self.n_neighbors)
         if self.mapping == "learned":
             return LearnedMapper(
                 epochs=self.epochs,

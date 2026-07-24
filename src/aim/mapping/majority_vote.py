@@ -28,31 +28,39 @@ class MajorityVoteMapper(SpotStateMapper):
         """Find each spot's top-N nearest reference cells once for the whole sweep.
 
         The neighbour search is K-independent (only the neighbours' state labels
-        change with K), so the S x n_cells cosine + top-N runs here and only the
-        cached (S, N) neighbour indices and per-cell Leiden labels are reused per K.
+        change with K), so the S x n_cells ranking + top-N runs here (via
+        ``_find_neighbors``) and only the cached (S, N) neighbour indices and
+        per-cell Leiden labels are reused per K.
         """
         super().prepare(adata_sc, adata_st, labels_by_k)
 
-        shared = adata_sc.uns[UNS_SHARED_GENES]
-        Zs = self._spatial_data_matrix()  # (S, G) raw shared
-        Zc = torch.tensor(to_dense(adata_sc[:, shared]), dtype=torch.float32)  # (C, G)
-
-        Zs = Zs / (Zs.norm(dim=1, keepdim=True) + self.eps)
-        Zc = Zc / (Zc.norm(dim=1, keepdim=True) + self.eps)
-        sim = Zs @ Zc.t()  # (S, C) cosine similarity
-
-        n_cells = Zc.shape[0]
+        n_cells = adata_sc.n_obs
         n = min(self.n_neighbors, n_cells)
         if n < self.n_neighbors:
             logger.info(
-                "MajorityVoteMapper: n_neighbors=%d > n_cells=%d, using %d",
+                "%s: n_neighbors=%d > n_cells=%d, using %d",
+                type(self).__name__,
                 self.n_neighbors,
                 n_cells,
                 n,
             )
         self._n = n
-        self._neighbor_idx = torch.topk(sim, n, dim=1).indices.numpy()  # (S, N)
+        self._neighbor_idx = self._find_neighbors(n)  # (S, N)
         self._leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+
+    def _find_neighbors(self, n: int) -> np.ndarray:
+        """Indices (S, n) of each spot's top-n most cosine-similar reference cells
+        on the raw shared genes."""
+        shared = self.adata_sc.uns[UNS_SHARED_GENES]
+        Zs = self._spatial_data_matrix()  # (S, G) raw shared
+        Zc = torch.tensor(
+            to_dense(self.adata_sc[:, shared]), dtype=torch.float32
+        )  # (C, G)
+
+        Zs = Zs / (Zs.norm(dim=1, keepdim=True) + self.eps)
+        Zc = Zc / (Zc.norm(dim=1, keepdim=True) + self.eps)
+        sim = Zs @ Zc.t()  # (S, C) cosine similarity
+        return torch.topk(sim, n, dim=1).indices.numpy()  # (S, n)
 
     def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor]:
         """Tally the cached neighbours' states at this K into a soft P (S x K).

@@ -167,12 +167,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mapping",
         choices=list(MAPPING_CHOICES),
         default="nearest",
-        help="Spot-to-state mapping: 'nearest' (zero-parameter nearest-centroid, "
-        "default), 'nearest_scaled' (nearest-centroid scaled by per-state cosine "
-        "dispersion), 'majority_vote' (soft vote of the top-N nearest reference "
-        "cells' states), 'learned' (gradient-descent soft P), or an external "
-        "reference aligner 'tangram' / 'tacco' / 'dot' (each runs out-of-process in "
-        "its own conda env, once per K). The learned-mode flags below apply only to 'learned'.",
+        help="Spot-to-state mapping: 'nearest' (zero-parameter nearest-centroid by "
+        "cosine on raw counts, default), 'nearest_scaled' (nearest-centroid scaled "
+        "by per-state cosine dispersion), 'nearest_euclidean' (nearest-centroid by "
+        "Euclidean distance in normalize_total+log1p shared-gene space), "
+        "'nearest_euclidean_scaled' (nearest_euclidean scaled by per-state "
+        "lognorm-space dispersion), 'majority_vote' (soft vote of the top-N nearest "
+        "reference cells' states by cosine on raw counts), 'majority_vote_euclidean' "
+        "(same vote, but neighbours by Euclidean distance in lognorm space), "
+        "'learned' (gradient-descent soft P), or an external reference aligner "
+        "'tangram' / 'tacco' / 'dot' (each runs out-of-process in its own conda env, "
+        "once per K). The learned-mode flags below apply only to 'learned'.",
     )
     parser.add_argument("--leiden_resolution", type=float, default=3.0)
     parser.add_argument("--normalize_and_log", action="store_true", default=False)
@@ -184,17 +189,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dispersion_shrinkage",
         type=float,
         default=1.0,
-        help="[nearest_scaled] pseudocount shrinking each state's cosine dispersion "
-        "toward the global mean (guards tiny/singleton states). Large values -> "
-        "uniform dispersion -> reproduces 'nearest'.",
+        help="[nearest_scaled / nearest_euclidean_scaled] pseudocount shrinking each "
+        "state's dispersion toward the global mean (guards tiny/singleton states). "
+        "Large values -> uniform dispersion -> reproduces the unscaled variant.",
     )
     # majority_vote-mode only
     parser.add_argument(
         "--n_neighbors",
         type=int,
         default=10,
-        help="[majority_vote] number of nearest reference cells each spot votes "
-        "over (top-N by shared-gene cosine similarity).",
+        help="[majority_vote / majority_vote_euclidean] number of nearest reference "
+        "cells each spot votes over (top-N by shared-gene cosine similarity, or by "
+        "lognorm-space Euclidean distance for majority_vote_euclidean).",
     )
     # Learned-mode only
     parser.add_argument(

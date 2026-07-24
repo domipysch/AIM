@@ -4,10 +4,11 @@ the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut.
 from abc import ABC, abstractmethod
 import torch
 import anndata as ad
-from adata_schema import UNS_SHARED_GENES
+from adata_schema import OBSM_LOGNORM_SHARED_GENES, UNS_SHARED_GENES
 from analysis.utils import to_dense
 from ..aggregation import (
     assemble_state_profiles_shared_genes,
+    assemble_state_profiles_shared_genes_norm,
 )
 
 
@@ -57,8 +58,23 @@ class SpotStateMapper(ABC):
         return torch.tensor(z_shared, dtype=torch.float32)
 
     def _state_profiles(self, leiden_to_state, k) -> torch.Tensor:
-        """Size-weighted per-state expression profiles M (k x G_shared)."""
+        """Size-weighted per-state raw expression profiles M (k x G_shared)."""
         return assemble_state_profiles_shared_genes(leiden_to_state, k, self.adata_sc)
+
+    def _spatial_data_matrix_lognorm(self) -> torch.Tensor:
+        """ST spots on the shared genes in normalize_total+log1p space as a dense
+        (S x G_shared) float32 tensor (adata_st.obsm[OBSM_LOGNORM_SHARED_GENES]).
+        K-independent.
+        """
+        z_shared = to_dense(self.adata_st.obsm[OBSM_LOGNORM_SHARED_GENES])
+        return torch.tensor(z_shared, dtype=torch.float32)
+
+    def _state_profiles_lognorm(self, leiden_to_state, k) -> torch.Tensor:
+        """Size-weighted per-state lognorm expression profiles M (k x G_shared),
+        in the same normalize_total+log1p space as ``_spatial_data_matrix_lognorm``."""
+        return assemble_state_profiles_shared_genes_norm(
+            leiden_to_state, k, self.adata_sc
+        )
 
     def config(self) -> dict:
         """Config dict describing this mapper; subclasses add their hyperparameters."""
