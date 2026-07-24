@@ -21,6 +21,7 @@ dependencies:
     - typst
     - squidpy
     - seaborn
+    - streamlit
   # dev
   - mypy==1.19.1
   - black==26.1.0

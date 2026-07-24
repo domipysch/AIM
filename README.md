@@ -332,3 +332,31 @@ python main.py \
     --st_dir     sample_dataset/ST \
     --output_dir sample_output/agglomerative/sample
 ```
+
+### 7. Interactive GUI (single pair)
+
+An interactive [Streamlit](https://streamlit.io) app to run and browse the novel
+method for one sc/ST pair. You pass the pair, output dir and K range up front;
+the mapper method is chosen in the UI. It runs the sweep per selected mapper
+(fast, no per-K PDF), then lets you browse each K with a live confidence-threshold
+slider (spots below the threshold are greyed on the spatial plot), the reference
+UMAP + spatial plots on top, the report sections below, and the K-sweep figure —
+with a Compare tab for two mappers side by side driven by a shared K slider.
+
+The GUI writes each mapper's sweep to `<output_dir>/<mapper>/` (same per-K layout
+as the single-pair run above) and caches rendered figures under
+`<output_dir>/.gui_cache/`. It does not modify the method itself.
+
+```bash
+conda activate aim_env
+python -m gui \
+    --scdata     <path/to/sc.h5ad> \
+    --stdata     <path/to/st.h5ad> \
+    --output_dir <output/gui> \
+    --k_min 2 --k_max 35 --k_step 1
+```
+
+Then open the printed URL (default http://localhost:8501), pick a mapper in the
+sidebar, click **Run**, and wait for the sweep to finish. Mappers without a
+per-spot confidence (`learned`, `tangram`, `tacco`, `dot`) disable the confidence
+slider. `streamlit` is included in `environment.yml`.
