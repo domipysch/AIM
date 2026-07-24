@@ -5,7 +5,6 @@ import logging
 from pathlib import Path
 
 import anndata
-import torch
 import scanpy as sc
 from adata_schema import (
     UNS_LEIDEN_CENTROIDS_SHARED_GENES,
@@ -18,11 +17,7 @@ from adata_schema import (
     OBSM_UMAP_SHARED_GENES,
 )
 from analysis.analysis import run_analysis
-from analysis.utils import to_dense
-from .aggregation import (
-    assemble_state_profiles_shared_genes,
-    compute_leiden_aggregates,
-)
+from .aggregation import compute_leiden_aggregates
 from .clustering import (
     run_leiden_clustering_all_genes,
     run_leiden_clustering_shared_genes,
@@ -139,15 +134,8 @@ def run(
 
     for k in ks:
 
-        labels_k = labels_by_k[k]
-        m_shared = assemble_state_profiles_shared_genes(labels_k, k, adata_sc)
-
-        # Densify: adata_st.X is often sparse and torch.tensor can't consume it.
-        z_shared = to_dense(adata_st[:, adata_sc.uns[UNS_SHARED_GENES]])
-        spot_to_state = mapper.map(
-            torch.tensor(z_shared, dtype=torch.float32),
-            m_shared,
-        )
+        leiden_to_state = labels_by_k[k]
+        spot_to_state = mapper.map(leiden_to_state, k)
 
         run_dir = output_folder / f"k_{k:03d}"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -155,7 +143,7 @@ def run(
         write_run_outputs(
             run_dir=run_dir,
             spot_to_state=spot_to_state,
-            labels_k=labels_k,
+            labels_k=leiden_to_state,
             n_leiden=n_leiden_clusters,
             k=k,
             adata_st=adata_st,

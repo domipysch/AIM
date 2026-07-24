@@ -47,6 +47,7 @@ UNS_LEIDEN_EXPR_SUMS_SHARED_GENES = (
 UNS_LEIDEN_CENTROIDS_SHARED_GENES = "leiden_centroids_shared"  # (L x G_shared) — mean raw expression per cluster (all-zero rows set to 1e-6)
 UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM = "leiden_expr_sums_shared_norm"  # (L x G_shared) — summed lognorm expression per cluster
 UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM = "leiden_centroids_shared_norm"  # (L x G_shared) — mean lognorm expression per cluster
+UNS_LEIDEN_UNIT_SUMS_SHARED_GENES = "leiden_unit_sums_shared"  # (L x G_shared) — summed L2-normalized raw expression per cluster (sum of unit vectors), for cell-level cosine dispersion
 
 # ── adata_st ───────────────────────────────────────────────────────────────
 

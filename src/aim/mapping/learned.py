@@ -57,7 +57,7 @@ class LearnedMapper(SpotStateMapper):
         self.lambda_spot_gini = lambda_spot_gini
         self.spot_gini_warmup_frac = spot_gini_warmup_frac
 
-    def map(self, Z_shared: torch.Tensor, M_shared: torch.Tensor) -> torch.Tensor:
+    def map(self, leiden_to_state, k) -> torch.Tensor:
         """
         Learn the soft spot->state matrix P (S x K) reconstructing the ST data from
         fixed profiles M_shared (K x G_shared).
@@ -66,6 +66,9 @@ class LearnedMapper(SpotStateMapper):
         (mean 1 - sum_k P^2, normalized by 1 - 1/K) weighted per the warmup schedule.
         Returns P (S x K) with rows summing to 1.
         """
+        Z_shared = self._spatial_data_matrix()
+        M_shared = self._state_profiles(leiden_to_state, k)
+
         n_spots = Z_shared.shape[0]
         n_states = M_shared.shape[0]
         logits = torch.nn.Parameter(torch.randn(n_spots, n_states))

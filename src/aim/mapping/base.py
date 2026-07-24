@@ -1,29 +1,60 @@
-"""The ``SpotStateMapper`` API: given ST data Z and fixed per-state profiles M,
-produce a spot->state matrix P (S x K)."""
+"""The ``SpotStateMapper`` API: ``prepare`` stashes the pair's AnnData objects on
+the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut."""
 
 from abc import ABC, abstractmethod
 import torch
+import anndata as ad
+from adata_schema import UNS_SHARED_GENES
+from analysis.utils import to_dense
+from ..aggregation import (
+    assemble_state_profiles_shared_genes,
+)
 
 
 class SpotStateMapper(ABC):
     """A spot->state mapping strategy; subclasses set ``name`` and implement ``map``."""
 
     name: str
+    adata_sc: ad.AnnData
+    adata_st: ad.AnnData
 
     def prepare(self, adata_sc, adata_st, labels_by_k) -> None:
-        """Optional one-time per-pair setup, run once before the K-sweep.
+        """One-time per-pair setup, run once before the K-sweep.
 
-        Default is a no-op; mappers that need the full AnnData objects or every
-        K's state labels up front (e.g. an external reference aligner) override
-        this. ``labels_by_k`` maps each swept K to its (L,) subcluster->state cut.
+        Stashes the (pre-processed) sc/st AnnData objects on the mapper so ``map``
+        and the protected helpers below can reach them without re-passing them per
+        K. ``labels_by_k`` maps each swept K to its (L,) subcluster->state cut;
+        mappers that need every K's labels up front (e.g. an external reference
+        aligner) use it here. Subclasses that override this **must** call
+        ``super().prepare(...)`` so the AnnData refs are stored.
         """
-        return None
+        self.adata_sc = adata_sc
+        self.adata_st = adata_st
 
     @abstractmethod
-    def map(self, Z_shared: torch.Tensor, M_shared: torch.Tensor) -> torch.Tensor:
-        """Map ST spots (rows of Z_shared) onto the states (rows of M_shared), both
-        shared-gene aligned; returns the spot->state matrix P (S x K)."""
+    def map(self, leiden_to_state, k) -> torch.Tensor:
+        """Map ST spots onto the ``k`` states of the current cut, returning the
+        spot->state matrix P (S x K).
+
+        ``leiden_to_state`` is the (L,) subcluster->state cut for this K and ``k``
+        the number of states. Implementations build whatever they need (spot
+        matrix, state profiles, dispersion) from the AnnData stashed by ``prepare``
+        via the protected helpers below.
+        """
         raise NotImplementedError
+
+    def _spatial_data_matrix(self) -> torch.Tensor:
+        """ST spots on the shared genes as a dense (S x G_shared) float32 tensor.
+
+        Densified because adata_st.X is often sparse and torch.tensor can't
+        consume it. K-independent.
+        """
+        z_shared = to_dense(self.adata_st[:, self.adata_sc.uns[UNS_SHARED_GENES]])
+        return torch.tensor(z_shared, dtype=torch.float32)
+
+    def _state_profiles(self, leiden_to_state, k) -> torch.Tensor:
+        """Size-weighted per-state expression profiles M (k x G_shared)."""
+        return assemble_state_profiles_shared_genes(leiden_to_state, k, self.adata_sc)
 
     def config(self) -> dict:
         """Config dict describing this mapper; subclasses add their hyperparameters."""

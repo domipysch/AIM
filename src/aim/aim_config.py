@@ -3,12 +3,21 @@
 
 from dataclasses import dataclass
 
-from .mapping import GreedyMapper, LearnedMapper, SpotStateMapper, ReferenceMapper
+from .mapping import (
+    NearestMapper,
+    NearestScaledMapper,
+    LearnedMapper,
+    MajorityVoteMapper,
+    SpotStateMapper,
+    ReferenceMapper,
+)
 
 # In-process mapping strategies keyed by CLI name.
 _MAPPERS: dict[str, type[SpotStateMapper]] = {
-    GreedyMapper.name: GreedyMapper,
+    NearestMapper.name: NearestMapper,
+    NearestScaledMapper.name: NearestScaledMapper,
     LearnedMapper.name: LearnedMapper,
+    MajorityVoteMapper.name: MajorityVoteMapper,
 }
 # External reference aligners, all served by ReferenceMapper and selected by name.
 _REFERENCE_METHODS = ("tangram", "tacco", "dot")
@@ -20,9 +29,13 @@ MAPPING_CHOICES = tuple(_MAPPERS) + _REFERENCE_METHODS
 class AIMConfig:
     """Per-run knobs for the AIM sweep: mapping choice, hyperparameters, and K range."""
 
-    mapping: str = "greedy"
+    mapping: str = "nearest"
     leiden_resolution: float = 3.0
     normalize_and_log: bool = False
+    # nearest_scaled-mode only
+    dispersion_shrinkage: float = 1.0
+    # majority_vote-mode only
+    n_neighbors: int = 10
     # learned-mode only
     epochs: int = 400
     lr: float = 0.02
@@ -41,6 +54,10 @@ class AIMConfig:
             raise ValueError(
                 f"mapping must be one of {MAPPING_CHOICES}, got {self.mapping!r}"
             )
+        if self.mapping == "nearest_scaled":
+            return NearestScaledMapper(dispersion_shrinkage=self.dispersion_shrinkage)
+        if self.mapping == "majority_vote":
+            return MajorityVoteMapper(n_neighbors=self.n_neighbors)
         if self.mapping == "learned":
             return LearnedMapper(
                 epochs=self.epochs,

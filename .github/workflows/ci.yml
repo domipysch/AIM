@@ -58,13 +58,13 @@ jobs:
             --st_dir    sample_dataset/ST \
             --output_dir sample_output/pre_check/sample_batch
 
-      - name: Novel method – single pair (greedy mapping)
+      - name: Novel method – single pair (nearest mapping)
         run: |
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_dir    sample_output/novel/greedy \
-            --mapping           greedy \
+            --output_dir    sample_output/novel/nearest \
+            --mapping           nearest \
             --leiden_resolution 3.0
 
       - name: Novel method – single pair (learned mapping)
@@ -84,7 +84,7 @@ jobs:
             --sc_dir     sample_dataset/scRNA \
             --st_dir     sample_dataset/ST \
             --output_dir sample_output/novel/sample_batch \
-            --mapping           greedy \
+            --mapping           nearest \
             --leiden_resolution 3.0
 
   sample-reference-aligners:

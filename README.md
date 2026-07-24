@@ -1,6 +1,6 @@
 # Spatial Transcriptomics Alignment
 
-Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`greedy` nearest-centroid or `learned` soft assignment).
+Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`nearest` nearest-centroid or `learned` soft assignment).
 
 ## Repository Structure
 
@@ -14,7 +14,7 @@ src/
 │   ├── clustering.py            #   clustering half: Leiden over-clustering (all genes + shared genes)
 │   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
 │   ├── tree.py                  #   clustering half: agglomeration tree + cut at K -> labels_k
-│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (greedy / learned)
+│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest / nearest_scaled / majority_vote / learned)
 │   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
 │   └── sweep.py                 #   the K-sweep orchestration
 ├── analysis/                    # Post-mapping analysis: orchestration + loaders + typst PDF report
@@ -220,9 +220,17 @@ agglomeration tree (average-linkage on shared-gene cosine distance), and for
 every `K` from `L` down to `1` cuts the tree into `K` cell states and maps each
 ST spot onto them. The spot→state mapping is **modular** (`--mapping`):
 
-- **`greedy`** (default) — zero-parameter nearest-centroid: each spot is assigned
+- **`nearest`** (default) — zero-parameter nearest-centroid: each spot is assigned
   to the state whose profile is most cosine-similar to it. No training; the
   assignment is one-hot, so soft and deterministic reconstructions coincide.
+- **`nearest_scaled`** — like `nearest`, but each spot→centroid cosine distance is
+  divided by the state's cell-level cosine dispersion (its "diameter") before the
+  argmin, so diffuse (heavily merged) states claim more distant spots and tight
+  states only nearby ones. One-hot `P`. Adds `--dispersion_shrinkage` (shrinks each
+  state's dispersion toward the global mean; large values reproduce `nearest`).
+- **`majority_vote`** — kNN label transfer: each spot takes its top-N most
+  cosine-similar reference cells (shared genes), and `P` is the fraction of those
+  neighbours in each state. Adds `--n_neighbors` (default 10).
 - **`learned`** — a soft `P` trained by gradient descent, minimizing spot-wise +
   gene-wise cosine distance with a quadratic `spot_gini` sharpener (optional
   warmup). Adds `--epochs / --lr / --lambda_spot_gini / --spot_gini_warmup_frac`.
@@ -239,7 +247,7 @@ python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
     --output_dir    <output/pair_0> \
-    [--mapping greedy|learned|tangram|tacco|dot] \
+    [--mapping nearest|nearest_scaled|majority_vote|learned|tangram|tacco|dot] \
     [--leiden_resolution 3.0] \
     [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1] \
@@ -292,7 +300,7 @@ python main.py \
     --sc_dir     <path/to/scRNA> \
     --st_dir     <path/to/ST> \
     --output_dir <output/agglomerative> \
-    [--mapping greedy|learned] \
+    [--mapping nearest|nearest_scaled|majority_vote|learned] \
     [--leiden_resolution 3.0] [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1]
 ```

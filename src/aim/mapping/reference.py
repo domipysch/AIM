@@ -79,6 +79,7 @@ class ReferenceMapper(SpotStateMapper):
         per-K aligner run just points ``--cell_type_key`` at the right column and
         no large file is rewritten inside the loop.
         """
+        super().prepare(adata_sc, adata_st, labels_by_k)
         shared = list(adata_sc.uns[UNS_SHARED_GENES])
         # Kept alive on the instance so it survives the whole sweep, then cleaned
         # up when this mapper is garbage-collected (a fresh mapper per pair).
@@ -123,14 +124,14 @@ class ReferenceMapper(SpotStateMapper):
             self._workdir,
         )
 
-    def map(self, Z_shared: torch.Tensor, M_shared: torch.Tensor) -> torch.Tensor:
+    def map(self, leiden_to_state, k) -> torch.Tensor:
         if not self._prepared:
             raise RuntimeError(
                 "ReferenceMapper.prepare(...) must run before map(); the sweep "
                 "calls it once before the K-loop."
             )
-        k = int(M_shared.shape[0])
-        n_spots = int(Z_shared.shape[0])
+        k = int(k)
+        n_spots = int(self.adata_st.n_obs)
         if k < 2:
             # A single state is trivial (and degenerate for the aligners).
             return torch.ones((n_spots, 1), dtype=torch.float32)
