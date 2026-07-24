@@ -283,6 +283,39 @@ def _spatial_organization_section(data_dir: Path, plots_dir: Path, base: Path) -
     )
 
 
+def _confidence_section(plots_dir: Path, data_dir: Path, base: Path) -> str:
+    """Per-spot mapping-confidence section from confidence_distribution.png +
+    confidence_summary.json. Empty string when the mapper defined no confidence
+    (the plot is absent), so the section only appears when available."""
+    png = plots_dir / "confidence_distribution.png"
+    if not png.exists():
+        return ""
+    sec = (
+        "\n= Mapping Confidence — Per-Spot Assignment\n\n"
+        "Per-spot confidence in [0, 1] that the mapper reported for its "
+        "assignment (higher = more decisive): the top-state margin for "
+        "nearest / nearest_scaled, and the vote one-hotness (Shannon entropy) "
+        "for majority_vote.\n\n"
+        f"{_img(png, base, width='75%')}\n"
+    )
+    summary = _load_metrics_json(data_dir, "confidence_summary.json")
+    if summary:
+        tbl = _two_col_table(
+            [
+                ("Spots", str(summary.get("n_spots", "?"))),
+                ("Mean", _num(summary.get("mean"))),
+                ("Median", _num(summary.get("median"))),
+                ("Std", _num(summary.get("std"))),
+                ("Min", _num(summary.get("min"))),
+                ("Max", _num(summary.get("max"))),
+                ("Spots with confidence > 0.5", _pct(summary.get("frac_above_0.5"))),
+                ("Spots with confidence > 0.9", _pct(summary.get("frac_above_0.9"))),
+            ]
+        )
+        sec += "\n" + tbl + "\n"
+    return sec
+
+
 def _substate_coherence_section(data_dir: Path) -> str:
     """Substate-merge-coherence section from biology_metrics.json.
     Returns '' if the file or the coherence aggregate is absent."""
@@ -454,6 +487,9 @@ semantics). "raw" compares raw counts; "norm" compares total-count-normalized
             "spot",
         )
     )
+
+    # Per-spot mapping confidence (only when the mapper defined one)
+    parts.append(_confidence_section(plots_dir, data_dir, base))
 
     # Substate merge coherence
     parts.append(_substate_coherence_section(data_dir))

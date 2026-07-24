@@ -1,5 +1,6 @@
 """Matplotlib figure generation for the AIM pipeline; renders precomputed values and AnnData to PNGs."""
 
+from .confidence import plot_confidence_distribution
 from .cossim import plot_cossim_boxplots
 from .onehot import plot_dominance_thresholds, plot_onehot_distribution
 from .states import (
@@ -14,6 +15,7 @@ from .states import (
 )
 
 __all__ = [
+    "plot_confidence_distribution",
     "plot_onehot_distribution",
     "plot_dominance_thresholds",
     "plot_cossim_boxplots",

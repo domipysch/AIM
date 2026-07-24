@@ -13,6 +13,7 @@ from anndata import AnnData
 from adata_schema import (
     OBSM_MAPPING_SOFT,
     OBS_MAPPING_HARD,
+    OBS_MAPPING_CONFIDENCE,
     OBS_LEIDEN_ALL_GENES,
     OBS_COMPUTED_STATE,
 )
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 def load_spot_to_state_mapping_soft_and_hard(run_dir: Path, adata_st: AnnData) -> None:
     """Load the spot->state matrix P from spot_to_state_mapping_soft.h5ad in run_dir.
 
-    Adds: adata_st.obsm[OBSM_MAPPING_SOFT] (S x K), assigned positionally.
+    Adds: adata_st.obsm[OBSM_MAPPING_SOFT] (S x K), assigned positionally, and,
+    when the mapper wrote one, adata_st.obs[OBS_MAPPING_CONFIDENCE] (S,).
     Raises ValueError if the file's spot order does not match adata_st.obs_names.
     """
     run_dir = Path(run_dir)
@@ -38,6 +40,10 @@ def load_spot_to_state_mapping_soft_and_hard(run_dir: Path, adata_st: AnnData) -
         )
     adata_st.obsm[OBSM_MAPPING_SOFT] = np.asarray(mapping_ad.X, dtype=np.float64)
     adata_st.obs[OBS_MAPPING_HARD] = adata_st.obsm[OBSM_MAPPING_SOFT].argmax(axis=1)
+    if OBS_MAPPING_CONFIDENCE in mapping_ad.obs:
+        adata_st.obs[OBS_MAPPING_CONFIDENCE] = mapping_ad.obs[
+            OBS_MAPPING_CONFIDENCE
+        ].to_numpy()
 
 
 def load_leiden_to_state(run_dir: Path) -> np.ndarray:

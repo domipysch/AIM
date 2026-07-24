@@ -6,6 +6,7 @@ more distant spots and tight states only claim nearby ones."""
 import torch
 
 from .base import SpotStateMapper
+from .confidence import top_margin_confidence
 from ..aggregation import assemble_state_dispersion_shared_genes
 
 
@@ -18,8 +19,13 @@ class NearestScaledMapper(SpotStateMapper):
     def __init__(self, dispersion_shrinkage: float = 1.0) -> None:
         self.dispersion_shrinkage = dispersion_shrinkage
 
-    def map(self, leiden_to_state, k) -> torch.Tensor:
-        """Assign each spot to the state minimizing (1 - cos) / dispersion; returns a one-hot P (S x K)."""
+    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor]:
+        """Assign each spot to the state minimizing (1 - cos) / dispersion.
+
+        Returns a one-hot P (S x K) plus a (S,) confidence: the margin of the
+        winning state's scaled distance over its top runners-up (analogous to
+        ``nearest``, but on the dispersion-scaled distance that decides the cut).
+        """
 
         Z_shared = self._spatial_data_matrix()
         M_shared = self._state_profiles(leiden_to_state, k)
@@ -35,7 +41,8 @@ class NearestScaledMapper(SpotStateMapper):
         spot_state = torch.argmin(scaled, dim=1)
         P = torch.zeros(Z_shared.shape[0], M_shared.shape[0])
         P[torch.arange(P.shape[0]), spot_state] = 1.0
-        return P
+        confidence = top_margin_confidence(scaled)  # scaled distance, lower = better
+        return P, confidence
 
     def config(self) -> dict:
         return {"mapping": self.name, "dispersion_shrinkage": self.dispersion_shrinkage}

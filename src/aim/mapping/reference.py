@@ -124,7 +124,9 @@ class ReferenceMapper(SpotStateMapper):
             self._workdir,
         )
 
-    def map(self, leiden_to_state, k) -> torch.Tensor:
+    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, None]:
+        """Delegate to the external aligner and return ``(P, None)`` — the
+        reference aligners do not expose a per-spot confidence."""
         if not self._prepared:
             raise RuntimeError(
                 "ReferenceMapper.prepare(...) must run before map(); the sweep "
@@ -134,7 +136,7 @@ class ReferenceMapper(SpotStateMapper):
         n_spots = int(self.adata_st.n_obs)
         if k < 2:
             # A single state is trivial (and degenerate for the aligners).
-            return torch.ones((n_spots, 1), dtype=torch.float32)
+            return torch.ones((n_spots, 1), dtype=torch.float32), None
 
         env, module = _ALIGNERS[self.reference_method]
         out_dir = self._workdir / self._state_key(k)
@@ -175,7 +177,7 @@ class ReferenceMapper(SpotStateMapper):
                 f"--- stderr tail ---\n{tail}"
             ) from exc
 
-        return self._read_mapping(out_dir / "mapping_prob.h5ad", k)
+        return self._read_mapping(out_dir / "mapping_prob.h5ad", k), None
 
     def _read_mapping(self, path: Path, k: int) -> torch.Tensor:
         """Load the aligner's S x (states-present) mapping_prob.h5ad and reindex it

@@ -32,9 +32,13 @@ class SpotStateMapper(ABC):
         self.adata_st = adata_st
 
     @abstractmethod
-    def map(self, leiden_to_state, k) -> torch.Tensor:
-        """Map ST spots onto the ``k`` states of the current cut, returning the
-        spot->state matrix P (S x K).
+    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Map ST spots onto the ``k`` states of the current cut.
+
+        Returns ``(P, confidence)`` where ``P`` is the spot->state matrix (S x K)
+        and ``confidence`` is either a (S,) float32 tensor in [0, 1] scoring how
+        decisively each spot was assigned, or ``None`` when this mapper does not
+        define one (see ``confidence.py``). Higher confidence = more decisive.
 
         ``leiden_to_state`` is the (L,) subcluster->state cut for this K and ``k``
         the number of states. Implementations build whatever they need (spot

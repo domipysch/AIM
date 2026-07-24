@@ -266,7 +266,10 @@ Writes to `output_dir/`:
 - `leiden_overclustering.h5ad` — per-cell Leiden over-cluster label; written once and
   reused by every `K`.
 - `k_<kkk>/` — one folder per `K`, in the layout the post-mapping analysis consumes:
-  - `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`).
+  - `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`);
+    carries `obs["mapping_confidence"]` (per-spot assignment confidence in `[0,1]`)
+    when the mapper defines one (`nearest`/`nearest_scaled`: top-state margin;
+    `majority_vote`: vote one-hotness; absent for `learned` and the reference aligners).
   - `spot_to_state_mapping.csv` — `P` as CSV (tiny values zeroed, rounded) for eyeballing.
   - `leiden_to_state.csv` — the subcluster→state tree cut (`labels_k`).
   - `analysis/` — the post-mapping analysis for that `K`: `report.pdf` (typst) plus

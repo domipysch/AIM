@@ -12,6 +12,7 @@ from .biology import (
     analyse_modularities,
     plot_modularities,
 )
+from .confidence import analyse_spot_confidence, plot_spot_confidence
 from .reconstruction import analyse_reconstruction, plot_reconstruction
 from .states import create_states_plots
 from .topology import analyse_spatial_organization
@@ -68,6 +69,9 @@ def run_analysis(
     logger.info("Computing one-hot metrics...")
     analyse_spot_to_state_one_hotness(adata_st, data_dir)
 
+    logger.info("Summarising per-spot mapping confidence (if available)...")
+    analyse_spot_confidence(adata_st, data_dir)
+
     logger.info("Computing spatial organisation of mapped spots...")
     analyse_spatial_organization(adata_st, data_dir)
 
@@ -89,6 +93,7 @@ def run_analysis(
         # Create plots
         create_states_plots(adata_sc, adata_st, plots_dir, state_palette=state_palette)
         plot_spot_to_state_one_hotness(plots_dir, data_dir)
+        plot_spot_confidence(plots_dir, data_dir)
         plot_reconstruction(plots_dir, data_dir)
         plot_modularities(adata_sc, plots_dir, data_dir, state_palette=state_palette)
         plot_nhood_enrichment(adata_st, plots_dir)

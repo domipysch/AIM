@@ -60,6 +60,7 @@ OBS_MAPPING_HARD = (
     "mapping_hard"  # (n_spots,) int — argmax state index (0..K-1) at the current K
 )
 OBS_MAPPING_STATE_CAT = "mapping_state"  # (n_spots,) str categorical — hard state label as a category, for squidpy neighbourhood tools (nhood_enrichment)
+OBS_MAPPING_CONFIDENCE = "mapping_confidence"  # (n_spots,) float in [0,1] — per-spot assignment confidence at the current K; absent when the mapper defines no confidence (learned/reference)
 
 # obsm/obsp/uns — K-independent spatial/expression graphs, built once and reused across the K-sweep
 OBSP_SPATIAL_CONNECTIVITIES = "spatial_connectivities"  # (n_spots x n_spots) sparse — squidpy spatial KNN graph (local purity + neighbourhood enrichment)

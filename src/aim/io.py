@@ -8,7 +8,11 @@ import numpy as np
 import pandas as pd
 import torch
 
-from adata_schema import OBS_LEIDEN_ALL_GENES, UNS_LEIDEN_NUMBER_STATES_ALL_GENES
+from adata_schema import (
+    OBS_LEIDEN_ALL_GENES,
+    OBS_MAPPING_CONFIDENCE,
+    UNS_LEIDEN_NUMBER_STATES_ALL_GENES,
+)
 
 
 def write_leiden_overclustering_all_genes(
@@ -42,15 +46,25 @@ def write_run_outputs(
     n_leiden: int,
     k: int,
     adata_st: anndata.AnnData,
+    confidence: torch.Tensor | None = None,
 ) -> None:
-    """Write one K's outputs: leiden_to_state.csv and spot_to_state_mapping.{h5ad,csv} (P is S x K)."""
+    """Write one K's outputs: leiden_to_state.csv and spot_to_state_mapping.{h5ad,csv} (P is S x K).
+
+    ``confidence``, when the mapper defines it, is a (S,) tensor in [0, 1] stored
+    as ``obs[OBS_MAPPING_CONFIDENCE]`` on the soft mapping h5ad; when ``None`` the
+    column is simply omitted.
+    """
 
     pd.DataFrame({"leiden_cluster": np.arange(n_leiden), "state": labels_k}).to_csv(
         run_dir / "leiden_to_state.csv", index=False
     )
 
+    obs = pd.DataFrame(index=adata_st.obs_names)
+    if confidence is not None:
+        obs[OBS_MAPPING_CONFIDENCE] = confidence.numpy()
+
     anndata.AnnData(
         X=spot_to_state.numpy(),
-        obs=pd.DataFrame(index=adata_st.obs_names),
+        obs=obs,
         var=pd.DataFrame(index=[f"state_{i}" for i in range(k)]),
     ).write_h5ad(run_dir / "spot_to_state_mapping_soft.h5ad")

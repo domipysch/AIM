@@ -135,7 +135,7 @@ def run(
     for k in ks:
 
         leiden_to_state = labels_by_k[k]
-        spot_to_state = mapper.map(leiden_to_state, k)
+        spot_to_state, confidence = mapper.map(leiden_to_state, k)
 
         run_dir = output_folder / f"k_{k:03d}"
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -143,6 +143,7 @@ def run(
         write_run_outputs(
             run_dir=run_dir,
             spot_to_state=spot_to_state,
+            confidence=confidence,
             labels_k=leiden_to_state,
             n_leiden=n_leiden_clusters,
             k=k,

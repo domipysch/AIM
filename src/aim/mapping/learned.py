@@ -57,14 +57,15 @@ class LearnedMapper(SpotStateMapper):
         self.lambda_spot_gini = lambda_spot_gini
         self.spot_gini_warmup_frac = spot_gini_warmup_frac
 
-    def map(self, leiden_to_state, k) -> torch.Tensor:
+    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, None]:
         """
         Learn the soft spot->state matrix P (S x K) reconstructing the ST data from
         fixed profiles M_shared (K x G_shared).
 
         Minimizes spot- plus gene-wise cosine distance, plus a per-spot Gini sharpener
         (mean 1 - sum_k P^2, normalized by 1 - 1/K) weighted per the warmup schedule.
-        Returns P (S x K) with rows summing to 1.
+        Returns ``(P, None)`` — P (S x K) with rows summing to 1, and no confidence
+        (this mapper does not define one).
         """
         Z_shared = self._spatial_data_matrix()
         M_shared = self._state_profiles(leiden_to_state, k)
@@ -92,7 +93,7 @@ class LearnedMapper(SpotStateMapper):
             loss.backward()
             optimizer.step()
 
-        return torch.softmax(logits.detach(), dim=1)
+        return torch.softmax(logits.detach(), dim=1), None
 
     def config(self) -> dict:
         return {

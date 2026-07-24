@@ -10,6 +10,7 @@ import torch
 from adata_schema import OBS_LEIDEN_ALL_GENES, UNS_SHARED_GENES
 from analysis.utils import to_dense
 from .base import SpotStateMapper
+from .confidence import entropy_confidence
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +54,19 @@ class MajorityVoteMapper(SpotStateMapper):
         self._neighbor_idx = torch.topk(sim, n, dim=1).indices.numpy()  # (S, N)
         self._leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
 
-    def map(self, leiden_to_state, k) -> torch.Tensor:
-        """Tally the cached neighbours' states at this K into a soft P (S x K), rows summing to 1."""
+    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor]:
+        """Tally the cached neighbours' states at this K into a soft P (S x K).
+
+        Returns P (rows summing to 1) plus a (S,) confidence: how one-hot each
+        vote row is, via its normalized Shannon entropy (1 = unanimous, 0 =
+        uniform across states).
+        """
         labels = np.asarray(leiden_to_state)
         neighbor_states = labels[self._leiden[self._neighbor_idx]]  # (S, N) state ids
         onehot = np.eye(k, dtype=np.float32)[neighbor_states]  # (S, N, K)
         p = onehot.sum(axis=1) / self._n  # (S, K) vote fractions
-        return torch.tensor(p, dtype=torch.float32)
+        P = torch.tensor(p, dtype=torch.float32)
+        return P, entropy_confidence(P)
 
     def config(self) -> dict:
         return {"mapping": self.name, "n_neighbors": self.n_neighbors}
