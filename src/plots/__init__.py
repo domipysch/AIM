@@ -2,6 +2,7 @@
 
 from .confidence import plot_confidence_distribution
 from .cossim import plot_cossim_boxplots
+from .ksweep import plot_ksweep_comparison
 from .onehot import plot_dominance_thresholds, plot_onehot_distribution
 from .states import (
     _build_state_palette,
@@ -16,6 +17,7 @@ from .states import (
 
 __all__ = [
     "plot_confidence_distribution",
+    "plot_ksweep_comparison",
     "plot_onehot_distribution",
     "plot_dominance_thresholds",
     "plot_cossim_boxplots",

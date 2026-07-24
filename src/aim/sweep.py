@@ -17,6 +17,7 @@ from adata_schema import (
     OBSM_UMAP_SHARED_GENES,
 )
 from analysis.analysis import run_analysis
+from analysis.ksweep import compare_k_runs
 from .aggregation import compute_leiden_aggregates
 from .clustering import (
     run_leiden_clustering_all_genes,
@@ -73,7 +74,7 @@ def run(
     mapper: SpotStateMapper,
     generate_pdf: bool,
     agglo_tree_method: str = "average",
-    agglo_tree_metric: str = "sqeuclidean",
+    agglo_tree_metric: str = "cosine",
     leiden_resolution: float = 3.0,
     k_min: int | None = None,
     k_max: int | None = None,
@@ -152,3 +153,8 @@ def run(
         logger.info("K=%3d mapped -> %s", k, run_dir)
 
         run_analysis(adata_sc, adata_st, run_dir, generate_pdf)
+
+    # Cross-K comparison: gather the per-K analysis metrics written above into one
+    # table + figure at the run root (independent of the per-K PDF reports).
+    logger.info("Comparing K-runs...")
+    compare_k_runs(output_folder, ks)
