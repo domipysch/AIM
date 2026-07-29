@@ -2,7 +2,7 @@
 
 Run from the repository root with the appropriate conda environment active:
     conda activate tangram_env   # or tacco_env / dot_env
-    python -m batch_processing.run_reference_aligner_all_pairs --aligner tangram [options]
+    python -m reference_aligners.run_reference_aligner_all_pairs --aligner tangram [options]
 
 For each pair the script iterates over every non-empty CellTypeKey in scRNA/index.csv
 (CellTypeKey0, CellTypeKey1, CellTypeKey2) and produces one subtree per granularity:

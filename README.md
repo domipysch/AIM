@@ -21,11 +21,8 @@ src/
 ├── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
 └── plots/                       # Matplotlib figure generation shared across the analyses
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
-batch_processing/
-├── run_pre_check_all_pairs.py   # Batch pre-alignment checks
-└── run_reference_aligner_all_pairs.py  # Batch baseline aligners
+└── run_reference_aligner_all_pairs.py  # Batch driver for the baselines
 data_preparation/                # Dataset utilities (validate, convert, split, …)
-pre_check/                       # Pre-alignment compatibility diagnostics
 sample_dataset/                  # Minimal dataset mirroring the database layout (scRNA/, ST/, pairs.csv)
 ```
 
@@ -88,60 +85,7 @@ Each method requires its own conda environment.
 
 > All commands below are run from the **repository root**.
 
-### 1. Pre-alignment compatibility check (single pair)
-
-Generate statistics on your given input sc- and st-dataset pair. Does not map them yet.
-Computes statistics as cell, spot and gene counts, cell/spot library sizes, etc. as well as first naive metrics on compatability for mapping.
-Writes a full PDF report (generated with `typst`) about your dataset pair to the output folder.
-
-```bash
-conda activate aim_env
-python -m pre_check \
-    --scdata        <path/to/sc.h5ad> \
-    --stdata        <path/to/st.h5ad> \
-    --output_folder <output/pre_check/pair_0> \
-    [--leiden_resolution 0.5]
-```
-
-**Example with sample dataset:**
-```bash
-conda activate aim_env
-python -m pre_check \
-    --scdata        sample_dataset/scRNA/sample_sc.h5ad \
-    --stdata        sample_dataset/ST/sample_st.h5ad \
-    --output_folder sample_output/pre_check/sample
-```
-
----
-
-### 2. Pre-alignment compatibility check (all pairs)
-
-Runs the pre-check for every row in `pairs.csv` in parallel.
-
-```bash
-conda activate aim_env
-python -m batch_processing.run_pre_check_all_pairs \
-    --pairs_csv <path/to/pairs.csv> \
-    --sc_dir    <path/to/scRNA> \
-    --st_dir    <path/to/ST> \
-    --output_dir <output/pre_check> \
-    [--workers 4] \
-    [--leiden_resolution 0.5]
-```
-
-**Example with sample dataset:**
-```bash
-conda activate aim_env
-python -m batch_processing.run_pre_check_all_pairs \
-    --pairs_csv sample_dataset/pairs.csv \
-    --sc_dir    sample_dataset/scRNA \
-    --st_dir    sample_dataset/ST \
-    --output_dir sample_output/pre_check/sample
-```
-
----
-
-### 3. Run a reference aligner (single pair)
+### 1. Run a reference aligner (single pair)
 
 All three aligners share the same interface.
 
@@ -185,14 +129,14 @@ python -m reference_aligners.run_tangram \
 
 ---
 
-### 4. Run a reference aligner (all pairs)
+### 2. Run a reference aligner (all pairs)
 
 Runs the chosen aligner for every row in `pairs.csv`, iterating over all cell-type keys
 defined in `scRNA/index.csv`. Metrics are computed automatically after each run.
 
 ```bash
 conda activate tangram_env   # or tacco_env / dot_env
-python -m batch_processing.run_reference_aligner_all_pairs \
+python -m reference_aligners.run_reference_aligner_all_pairs \
     --aligner    tangram/tacco/dot \
     --pairs_csv  <path/to/pairs.csv> \
     --sc_dir     <path/to/scRNA> \
@@ -203,7 +147,7 @@ python -m batch_processing.run_reference_aligner_all_pairs \
 **Example with sample dataset:**
 ```bash
 conda activate tangram_env
-python -m batch_processing.run_reference_aligner_all_pairs \
+python -m reference_aligners.run_reference_aligner_all_pairs \
     --aligner    tangram \
     --pairs_csv  sample_dataset/pairs.csv \
     --sc_dir     sample_dataset/scRNA \
@@ -213,7 +157,7 @@ python -m batch_processing.run_reference_aligner_all_pairs \
 
 ---
 
-### 5. Run the novel method (single pair)
+### 3. Run the novel method (single pair)
 
 The method Leiden over-clusters the reference into `L` subclusters, builds one
 agglomeration tree (average-linkage on shared-gene cosine distance), and for
@@ -305,7 +249,7 @@ python main.py \
 
 ---
 
-### 6. Run the novel method (all pairs)
+### 4. Run the novel method (all pairs)
 
 `main.py` also runs every row in `pairs.csv` sequentially — pass the batch flags
 instead of the single-pair ones. Each pair is written to
@@ -333,7 +277,7 @@ python main.py \
     --output_dir sample_output/agglomerative/sample
 ```
 
-### 7. Interactive GUI (single pair)
+### 5. Interactive GUI (single pair)
 
 An interactive [Streamlit](https://streamlit.io) app to run and browse the novel
 method for one sc/ST pair. You pass the pair, output dir and K range up front;

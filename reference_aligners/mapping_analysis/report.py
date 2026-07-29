@@ -1,6 +1,6 @@
 """PDF report generation via Typst for reference-aligner mapping analysis.
 
-Mirrors the pattern used by analysis/report.py and pre_check/report.py:
+Mirrors the pattern used by analysis/report.py:
 build a Typst source string, write it to a temp .typ file, compile via the
 `typst` Python bindings, then discard the .typ (only the PDF persists).
 """
