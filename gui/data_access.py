@@ -107,6 +107,28 @@ def load_data_json(root: Path, k: int, name: str) -> dict | None:
         return json.load(f)
 
 
+def load_cossim_distributions(root: Path, k: int) -> dict[str, dict[str, list]]:
+    """Per-combo reconstruction cosine-similarity value lists for one K.
+
+    Returns ``{label: {"per_gene": [...], "per_spot": [...]}}`` for the four
+    soft/hard x raw/norm combos found under ``analysis/data/cossim`` (empty dict
+    if none). Each on-disk JSON stores ``{"values": {name: cossim}}``.
+    """
+    cdir = data_dir(root, k) / "cossim"
+    out: dict[str, dict[str, list]] = {}
+    for label in ("soft-raw", "hard-raw", "soft-norm", "hard-norm"):
+        gene_path = cdir / f"cossim-per-gene-{label}.json"
+        spot_path = cdir / f"cossim-per-spot-{label}.json"
+        if not (gene_path.exists() and spot_path.exists()):
+            continue
+        with open(gene_path) as f:
+            per_gene = list(json.load(f)["values"].values())
+        with open(spot_path) as f:
+            per_spot = list(json.load(f)["values"].values())
+        out[label] = {"per_gene": per_gene, "per_spot": per_spot}
+    return out
+
+
 def load_data_csv(root: Path, k: int, name: str, **kwargs) -> pd.DataFrame | None:
     path = data_dir(root, k) / name
     if not path.exists():
@@ -122,6 +144,27 @@ def ksweep_png(root: Path) -> Path | None:
 def ksweep_csv(root: Path) -> pd.DataFrame | None:
     path = Path(root) / "k_comparison.csv"
     return pd.read_csv(path) if path.exists() else None
+
+
+def ksweep_table(root: Path) -> pd.DataFrame | None:
+    """``k_comparison.csv`` augmented with a ``modularity_st_expression`` column.
+
+    The sweep CSV records ``modularity_shared`` but not the mapping-dependent
+    ``modularity_st_expression`` (transcriptional coherence), so read that per K
+    from each K's ``modularity_metrics.json``. Returns ``None`` if the CSV is
+    absent.
+    """
+    df = ksweep_csv(root)
+    if df is None or "k" not in df.columns:
+        return df
+    df = df.copy()
+    st_mod = []
+    for k in df["k"].astype(int).tolist():
+        m = load_data_json(root, k, "modularity_metrics.json") or {}
+        v = m.get("modularity_st_expression")
+        st_mod.append(float(v) if isinstance(v, (int, float)) else float("nan"))
+    df["modularity_st_expression"] = st_mod
+    return df
 
 
 def load_spatial_coords(st_path: Path) -> np.ndarray | None:

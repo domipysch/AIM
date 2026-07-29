@@ -28,12 +28,6 @@ SECTIONS: list[Section] = [
         "fractions", "Cell- & Spot-State Fractions", "scaffold", plots=("fractions",)
     ),
     Section(
-        "umap_grid",
-        "UMAP — Leiden Overclusters vs Computed States",
-        "scaffold",
-        plots=("umap_grid",),
-    ),
-    Section(
         "leiden_merge",
         "Leiden Overclusters Merged per AIM State",
         "scaffold",
@@ -76,3 +70,15 @@ SECTIONS: list[Section] = [
 SCAFFOLD_KEYS: frozenset[str] = frozenset(
     s.key for s in SECTIONS if s.kind == "scaffold"
 )
+
+# Clustering-side sections that are independent of the spot-mapping method. They
+# live only in the "Single-cell reference" tab (rendered there as interactive
+# Plotly), so they are excluded from every per-mapper tab and the Compare tab.
+REFERENCE_SECTION_KEYS: frozenset[str] = frozenset(
+    {"leiden_merge", "profiles", "substate"}
+)
+
+# Sections shown in each per-mapper tab (everything that is not reference-only).
+MAPPER_SECTIONS: list[Section] = [
+    s for s in SECTIONS if s.key not in REFERENCE_SECTION_KEYS
+]

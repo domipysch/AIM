@@ -80,6 +80,9 @@ class MapperRun:
                 k_min=self.k_min,
                 k_max=self.k_max,
                 k_step=self.k_step,
+                # Shared across all mappers of this pair: build the reference
+                # scaffold once at the pair root, then reuse it.
+                reference_cache_dir=self.output_dir,
             )
         except Exception:  # noqa: BLE001 - surface any failure to the UI
             self.error = traceback.format_exc()
