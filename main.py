@@ -70,7 +70,6 @@ def run_one_pair(
         st_path=st_path,
         output_folder=output_folder,
         mapper=config.build_mapper(),
-        generate_pdf=True,
         leiden_resolution=config.leiden_resolution,
         k_min=config.k_min,
         k_max=config.k_max,

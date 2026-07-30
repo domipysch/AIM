@@ -1,12 +1,12 @@
-"""Analyze a reference aligner's mapping_prob.h5ad output.
+"""Analyze a reference aligner's mapping_prob.h5ad output (metrics only).
 
 Tangram, TACCO, and DOT all write the same spots x cell-type layout with real
 cell-type names in var_names, so this single script covers all three — no
 aligner-specific logic needed.
 
-Reads mapping_prob.h5ad from mapping_folder plus the original sc/st input
-files, and writes plots + machine-readable data + a Typst PDF report to
-mapping_folder/analysis/.
+Reads mapping_prob.h5ad from mapping_folder plus the original sc/st input files
+and writes machine-readable metrics + data to ``mapping_folder/analysis/data/``.
+No figures or PDF report are produced (visual inspection lives in the GUI).
 """
 
 from __future__ import annotations
@@ -27,18 +27,7 @@ from metrics.onehot import onehot_metrics
 from .metrics import (
     celltype_centroids,
     predict_expression,
-    top_marker_genes,
 )
-from .plots import (
-    build_celltype_palette,
-    plot_celltype_centroid_zscores,
-    plot_cossim_boxplots,
-    plot_dominance_thresholds,
-    plot_onehot_distribution,
-    plot_sc_umap_by_celltype,
-    plot_spatial_hard_celltypes,
-)
-from .report import generate_report
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +46,8 @@ def analyze_mapping(
     st_path: Path,
     mapping_folder: Path,
     cell_type_key: str = "cellType",
-    top_n_markers: int = 10,
-) -> Path | None:
-    """
-    Run the full mapping analysis and write everything under
-    mapping_folder/analysis/.
+) -> Path:
+    """Run the mapping analysis and write metrics under ``mapping_folder/analysis/data/``.
 
     Args:
         sc_path, st_path: Full paths to the sc/st h5ad used to produce the mapping.
@@ -69,11 +55,9 @@ def analyze_mapping(
                         run_tangram.py / run_tacco.py / run_dot.py).
         cell_type_key: obs column in sc data with the same values as the
                        mapping's var_names.
-        top_n_markers: Marker genes per cell type (union) shown in the
-                       centroid z-score heatmap.
 
     Returns:
-        Path to the written report.pdf, or None if Typst compilation failed.
+        The analysis directory that the metrics were written to.
     """
     mapping_folder = Path(mapping_folder)
     mapping_path = mapping_folder / "mapping_prob.h5ad"
@@ -81,9 +65,7 @@ def analyze_mapping(
         raise FileNotFoundError(f"mapping_prob.h5ad not found in {mapping_folder}")
 
     analysis_dir = mapping_folder / "analysis"
-    plots_dir = analysis_dir / "plots"
     data_dir = analysis_dir / "data"
-    plots_dir.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading mapping and input data...")
@@ -121,8 +103,6 @@ def analyze_mapping(
             f,
             indent=2,
         )
-    plot_onehot_distribution(oh_metrics, plots_dir / "onehot_distribution.png")
-    plot_dominance_thresholds(oh_metrics, plots_dir / "onehot_threshold_fractions.png")
 
     # ── 2. Hard mapping (argmax) ─────────────────────────────────────────────
     logger.info("Computing hard (argmax) mapping...")
@@ -137,20 +117,8 @@ def analyze_mapping(
         data_dir / "spot_hard_celltype.csv", index=False
     )
 
-    # ── 3. SC UMAP by cell type ──────────────────────────────────────────────
-    logger.info("Computing SC UMAP...")
-    celltype_palette = build_celltype_palette(cell_types)
-    plot_sc_umap_by_celltype(
-        adata_sc,
-        cell_type_key,
-        cell_types,
-        celltype_palette,
-        plots_dir / "sc_umap_celltype.png",
-    )
-    cell_type_counts = adata_sc.obs[cell_type_key].astype(str).value_counts().to_dict()
-
-    # ── 4. Cell-type centroid z-scores (normalized + log1p, all genes) ──────
-    logger.info("Computing cell-type centroids and marker genes...")
+    # ── 3. Cell-type centroids (normalized + log1p, all genes) ──────────────
+    logger.info("Computing cell-type centroids...")
     adata_sc_norm = adata_sc.copy()
     sc.pp.normalize_total(adata_sc_norm, target_sum=1e4)
     sc.pp.log1p(adata_sc_norm)
@@ -162,23 +130,7 @@ def analyze_mapping(
         var=pd.DataFrame(index=centroids_norm_full.columns),
     ).write_h5ad(data_dir / "celltype_centroids_normlog_allgenes.h5ad")
 
-    markers = top_marker_genes(adata_sc_norm, cell_type_key, top_n_markers)
-    markers = [g for g in markers if g in centroids_norm_full.columns]
-    plot_celltype_centroid_zscores(
-        centroids_norm_full[markers], plots_dir / "celltype_centroid_zscores.png"
-    )
-
-    # ── 5. Spatial hard-mapping plot ─────────────────────────────────────────
-    logger.info("Plotting spatial hard-mapped cell types...")
-    plot_spatial_hard_celltypes(
-        adata_st,
-        hard_labels,
-        cell_types,
-        celltype_palette,
-        plots_dir / "spatial_hard_celltypes.png",
-    )
-
-    # ── 6. Reconstruction cosine similarity (soft/hard x raw/norm) ───────────
+    # ── 4. Reconstruction cosine similarity (soft/hard x raw/norm) ───────────
     logger.info("Computing reconstruction cosine similarities...")
     shared_genes = sorted(set(adata_sc.var_names) & set(adata_st.var_names))
     cossim_summary: dict[str, dict] = {}
@@ -218,17 +170,6 @@ def analyze_mapping(
                 "median_spot": result.median_spot,
             }
         pd.DataFrame(cossim_summary).T.to_csv(data_dir / "cossim_summary.csv")
-        plot_cossim_boxplots(cossim_results, plots_dir / "cossim_boxplots.png")
 
-    # ── Report ───────────────────────────────────────────────────────────────
-    logger.info("Generating report...")
-    report_path = generate_report(
-        analysis_dir,
-        mapping_source=str(mapping_folder),
-        onehot_summary=oh_metrics,
-        cell_type_counts=cell_type_counts,
-        cossim_summary=cossim_summary,
-    )
-    if report_path:
-        logger.info("Report written to %s", report_path)
-    return report_path
+    logger.info("Mapping analysis metrics written to %s", data_dir)
+    return analysis_dir

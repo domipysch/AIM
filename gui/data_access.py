@@ -85,20 +85,6 @@ def load_soft(root: Path, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | 
     return P, hard, confidence
 
 
-def has_confidence(root: Path, k: int) -> bool:
-    """Whether this K's soft output carries a per-spot confidence column."""
-    path = k_dir(root, k) / "spot_to_state_mapping_soft.h5ad"
-    if not path.exists():
-        return False
-    # Read obs only (cheap) via backed mode.
-    adata = ad.read_h5ad(path, backed="r")
-    try:
-        return "mapping_confidence" in adata.obs
-    finally:
-        if adata.isbacked:
-            adata.file.close()
-
-
 def load_data_json(root: Path, k: int, name: str) -> dict | None:
     path = data_dir(root, k) / name
     if not path.exists():
@@ -127,18 +113,6 @@ def load_cossim_distributions(root: Path, k: int) -> dict[str, dict[str, list]]:
             per_spot = list(json.load(f)["values"].values())
         out[label] = {"per_gene": per_gene, "per_spot": per_spot}
     return out
-
-
-def load_data_csv(root: Path, k: int, name: str, **kwargs) -> pd.DataFrame | None:
-    path = data_dir(root, k) / name
-    if not path.exists():
-        return None
-    return pd.read_csv(path, **kwargs)
-
-
-def ksweep_png(root: Path) -> Path | None:
-    path = Path(root) / "k_comparison.png"
-    return path if path.exists() else None
 
 
 def ksweep_csv(root: Path) -> pd.DataFrame | None:

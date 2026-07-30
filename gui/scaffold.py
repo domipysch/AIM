@@ -105,8 +105,3 @@ def load_or_build_sc(
 
     _align_to_persisted_labels(adata_sc, output_dir)
     return adata_sc
-
-
-def read_st(st_path: Path) -> ad.AnnData:
-    """Fresh ST AnnData (raw X + spatial + obs_names) for per-K plot rendering."""
-    return ad.read_h5ad(st_path)

@@ -119,9 +119,7 @@ def run(
     st_path: Path,
     output_folder: Path,
     mapper: SpotStateMapper,
-    generate_pdf: bool,
-    agglo_tree_method: str = "average",
-    agglo_tree_metric: str = "cosine",
+    agglo_tree_method: str = "ward",
     leiden_resolution: float = 3.0,
     k_min: int | None = None,
     k_max: int | None = None,
@@ -164,7 +162,6 @@ def run(
     agglomerative_clustering = build_agglomeration_tree(
         adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES],
         method=agglo_tree_method,
-        metric=agglo_tree_metric,
     )
 
     n_leiden_clusters = adata_sc.uns[UNS_LEIDEN_NUMBER_STATES_ALL_GENES]
@@ -206,7 +203,7 @@ def run(
         )
         logger.info("K=%3d mapped -> %s", k, run_dir)
 
-        run_analysis(adata_sc, adata_st, run_dir, generate_pdf)
+        run_analysis(adata_sc, adata_st, run_dir)
 
     # Cross-K comparison: gather the per-K analysis metrics written above into one
     # table + figure at the run root (independent of the per-K PDF reports).

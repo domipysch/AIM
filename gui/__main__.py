@@ -69,8 +69,6 @@ def main(argv: list[str] | None = None) -> int:
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (str(src_path), env.get("PYTHONPATH", "")) if p
     )
-    # Headless matplotlib: the GUI renders figures server-side and streams them.
-    env["MPLBACKEND"] = "Agg"
 
     # Forward only the args that were supplied; the rest default in the UI.
     forwarded = ["--k_step", str(args.k_step)]

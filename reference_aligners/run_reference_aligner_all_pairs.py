@@ -9,7 +9,7 @@ For each pair the script iterates over every non-empty CellTypeKey in scRNA/inde
 
     <output_dir>/{PairID:03d}_{scName}__{stName}/{cell_type_key}/
         mapping_prob.h5ad     <- spots x type mapping, var_names = cell type names
-        analysis/             <- mapping analysis report + plots + data (always run)
+        analysis/data/        <- mapping analysis metrics (always run; no figures)
 """
 
 import argparse

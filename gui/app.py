@@ -14,7 +14,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
-from typing import Callable, NamedTuple
+from typing import TYPE_CHECKING, Callable, NamedTuple
 
 # Ensure the in-repo packages under src/ are importable even if PYTHONPATH was
 # not inherited (e.g. when Streamlit re-execs the script).
@@ -22,10 +22,6 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 for _p in (str(_REPO_ROOT / "src"), str(_REPO_ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
-
-import matplotlib
-
-matplotlib.use("Agg")
 
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
@@ -35,6 +31,9 @@ from adata_schema import OBSM_UMAP_SHARED_GENES  # noqa: E402
 from aim import MAPPING_CHOICES  # noqa: E402
 
 from gui import compute, data_access, render, scaffold, widgets  # noqa: E402
+
+if TYPE_CHECKING:
+    from anndata import AnnData
 
 # --------------------------------------------------------------------------- #
 # Args & cached loaders
@@ -75,21 +74,11 @@ def _coords(st_path_str: str):
     return data_access.load_spatial_coords(Path(st_path_str))
 
 
-@st.cache_data(show_spinner=False)
-def _ksweep_csv(root_str: str):
-    return data_access.ksweep_csv(Path(root_str))
-
-
 @st.cache_resource(show_spinner=False)
 def _scaffold_sc(sc_path_str: str, st_path_str: str, out_str: str, resolution: float):
     return scaffold.load_or_build_sc(
         Path(sc_path_str), Path(st_path_str), Path(out_str), resolution
     )
-
-
-@st.cache_resource(show_spinner=False)
-def _scaffold_st(st_path_str: str):
-    return scaffold.read_st(st_path_str)
 
 
 def _resolution(output_dir: Path) -> float:
@@ -99,9 +88,99 @@ def _resolution(output_dir: Path) -> float:
     )
 
 
+def _load_scaffold(
+    args: argparse.Namespace, *, warn: str | None = None
+) -> "AnnData | None":
+    """Return the cached reference scaffold, or ``None`` if it fails to build.
+
+    On failure, surface ``warn`` (with the exception appended) as an
+    ``st.warning`` when given, else fail silently — callers that can render
+    without the scaffold simply skip it.
+    """
+    try:
+        return _scaffold_sc(
+            str(args.scdata),
+            str(args.stdata),
+            str(args.output_dir),
+            _resolution(args.output_dir),
+        )
+    except Exception as exc:  # noqa: BLE001
+        if warn:
+            st.warning(f"{warn}: {exc}")
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Figure export (per-figure PNG / SVG / PDF via kaleido)
+# --------------------------------------------------------------------------- #
+_EXPORT_MIME = {
+    "png": "image/png",
+    "svg": "image/svg+xml",
+    "pdf": "application/pdf",
+}
+
+
+def _export_popover(fig, *, key: str, stem: str) -> None:
+    """A small ⬇ popover under a figure: pick a format, render it server-side
+    (kaleido), and download. Kept on-demand — the image is only built when the
+    user clicks *Generate*, so the (heavy) kaleido call never runs on a plain
+    rerun."""
+    with st.popover("⬇ Export"):
+        fmt = st.radio(
+            "Format",
+            list(_EXPORT_MIME),
+            horizontal=True,
+            key=f"{key}_fmt",
+            help="PNG is always faithful; the UMAP/spatial scatter panels "
+            "rasterise inside SVG/PDF (WebGL), while bar/box/line/heatmap "
+            "figures stay true vector.",
+        )
+        if st.button("Generate", key=f"{key}_gen", width="stretch"):
+            st.session_state.pop(f"{key}_err", None)
+            try:
+                st.session_state[f"{key}_bytes"] = render.figure_to_bytes(fig, fmt)
+                st.session_state[f"{key}_ext"] = fmt
+            except Exception as exc:  # noqa: BLE001 - surfaced below
+                st.session_state.pop(f"{key}_bytes", None)
+                st.session_state[f"{key}_err"] = str(exc)
+
+        data = st.session_state.get(f"{key}_bytes")
+        if data is not None:
+            ext = st.session_state.get(f"{key}_ext", "png")
+            st.download_button(
+                f"Download .{ext}",
+                data,
+                file_name=f"{stem}.{ext}",
+                mime=_EXPORT_MIME.get(ext, "application/octet-stream"),
+                key=f"{key}_dl",
+                width="stretch",
+            )
+        if st.session_state.get(f"{key}_err"):
+            st.error(st.session_state[f"{key}_err"])
+
+
+def _plot_card(fig, *, key: str, stem: str, caption: str | None = None) -> None:
+    """Render a Plotly figure as a report card: the chart, an optional caption,
+    and an export popover beneath it."""
+    st.plotly_chart(fig, width="stretch", key=key)
+    if caption:
+        st.caption(caption)
+    _export_popover(fig, key=f"{key}_exp", stem=stem)
+
+
 # --------------------------------------------------------------------------- #
 # Small helpers
 # --------------------------------------------------------------------------- #
+def _render_card_grid(cards: list[tuple[str, Callable[[], None]]]) -> None:
+    """Lay out ``(title, body)`` cards two per row, each in a bordered container."""
+    for start in range(0, len(cards), 2):
+        cols = st.columns(2)
+        for col, (title, body) in zip(cols, cards[start : start + 2]):
+            with col, st.container(border=True):
+                st.markdown(f"**{title}**")
+                body()
+
+
 def _render_metrics(container, d: dict, level: int = 0) -> None:
     """Show a metrics dict: scalars as a two-column table, nested dicts recursively."""
     scalars = {k: v for k, v in d.items() if not isinstance(v, (dict, list))}
@@ -151,16 +230,7 @@ def _headline(
     have_spatial = coords is not None
 
     # Build the reference scaffold for the UMAP panel.
-    adata_sc = None
-    try:
-        adata_sc = _scaffold_sc(
-            str(args.scdata),
-            str(args.stdata),
-            str(args.output_dir),
-            _resolution(args.output_dir),
-        )
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"Scaffold build failed — UMAP unavailable: {exc}")
+    adata_sc = _load_scaffold(args, warn="Scaffold build failed — UMAP unavailable")
 
     have_umap = adata_sc is not None
     # Mirror render.render_headline_figure's panel logic so the confidence
@@ -228,6 +298,9 @@ def _headline(
         )
     with plot_slot:
         widgets.headline_plot(fig, key=f"{key_prefix}_headline")
+        _export_popover(
+            fig, key=f"{key_prefix}_headline_exp", stem=f"{key_prefix}_k{k:03d}"
+        )
 
     if coords is None:
         st.caption("ST data has no obsm['spatial'] — no spatial plot.")
@@ -301,22 +374,22 @@ def _ksweep_section(mapper: str, root: Path, ks_all: list[int]) -> None:
     with st.expander("Comparing K", expanded=False):
         c1, c2, c3 = st.columns(3)
         with c1:
-            st.plotly_chart(
+            _plot_card(
                 render.render_ksweep_reconstruction_figure(df),
-                width="stretch",
                 key=f"ks_recon_{mapper}",
+                stem=f"{mapper}_ksweep_reconstruction",
             )
         with c2:
-            st.plotly_chart(
+            _plot_card(
                 render.render_ksweep_spatial_figure(df),
-                width="stretch",
                 key=f"ks_spatial_{mapper}",
+                stem=f"{mapper}_ksweep_spatial",
             )
         with c3:
-            st.plotly_chart(
+            _plot_card(
                 render.render_ksweep_coherence_figure(df),
-                width="stretch",
                 key=f"ks_coherence_{mapper}",
+                stem=f"{mapper}_ksweep_coherence",
             )
 
         # Suggested "best" K per criterion; clicking sets the shared K slider.
@@ -398,30 +471,24 @@ def _report_dashboard(
     Plotly figure or a small metrics table (no matplotlib)."""
     P, hard, confidence = _load_soft(str(root), k)
 
-    adata_sc = None
-    try:
-        adata_sc = _scaffold_sc(
-            str(args.scdata),
-            str(args.stdata),
-            str(args.output_dir),
-            _resolution(args.output_dir),
-        )
-    except Exception:  # noqa: BLE001 - the fractions card is simply skipped
-        adata_sc = None
+    # The fractions card is simply skipped if the scaffold can't be built.
+    adata_sc = _load_scaffold(args)
 
     def _sharpness() -> None:
-        st.plotly_chart(
-            render.render_onehot_figure(P.max(axis=1)),
-            width="stretch",
-            key=f"card_sharp_{mapper}",
-        )
         summ = data_access.load_data_json(root, k, "onehot_summary_mapping.json")
+        caption = None
         if summ and summ.get("summary"):
             s = summ["summary"]
-            st.caption(
+            caption = (
                 f"Gini mean {s['gini_impurity']['mean']:.3f}  ·  "
                 f"entropy mean {s['entropy']['mean']:.3f}"
             )
+        _plot_card(
+            render.render_onehot_figure(P.max(axis=1)),
+            key=f"card_sharp_{mapper}",
+            stem=f"{mapper}_k{k:03d}_sharpness",
+            caption=caption,
+        )
 
     def _spatial_org() -> None:
         metrics = data_access.load_data_json(root, k, "topology_metrics.json")
@@ -453,10 +520,10 @@ def _report_dashboard(
         cards.append(
             (
                 "Cell- & Spot-State Fractions",
-                lambda: st.plotly_chart(
+                lambda: _plot_card(
                     render.render_fractions_figure(adata_sc, root, k, hard),
-                    width="stretch",
                     key=f"card_frac_{mapper}",
+                    stem=f"{mapper}_k{k:03d}_fractions",
                 ),
             )
         )
@@ -465,10 +532,10 @@ def _report_dashboard(
         cards.append(
             (
                 "Reconstruction Cosine Similarity",
-                lambda: st.plotly_chart(
+                lambda: _plot_card(
                     render.render_reconstruction_figure(cossim),
-                    width="stretch",
                     key=f"card_recon_{mapper}",
+                    stem=f"{mapper}_k{k:03d}_reconstruction",
                 ),
             )
         )
@@ -477,23 +544,17 @@ def _report_dashboard(
         cards.append(
             (
                 "Mapping Confidence — Per-Spot",
-                lambda: st.plotly_chart(
+                lambda: _plot_card(
                     render.render_confidence_figure(confidence),
-                    width="stretch",
                     key=f"card_conf_{mapper}",
+                    stem=f"{mapper}_k{k:03d}_confidence",
                 ),
             )
         )
     cards.append(("Spatial Organisation of Mapped Spots", _spatial_org))
     cards.append(("Modularity", _modularity))
 
-    # Two cards per row.
-    for start in range(0, len(cards), 2):
-        cols = st.columns(2)
-        for col, (title, body) in zip(cols, cards[start : start + 2]):
-            with col, st.container(border=True):
-                st.markdown(f"**{title}**")
-                body()
+    _render_card_grid(cards)
 
 
 def _compare_tab(mappers: list[str], args: argparse.Namespace, ctrl: _Controls) -> None:
@@ -527,16 +588,10 @@ def _compare_tab(mappers: list[str], args: argparse.Namespace, ctrl: _Controls) 
         st.info("ST data has no obsm['spatial'] — nothing to compare spatially.")
         return
 
-    adata_sc = None
-    try:
-        adata_sc = _scaffold_sc(
-            str(args.scdata),
-            str(args.stdata),
-            str(args.output_dir),
-            _resolution(args.output_dir),
-        )
-    except Exception as exc:  # noqa: BLE001 - fall back to spatial-only
-        st.warning(f"Scaffold build failed — reference UMAP unavailable: {exc}")
+    # Fall back to spatial-only if the reference UMAP can't be built.
+    adata_sc = _load_scaffold(
+        args, warn="Scaffold build failed — reference UMAP unavailable"
+    )
 
     # Load each selected method's hard assignment for this K (skip any missing K).
     hards: list[np.ndarray] = []
@@ -559,6 +614,7 @@ def _compare_tab(mappers: list[str], args: argparse.Namespace, ctrl: _Controls) 
         coords, hards, valid, k, adata_sc=adata_sc, root=ref_root
     )
     widgets.headline_plot(fig, key="cmp_headline")
+    _export_popover(fig, key="cmp_headline_exp", stem=f"compare_spatial_k{k:03d}")
 
     # Report sections below the plots — the same UI cards as a single method tab,
     # but with every selected method combined into one plot/table per section.
@@ -590,26 +646,28 @@ def _compare_sections(
         if fig is None:
             st.info("No reconstruction cosine-similarity data for these methods.")
         else:
-            st.plotly_chart(fig, width="stretch", key="cmp_sec_recon")
+            _plot_card(
+                fig, key="cmp_sec_recon", stem=f"compare_reconstruction_k{k:03d}"
+            )
 
     def _sharpness() -> None:
-        st.plotly_chart(
+        _plot_card(
             render.render_compare_box_figure(
                 maxprobs,
                 title="Per-spot max probability (1.0 = one-hot)",
                 ytitle="max probability",
             ),
-            width="stretch",
             key="cmp_sec_sharp",
+            stem=f"compare_sharpness_k{k:03d}",
         )
 
     def _fractions() -> None:
-        st.plotly_chart(
+        _plot_card(
             render.render_compare_fractions_figure(spot_fracs, k),
-            width="stretch",
             key="cmp_sec_frac",
+            stem=f"compare_fractions_k{k:03d}",
+            caption="Cell fractions are identical across methods (see a method tab).",
         )
-        st.caption("Cell fractions are identical across methods (see a method tab).")
 
     def _spatial_org() -> None:
         # Nested metric groups (drop the top-level scalars), methods as columns.
@@ -649,12 +707,7 @@ def _compare_sections(
     cards.append(("Spatial Organisation of Mapped Spots", _spatial_org))
     cards.append(("Modularity", _modularity))
 
-    for start in range(0, len(cards), 2):
-        row_cols = st.columns(2)
-        for col, (title, body) in zip(row_cols, cards[start : start + 2]):
-            with col, st.container(border=True):
-                st.markdown(f"**{title}**")
-                body()
+    _render_card_grid(cards)
 
 
 def _reference_tab(
@@ -685,19 +738,17 @@ def _reference_tab(
         return
     ref_root = data_access.run_root(args.output_dir, ref_mapper)
 
-    try:
-        adata_sc = _scaffold_sc(
-            str(args.scdata),
-            str(args.stdata),
-            str(args.output_dir),
-            _resolution(args.output_dir),
-        )
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"Scaffold build failed — reference view unavailable: {exc}")
+    adata_sc = _load_scaffold(
+        args, warn="Scaffold build failed — reference view unavailable"
+    )
+    if adata_sc is None:
         return
 
     fig_umaps = render.render_reference_umaps_figure(adata_sc, ref_root, ctrl.k)
     widgets.headline_plot(fig_umaps, key="ref_umaps")
+    _export_popover(
+        fig_umaps, key="ref_umaps_exp", stem=f"reference_umaps_k{ctrl.k:03d}"
+    )
     st.caption(
         f"K = {ctrl.k}. The over-clustering and its tree cut are shared across "
         f"methods (shown from **{ref_mapper}**)."
@@ -705,16 +756,21 @@ def _reference_tab(
 
     st.divider()
     with st.expander("Leiden Overclusters Merged per AIM State", expanded=True):
-        st.plotly_chart(
+        _plot_card(
             render.render_leiden_merge_figure(adata_sc, ref_root, ctrl.k),
-            width="stretch",
+            key="ref_leiden_merge",
+            stem=f"reference_leiden_merge_k{ctrl.k:03d}",
         )
     with st.expander("AIM-State Profiles", expanded=True):
         fig_prof = render.render_state_profiles_figure(adata_sc, ref_root, ctrl.k)
         if fig_prof is None:
             st.info("Too few shared genes to plot the state-profile heatmap.")
         else:
-            st.plotly_chart(fig_prof, width="stretch")
+            _plot_card(
+                fig_prof,
+                key="ref_profiles",
+                stem=f"reference_state_profiles_k{ctrl.k:03d}",
+            )
     with st.expander("Substate Merge Coherence", expanded=False):
         metrics = data_access.load_data_json(ref_root, ctrl.k, "biology_metrics.json")
         if not metrics:

@@ -1,8 +1,8 @@
-"""Per-spot mapping-confidence distribution for the analysis report.
+"""Per-spot mapping-confidence summary for the post-mapping analysis.
 
 Only produced when the mapper defined a confidence (``obs[OBS_MAPPING_CONFIDENCE]``,
 loaded by ``loading.py``); the learned and reference mappers define none, so the
-step is a no-op for them and the report simply omits the section.
+step is a no-op for them and the GUI simply omits the confidence view.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ import pandas as pd
 from anndata import AnnData
 
 from adata_schema import OBS_MAPPING_CONFIDENCE
-from plots import plot_confidence_distribution
 
 logger = logging.getLogger(__name__)
 
@@ -48,24 +47,3 @@ def analyse_spot_confidence(adata_st: AnnData, data_dir: Path) -> None:
     }
     with open(data_dir / "confidence_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
-
-
-def plot_spot_confidence(plots_dir: Path, data_dir: Path) -> None:
-    """Render the confidence histogram from the metrics on disk, if present.
-
-    Reads confidence_per_spot.csv and confidence_summary.json (written by
-    analyse_spot_confidence) from data_dir; a no-op when they are absent (the
-    mapper defined no confidence).
-    """
-    per_spot = data_dir / "confidence_per_spot.csv"
-    summary_path = data_dir / "confidence_summary.json"
-    if not per_spot.exists() or not summary_path.exists():
-        return
-
-    conf = pd.read_csv(per_spot)["confidence"].to_numpy()
-    with open(summary_path) as f:
-        summary = json.load(f)
-
-    plot_confidence_distribution(
-        conf, summary, plots_dir / "confidence_distribution.png"
-    )

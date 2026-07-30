@@ -1,16 +1,11 @@
 """Figure production for the GUI.
 
-Two kinds of figures:
-
-* The **spatial** plot is rendered live here (a small bespoke scatter) because the
-  confidence-threshold slider must recolour spots on every change -- spots below
-  the threshold are drawn grey.
-* Every **report section** figure is produced by the repository's *existing* plot
-  functions, called with data read straight off disk. Disk-only sections
-  (one-hotness / reconstruction / confidence) need just the K's ``analysis/data``
-  folder; scaffold sections (UMAPs / profiles / fractions / merge map) additionally
-  need the reference scaffold. Rendered PNGs are cached under
-  ``<output_dir>/.gui_cache/<mapper>/k_<kkk>/`` so re-viewing a K is instant.
+Every figure is an interactive Plotly object built here from data read straight
+off disk (each K's ``analysis/data`` folder) and, for the UMAP / profile /
+fractions / merge-map views, the reference scaffold. The headline UMAP(s) +
+spatial map share a single state legend and are recoloured client-side; the
+spatial scatter in particular is rebuilt here on every confidence-threshold
+change so spots below the threshold can be drawn grey.
 """
 
 from __future__ import annotations
@@ -18,77 +13,129 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-import matplotlib
+import numpy as np
+import plotly.graph_objects as go
+from anndata import AnnData
+from plotly.subplots import make_subplots
 
-matplotlib.use("Agg")  # headless: figures are streamed, never shown in a window
-
-import matplotlib.colors as mcolors  # noqa: E402
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-import plotly.graph_objects as go  # noqa: E402
-from anndata import AnnData  # noqa: E402
-from plotly.subplots import make_subplots  # noqa: E402
-
-from adata_schema import (  # noqa: E402
+from adata_schema import (
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_ALL_GENES,
     OBSM_UMAP,
     OBSM_UMAP_SHARED_GENES,
     UNS_SHARED_GENES,
 )
-from analysis.biology import plot_modularities  # noqa: E402
-from analysis.confidence import plot_spot_confidence  # noqa: E402
-from analysis.loading import (  # noqa: E402
+from analysis.loading import (
     infer_cell_to_state_cluster,
     load_leiden_to_state,
-    load_spot_to_state_mapping_soft_and_hard,
 )
-from analysis.onehot import plot_spot_to_state_one_hotness  # noqa: E402
-from analysis.reconstruction import plot_reconstruction  # noqa: E402
-from analysis.states import create_states_plots  # noqa: E402
-from analysis.utils import to_dense  # noqa: E402
-from plots import _build_state_palette  # noqa: E402
+from analysis.utils import to_dense
 
-from . import data_access  # noqa: E402
+from . import data_access
 
 logger = logging.getLogger(__name__)
 
 # Grey (as a CSS rgba string) for spots drawn below the confidence threshold.
 _GREY_RGBA = "rgba(184,184,184,0.9)"
 
-# Logical name -> filename produced by the reused plot functions.
-_DISK_PLOTS = {
-    "onehot_distribution": "onehot_distribution_mapping.png",
-    "onehot_thresholds": "onehot_thresholds_mapping.png",
-    "reconstruction": "cossim_boxplots.png",
-    "confidence": "confidence_distribution.png",
-}
-_SCAFFOLD_PLOTS = {
-    "umap_computed_state": "umap_computed_state.png",
-    "umap_grid": "umap_grid.png",
-    "profiles": "cell_state_profiles.png",
-    "fractions": "cell_state_fractions.png",
-    "leiden_merge": "leiden_merge_map.png",
-}
+# Matplotlib's tab20 / tab10 qualitative palettes as hex strings, inlined so the
+# GUI carries no matplotlib dependency. tab20 keys the per-state colours (state
+# id -> colour); tab10 distinguishes mappers in the Compare tab and the K-sweep
+# lines. Values match matplotlib exactly, so figures look identical to before.
+_TAB20 = [
+    "#1f77b4",
+    "#aec7e8",
+    "#ff7f0e",
+    "#ffbb78",
+    "#2ca02c",
+    "#98df8a",
+    "#d62728",
+    "#ff9896",
+    "#9467bd",
+    "#c5b0d5",
+    "#8c564b",
+    "#c49c94",
+    "#e377c2",
+    "#f7b6d2",
+    "#7f7f7f",
+    "#c7c7c7",
+    "#bcbd22",
+    "#dbdb8d",
+    "#17becf",
+    "#9edae5",
+]
+_TAB10 = [
+    "#1f77b4",
+    "#ff7f0e",
+    "#2ca02c",
+    "#d62728",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#7f7f7f",
+    "#bcbd22",
+    "#17becf",
+]
+
+# Shared Plotly look used by every figure: a white template, transparent
+# backgrounds so it blends with the app, and the app's sans-serif font.
+_FONT = dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13)
+# The horizontal state-legend strip shared by the headline / compare / reference
+# figures; each sets its own vertical ``y`` offset via ``{**_STATE_LEGEND, ...}``.
+_STATE_LEGEND = dict(
+    itemsizing="constant",
+    title="States",
+    orientation="h",
+    yanchor="bottom",
+    xanchor="left",
+    x=0,
+)
 
 
-def state_palette(k: int) -> dict[int, tuple]:
-    """tab20 palette keyed by state id, matching ``plots._build_state_palette``."""
-    cmap = plt.get_cmap("tab20")
-    return {s: cmap(s % 20) for s in range(k)}
+def _base_layout(
+    fig: go.Figure, *, height: int, font: dict = _FONT, **extra
+) -> go.Figure:
+    """Apply the shared template/background/font to ``fig`` (returns ``fig``).
+
+    Every other layout knob (legend, margin, title, axis titles, barmode, …) is
+    passed through ``extra`` unchanged.
+    """
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=font,
+        height=height,
+        **extra,
+    )
+    return fig
 
 
-def cache_plot_dir(output_dir: Path, mapper: str, k: int) -> Path:
-    d = Path(output_dir) / ".gui_cache" / mapper / f"k_{k:03d}"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def figure_to_bytes(fig: go.Figure, fmt: str = "png", *, scale: float = 2.0) -> bytes:
+    """Static-export a Plotly figure to PNG / SVG / PDF bytes via kaleido.
+
+    ``scale`` up-samples raster (png) output for crisp exports; it is ignored by
+    the vector formats. Raises ``RuntimeError`` with an install hint if kaleido
+    is missing. Note: the UMAP / spatial panels use WebGL (``Scattergl``) traces,
+    which kaleido rasterises inside svg/pdf — png is always faithful.
+    """
+    try:
+        return fig.to_image(format=fmt, scale=scale)
+    except Exception as exc:  # noqa: BLE001 - surfaced to the UI
+        raise RuntimeError(
+            f"Could not export as {fmt.upper()}: {exc}. "
+            "Static export needs the 'kaleido' package (pip install kaleido)."
+        ) from exc
 
 
-def _hex(rgba: tuple | None) -> str:
-    """A matplotlib RGBA tuple -> ``#rrggbb`` string (grey fallback for missing)."""
-    if rgba is None:
-        return "#b8b8b8"
-    return mcolors.to_hex(rgba, keep_alpha=False)
+def state_palette(k: int) -> dict[int, str]:
+    """tab20 palette keyed by state id, as ``#rrggbb`` hex strings."""
+    return {s: _TAB20[s % 20] for s in range(k)}
+
+
+def _hex(color: str | None) -> str:
+    """Pass a hex colour through, with a grey fallback for a missing (None) state."""
+    return color if color else "#b8b8b8"
 
 
 def _mod_suffix(mod: dict | None, key: str) -> str:
@@ -483,26 +530,12 @@ def render_headline_figure(
     # Keep the state legend as a fixed horizontal strip on top in every mode, so
     # it never jumps when the confidence colourbar appears on the right. The
     # ``y`` offset leaves a little vertical gap between the legend and the plots.
-    fig.update_layout(
-        # Clean, Streamlit-like look: white template, transparent backgrounds so
-        # it blends with the app, and the app's sans-serif font.
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13),
-        legend=dict(
-            itemsizing="constant",
-            title="States",
-            orientation="h",
-            yanchor="bottom",
-            y=1.12,
-            xanchor="left",
-            x=0,
-        ),
-        margin=dict(l=10, r=10, t=70, b=10),
+    return _base_layout(
+        fig,
         height=720,
+        legend={**_STATE_LEGEND, "y": 1.12},
+        margin=dict(l=10, r=10, t=70, b=10),
     )
-    return fig
 
 
 def render_compare_figure(
@@ -589,24 +622,12 @@ def render_compare_figure(
         )
 
     height = (umap_px if have_umap else 0) + spatial_px * n_spatial_rows + 60
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13),
-        legend=dict(
-            itemsizing="constant",
-            title="States",
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="left",
-            x=0,
-        ),
-        margin=dict(l=10, r=10, t=60, b=10),
+    return _base_layout(
+        fig,
         height=height,
+        legend={**_STATE_LEGEND, "y": 1.02},
+        margin=dict(l=10, r=10, t=60, b=10),
     )
-    return fig
 
 
 # --------------------------------------------------------------------------- #
@@ -614,7 +635,7 @@ def render_compare_figure(
 # --------------------------------------------------------------------------- #
 def _mapper_color(i: int) -> str:
     """Stable qualitative colour for the i-th mapper in a comparison."""
-    return _hex(plt.get_cmap("tab10")(i % 10))
+    return _TAB10[i % 10]
 
 
 def render_compare_reconstruction_figure(cossims: dict[str, dict]) -> go.Figure | None:
@@ -659,14 +680,12 @@ def render_compare_reconstruction_figure(cossims: dict[str, dict]) -> go.Figure 
                 row=1,
                 col=col,
             )
-    fig.update_layout(
-        boxmode="group",
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=_CARD_FONT,
-        margin=dict(l=10, r=10, t=30, b=52),
+    _base_layout(
+        fig,
         height=340,
+        font=_CARD_FONT,
+        boxmode="group",
+        margin=dict(l=10, r=10, t=30, b=52),
         legend=dict(orientation="h", yanchor="top", y=-0.18, x=0),
     )
     fig.update_yaxes(title_text="cosine similarity", row=1, col=1)
@@ -695,15 +714,13 @@ def render_compare_box_figure(
                 showlegend=False,
             )
         )
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+    _base_layout(
+        fig,
+        height=height,
         font=_CARD_FONT,
         title=dict(text=title, font=dict(size=13)),
         yaxis_title=ytitle,
         margin=dict(l=10, r=10, t=40, b=10),
-        height=height,
     )
     if yrange is not None:
         fig.update_yaxes(range=list(yrange))
@@ -721,16 +738,14 @@ def render_compare_fractions_figure(
     fig = go.Figure()
     for i, (m, fr) in enumerate(spot_fracs.items()):
         fig.add_trace(go.Bar(name=m, x=x, y=fr, marker_color=_mapper_color(i)))
-    fig.update_layout(
-        barmode="group",
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+    _base_layout(
+        fig,
+        height=height,
         font=_CARD_FONT,
+        barmode="group",
         title=dict(text="Spot-state fractions", font=dict(size=13)),
         yaxis_title="fraction",
         margin=dict(l=10, r=10, t=40, b=40),
-        height=height,
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
     )
     fig.update_yaxes(tickformat=".0%")
@@ -760,7 +775,6 @@ def _add_leiden_umap_traces(
     """
     coords = np.asarray(adata_sc.obsm[OBSM_UMAP])
     leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
-    cmap = plt.get_cmap("tab20")
     for i, lc in enumerate(sorted(np.unique(leiden).tolist())):
         mask = leiden == lc
         s = int(leiden_to_state[lc])
@@ -769,7 +783,7 @@ def _add_leiden_umap_traces(
                 x=coords[mask, 0],
                 y=coords[mask, 1],
                 mode="markers",
-                marker=dict(size=dot_size, color=_hex(cmap(i % 20)), opacity=1.0),
+                marker=dict(size=dot_size, color=_TAB20[i % 20], opacity=1.0),
                 name=f"Leiden {lc}",
                 legendgroup=f"state{s}",
                 showlegend=False,
@@ -856,31 +870,18 @@ def render_reference_umaps_figure(
             umap_key=OBSM_UMAP_SHARED_GENES,
         )
 
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13),
-        legend=dict(
-            itemsizing="constant",
-            title="States",
-            orientation="h",
-            yanchor="bottom",
-            y=1.12,
-            xanchor="left",
-            x=0,
-        ),
-        margin=dict(l=10, r=10, t=70, b=10),
+    return _base_layout(
+        fig,
         height=520,
+        legend={**_STATE_LEGEND, "y": 1.12},
+        margin=dict(l=10, r=10, t=70, b=10),
     )
-    return fig
 
 
 def render_leiden_merge_figure(adata_sc: AnnData, root: Path, k: int) -> go.Figure:
     """Horizontal stacked bars: one bar per computed state, segmented by the
     Leiden subclusters merged into it (segment width ∝ cell count, labelled with
-    the Leiden id). Interactive Plotly port of ``plots.plot_leiden_merge_map``.
-    """
+    the Leiden id)."""
     leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
     infer_cell_to_state_cluster(adata_sc, leiden_to_state)
     leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
@@ -922,19 +923,16 @@ def render_leiden_merge_figure(adata_sc: AnnData, root: Path, k: int) -> go.Figu
             )
 
     n_states = len(states)
-    fig.update_layout(
+    _base_layout(
+        fig,
+        height=max(240, n_states * 46 + 120),
         barmode="stack",
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13),
         title="Leiden overclusters merged per computed AIM state",
         xaxis_title="cells   (segment width ∝ Leiden subcluster size)",
         margin=dict(l=10, r=10, t=50, b=40),
-        height=max(240, n_states * 46 + 120),
         bargap=0.35,
     )
-    # State 0 on top, matching the matplotlib version's inverted y-axis.
+    # State 0 on top (inverted y-axis).
     fig.update_yaxes(
         categoryorder="array", categoryarray=[_row(s) for s in reversed(states)]
     )
@@ -945,9 +943,8 @@ def render_state_profiles_figure(
     adata_sc: AnnData, root: Path, k: int
 ) -> go.Figure | None:
     """Heatmap of per-state mean expression over the shared genes (sorted by SC
-    variance, z-scored per gene across states). Interactive Plotly port of
-    ``plots.plot_state_profiles`` (the heatmap panel). Returns ``None`` when too
-    few shared genes are present to plot.
+    variance, z-scored per gene across states). Returns ``None`` when too few
+    shared genes are present to plot.
     """
     leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
     infer_cell_to_state_cluster(adata_sc, leiden_to_state)
@@ -981,16 +978,13 @@ def render_state_profiles_figure(
         )
     )
     n_states = len(unique_states)
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13),
+    _base_layout(
+        fig,
+        height=max(240, n_states * 42 + 160),
         title="Cell-state profiles — shared genes (z-scored per gene across states)",
         xaxis_title="Gene  (sorted by SC variance)",
         yaxis_title="Computed cell state",
         margin=dict(l=10, r=10, t=50, b=80),
-        height=max(240, n_states * 42 + 160),
     )
     # State 0 on top.
     fig.update_yaxes(autorange="reversed")
@@ -1007,16 +1001,8 @@ _SPOT_COLOR = "#f58518"  # spot / hard
 
 def _card_layout(fig: go.Figure, *, height: int, **extra) -> go.Figure:
     """Apply the shared compact look used by every report-dashboard card."""
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=_CARD_FONT,
-        margin=dict(l=10, r=10, t=30, b=10),
-        height=height,
-        **extra,
-    )
-    return fig
+    extra.setdefault("margin", dict(l=10, r=10, t=30, b=10))
+    return _base_layout(fig, height=height, font=_CARD_FONT, **extra)
 
 
 def _ksweep_line_figure(
@@ -1047,19 +1033,16 @@ def _ksweep_line_figure(
                     hovertemplate=f"{label}<br>K %{{x}}<br>%{{y:.3f}}<extra></extra>",
                 )
             )
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+    return _base_layout(
+        fig,
+        height=height,
         font=_CARD_FONT,
         title=dict(text=title, font=dict(size=13)),
         xaxis_title="K",
         yaxis_title=ytitle,
         margin=dict(l=10, r=10, t=40, b=52),
-        height=height,
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
     )
-    return fig
 
 
 def render_ksweep_reconstruction_figure(df) -> go.Figure:
@@ -1109,10 +1092,9 @@ def render_ksweep_spatial_figure(df, *, height: int = 300) -> go.Figure:
                 hovertemplate="local purity z<br>K %{x}<br>%{y:.3f}<extra></extra>",
             )
         )
-    fig.update_layout(
-        template="plotly_white",
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
+    return _base_layout(
+        fig,
+        height=height,
         font=_CARD_FONT,
         title=dict(text="Spatial organisation", font=dict(size=13)),
         xaxis_title="K",
@@ -1128,10 +1110,8 @@ def render_ksweep_spatial_figure(df, *, height: int = 300) -> go.Figure:
             showgrid=False,
         ),
         margin=dict(l=10, r=10, t=40, b=52),
-        height=height,
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
     )
-    return fig
 
 
 def render_ksweep_coherence_figure(df) -> go.Figure:
@@ -1156,8 +1136,7 @@ def render_fractions_figure(
     """Cell fraction (reference states) and spot fraction (this mapper's
     assignment) per computed state, as one grouped-bar plot sharing a single
     y-axis. Both bars use the same per-state palette as the UMAP/spatial plots;
-    the spot bars are hatched to tell them apart. Plotly port of
-    ``plots.plot_state_fractions``."""
+    the spot bars are hatched to tell them apart."""
     leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
     infer_cell_to_state_cluster(adata_sc, leiden_to_state)
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
@@ -1207,8 +1186,8 @@ def render_fractions_figure(
 
 def render_reconstruction_figure(cossim: dict[str, dict]) -> go.Figure | None:
     """Two-panel (gene-wise, spot-wise) box plot of reconstruction cosine
-    similarity for the soft/hard x raw/norm combos. Plotly port of
-    ``plots.plot_cossim_boxplots``. Returns ``None`` if no combos are present.
+    similarity for the soft/hard x raw/norm combos. Returns ``None`` if no combos
+    are present.
 
     ``cossim`` maps each label to ``{"per_gene": [...], "per_spot": [...]}``.
     """
@@ -1244,8 +1223,7 @@ def render_reconstruction_figure(cossim: dict[str, dict]) -> go.Figure | None:
 
 def render_onehot_figure(max_prob: np.ndarray) -> go.Figure:
     """Histogram of per-spot max probability (1.0 = fully one-hot), with mean and
-    median markers. Plotly port of ``plots.plot_onehot_distribution`` (the
-    histogram panel only)."""
+    median markers."""
     max_prob = np.asarray(max_prob, dtype=float)
     mean, median = float(np.mean(max_prob)), float(np.median(max_prob))
 
@@ -1276,7 +1254,7 @@ def render_onehot_figure(max_prob: np.ndarray) -> go.Figure:
 
 def render_confidence_figure(confidence: np.ndarray) -> go.Figure:
     """Histogram of per-spot assignment confidence in [0, 1], with mean and
-    median markers. Plotly port of ``plots.plot_confidence_distribution``."""
+    median markers."""
     confidence = np.asarray(confidence, dtype=float)
     mean, median = float(np.mean(confidence)), float(np.median(confidence))
 
@@ -1310,60 +1288,3 @@ def render_confidence_figure(confidence: np.ndarray) -> go.Figure:
     )
     fig.update_xaxes(range=[0.0, 1.0])
     return fig
-
-
-def ensure_disk_plots(
-    output_dir: Path, mapper: str, root: Path, k: int
-) -> dict[str, Path]:
-    """Render (if not cached) the disk-only report figures for one K; return the
-    logical-name -> path map of those that exist."""
-    plots_dir = cache_plot_dir(output_dir, mapper, k)
-    ddir = data_access.data_dir(root, k)
-
-    if not all(
-        (plots_dir / fn).exists() for fn in ("onehot_distribution_mapping.png",)
-    ):
-        plot_spot_to_state_one_hotness(plots_dir, ddir)
-    if not (plots_dir / "cossim_boxplots.png").exists():
-        plot_reconstruction(plots_dir, ddir)
-    # No-op if the mapper wrote no confidence.
-    if not (plots_dir / "confidence_distribution.png").exists():
-        plot_spot_confidence(plots_dir, ddir)
-
-    return {
-        name: plots_dir / fn
-        for name, fn in _DISK_PLOTS.items()
-        if (plots_dir / fn).exists()
-    }
-
-
-def ensure_scaffold_plots(
-    adata_sc: AnnData,
-    adata_st: AnnData,
-    output_dir: Path,
-    mapper: str,
-    root: Path,
-    k: int,
-) -> dict[str, Path]:
-    """Render (if not cached) the scaffold-dependent report figures for one K.
-
-    Sets this K's state cut on the scaffold and loads P onto the ST object, then
-    calls the existing ``create_states_plots`` and ``plot_modularities`` (which
-    emit the two UMAP figures)."""
-    plots_dir = cache_plot_dir(output_dir, mapper, k)
-    ddir = data_access.data_dir(root, k)
-
-    if not all((plots_dir / fn).exists() for fn in _SCAFFOLD_PLOTS.values()):
-        leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-        infer_cell_to_state_cluster(adata_sc, leiden_to_state)
-        load_spot_to_state_mapping_soft_and_hard(data_access.k_dir(root, k), adata_st)
-        palette = _build_state_palette(adata_sc)
-
-        create_states_plots(adata_sc, adata_st, plots_dir, state_palette=palette)
-        plot_modularities(adata_sc, plots_dir, ddir, state_palette=palette)
-
-    return {
-        name: plots_dir / fn
-        for name, fn in _SCAFFOLD_PLOTS.items()
-        if (plots_dir / fn).exists()
-    }

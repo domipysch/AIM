@@ -1,5 +1,5 @@
 """Cross-K comparison: gather each K's key analysis metrics from its per-K
-``analysis/data`` outputs into one table and render a summary figure over the sweep.
+``analysis/data`` outputs into one table (``k_comparison.csv``) at the run root.
 
 Reads the files each K's post-mapping analysis already writes (``cossim_summary.csv``,
 ``topology_metrics.json``, ``modularity_metrics.json``), so it runs after the K-loop
@@ -14,8 +14,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-from plots import plot_ksweep_comparison
 
 logger = logging.getLogger(__name__)
 
@@ -101,11 +99,11 @@ def collect_k_metrics(output_folder: Path, ks: list[int]) -> pd.DataFrame:
 
 
 def compare_k_runs(output_folder: Path, ks: list[int]) -> None:
-    """Write ``k_comparison.csv`` and ``k_comparison.png`` at the run root, comparing
-    the swept K-runs on reconstruction cosine similarity, spatial organisation, and
-    mapping modularity."""
+    """Write ``k_comparison.csv`` at the run root: the swept K-runs' reconstruction
+    cosine similarity, spatial organisation, and mapping modularity gathered into
+    one table (the GUI renders the comparison plots from it on demand)."""
     output_folder = Path(output_folder)
     df = collect_k_metrics(output_folder, ks)
-    df.to_csv(output_folder / "k_comparison.csv", index=False)
-    plot_ksweep_comparison(df, output_folder / "k_comparison.png")
-    logger.info("K-sweep comparison written to %s", output_folder / "k_comparison.png")
+    csv_path = output_folder / "k_comparison.csv"
+    df.to_csv(csv_path, index=False)
+    logger.info("K-sweep comparison written to %s", csv_path)

@@ -17,9 +17,9 @@ src/
 │   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest / nearest_scaled / nearest_euclidean / nearest_euclidean_scaled / majority_vote / majority_vote_euclidean / learned)
 │   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
 │   └── sweep.py                 #   the K-sweep orchestration
-├── analysis/                    # Post-mapping analysis: orchestration + loaders + typst PDF report
-├── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
-└── plots/                       # Matplotlib figure generation shared across the analyses
+├── analysis/                    # Post-mapping analysis: orchestration + loaders (writes metrics only, no figures)
+└── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
+gui/                             # Interactive Streamlit results explorer — the sole visualization layer (Plotly + kaleido export)
 reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 └── run_reference_aligner_all_pairs.py  # Batch driver for the baselines
 data_preparation/                # Dataset utilities (validate, convert, split, …)
@@ -231,8 +231,9 @@ Writes to `output_dir/`:
     reference aligners).
   - `spot_to_state_mapping.csv` — `P` as CSV (tiny values zeroed, rounded) for eyeballing.
   - `leiden_to_state.csv` — the subcluster→state tree cut (`labels_k`).
-  - `analysis/` — the post-mapping analysis for that `K`: `report.pdf` (typst) plus
-    `plots/` and `data/`. The post-mapping analysis runs for every `K`.
+  - `analysis/data/` — the post-mapping analysis metrics for that `K` (machine-readable
+    JSON/CSV only; no figures or PDF). Runs for every `K`; the interactive GUI
+    (`python -m gui`) renders all plots on demand from these metrics.
 
 **Example with sample dataset:**
 ```bash

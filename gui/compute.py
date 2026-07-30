@@ -1,10 +1,11 @@
 """Drive an AIM sweep for one mapper from the GUI.
 
-Runs ``aim.run`` in-process (the same call ``main.py`` makes, but with
-``generate_pdf=False`` so the sweep is fast -- the GUI renders the report
-sections itself). Each mapper writes to its own run root ``<output_dir>/<mapper>/``
-so several mappers coexist. The sweep runs on a background thread; the UI polls
-the number of finished ``k_<kkk>/`` folders for a progress bar.
+Runs ``aim.run`` in-process (the same call ``main.py`` makes). The sweep only
+writes machine-readable metrics per K -- no figures -- and the GUI renders every
+plot on demand from them. Each mapper writes to its own run root
+``<output_dir>/<mapper>/`` so several mappers coexist. The sweep runs on a
+background thread; the UI polls the number of finished ``k_<kkk>/`` folders for a
+progress bar.
 """
 
 from __future__ import annotations
@@ -75,7 +76,6 @@ class MapperRun:
                 st_path=self.st_path,
                 output_folder=self.root,
                 mapper=cfg.build_mapper(),
-                generate_pdf=False,
                 leiden_resolution=cfg.leiden_resolution,
                 k_min=self.k_min,
                 k_max=self.k_max,

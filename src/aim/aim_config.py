@@ -18,12 +18,12 @@ from .mapping import (
 # In-process mapping strategies keyed by CLI name.
 _MAPPERS: dict[str, type[SpotStateMapper]] = {
     NearestMapper.name: NearestMapper,
-    NearestScaledMapper.name: NearestScaledMapper,
-    NearestEuclideanMapper.name: NearestEuclideanMapper,
-    NearestEuclideanScaledMapper.name: NearestEuclideanScaledMapper,
-    LearnedMapper.name: LearnedMapper,
+    # NearestScaledMapper.name: NearestScaledMapper,
+    # NearestEuclideanMapper.name: NearestEuclideanMapper,
+    # NearestEuclideanScaledMapper.name: NearestEuclideanScaledMapper,
+    # LearnedMapper.name: LearnedMapper,
     MajorityVoteMapper.name: MajorityVoteMapper,
-    MajorityVoteEuclideanMapper.name: MajorityVoteEuclideanMapper,
+    # MajorityVoteEuclideanMapper.name: MajorityVoteEuclideanMapper,
 }
 # External reference aligners, all served by ReferenceMapper and selected by name.
 _REFERENCE_METHODS = ("tangram", "tacco", "dot")

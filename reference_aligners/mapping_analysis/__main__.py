@@ -51,12 +51,6 @@ if __name__ == "__main__":
         default="cellType",
         help="obs column in sc data with the same values as the mapping's var_names",
     )
-    parser.add_argument(
-        "--top_n_markers",
-        type=int,
-        default=10,
-        help="Marker genes per cell type (union) shown in the centroid z-score heatmap",
-    )
     args = parser.parse_args()
 
     analyze_mapping(
@@ -64,5 +58,4 @@ if __name__ == "__main__":
         args.stdata,
         args.mapping_folder,
         cell_type_key=args.cell_type_key,
-        top_n_markers=args.top_n_markers,
     )

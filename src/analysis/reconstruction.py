@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -25,8 +24,6 @@ from metrics import (
     compute_and_save_cossim,
     predict_expression,
 )
-from metrics.cossim import GENE_JSON, SPOT_JSON
-from plots import plot_cossim_boxplots
 
 from .utils import to_dense
 
@@ -102,31 +99,3 @@ def analyse_reconstruction(
         }
 
     pd.DataFrame(cossim_summary).T.to_csv(output_data_dir / "cossim_summary.csv")
-
-
-def plot_reconstruction(
-    output_plots_dir: Path,
-    output_data_dir: Path,
-) -> None:
-    """Render the reconstruction cosine-similarity figure from the metrics on disk.
-
-    Reads the per-combo cossim JSONs (written by analyse_reconstruction) from
-    output_data_dir/cossim, and writes cossim_boxplots.png under output_plots_dir.
-    """
-
-    cossim_dir = output_data_dir / "cossim"
-    labels = ["soft-raw", "hard-raw", "soft-norm", "hard-norm"]
-    cossim_results: dict[str, CossimResult] = {}
-    for label in labels:
-        suffix = f"-{label}"
-        gene_path = cossim_dir / GENE_JSON.format(suffix=suffix)
-        spot_path = cossim_dir / SPOT_JSON.format(suffix=suffix)
-        if not (gene_path.exists() and spot_path.exists()):
-            continue
-        with open(gene_path) as f:
-            per_gene = json.load(f)["values"]
-        with open(spot_path) as f:
-            per_spot = json.load(f)["values"]
-        cossim_results[label] = CossimResult(per_gene=per_gene, per_spot=per_spot)
-
-    plot_cossim_boxplots(cossim_results, output_plots_dir / "cossim_boxplots.png")

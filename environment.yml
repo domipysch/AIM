@@ -12,17 +12,20 @@ dependencies:
   - anndata==0.12.7
   - pytorch==2.9.1
   - pytorch_geometric==2.7.0
+  # matplotlib/seaborn are no longer used by the core pipeline (all figures are
+  # now interactive Plotly in the GUI); they remain only for the standalone
+  # data_preparation / 00_Playground scripts.
   - matplotlib==3.9.2
   - scanpy==1.11.5
   - pip:
     - scvi-tools
     - igraph
     - leidenalg
-    - typst
     - squidpy
     - seaborn
     - streamlit
     - plotly
+    - kaleido  # static PNG/SVG/PDF export of the GUI's Plotly figures
   # dev
   - mypy==1.19.1
   - black==26.1.0

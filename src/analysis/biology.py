@@ -17,7 +17,6 @@ from adata_schema import (
     OBS_MAPPING_HARD,
     OBSP_CONNECTIVITIES_SHARED_GENES,
     OBSP_ST_EXPR_CONNECTIVITIES,
-    UNS_LEIDEN_RESOLUTION_ALL_GENES,
     UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM,
     UNS_MODULARITY_SHARED_LEIDEN,
 )
@@ -26,7 +25,6 @@ from metrics.biology import (
     leiden_state_groups,
     compute_modularity,
 )
-from plots import plot_umap_comparison, plot_umap_grid
 
 logger = logging.getLogger(__name__)
 
@@ -212,39 +210,3 @@ def analyse_modularities(
             f,
             indent=4,
         )
-
-
-def plot_modularities(
-    adata_sc: AnnData,
-    output_plots_dir: Path,
-    output_data_dir: Path,
-    state_palette: dict[int, tuple] | None = None,
-):
-    """Render the computed-state UMAP figures from the metrics on disk.
-
-    Reads modularity_metrics.json (written by analyse_modularities) from
-    output_data_dir, and writes umap_computed_state.png / umap_grid.png under
-    output_plots_dir.
-
-    Requires: adata_sc.obs[OBS_COMPUTED_STATE],
-        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES].
-    """
-
-    with open(output_data_dir / "modularity_metrics.json") as f:
-        modularity = json.load(f)
-
-    plot_umap_comparison(
-        adata_sc,
-        panels=[(OBS_COMPUTED_STATE, "Computed cell-state assignment")],
-        output_path=output_plots_dir / "umap_computed_state.png",
-        state_palette=state_palette,
-    )
-
-    plot_umap_grid(
-        adata_sc,
-        output_path=output_plots_dir / "umap_grid.png",
-        leiden_resolution=float(adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES]),
-        state_palette=state_palette,
-        modularity_all=modularity["modularity_all"],
-        modularity_shared=modularity["modularity_shared"],
-    )
