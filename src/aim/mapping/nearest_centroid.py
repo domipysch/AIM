@@ -7,11 +7,11 @@ from .base import SpotStateMapper
 from .confidence import top_margin_confidence
 
 
-class NearestMapper(SpotStateMapper):
+class NearestCentroidMapper(SpotStateMapper):
     """Zero-parameter nearest-centroid mapper (one-hot P)."""
 
     eps: float = 1e-8
-    name = "nearest"
+    name = "nearest_centroid"
 
     def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor]:
         """Assign each spot to its most cosine-similar state centroid.

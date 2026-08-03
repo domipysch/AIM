@@ -21,6 +21,8 @@ from plotly.subplots import make_subplots
 from adata_schema import (
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_ALL_GENES,
+    OBSM_PCA,
+    OBSM_PCA_SHARED_GENES,
     OBSM_UMAP,
     OBSM_UMAP_SHARED_GENES,
     UNS_SHARED_GENES,
@@ -203,6 +205,101 @@ def _style_scatter_axes(
     fig.update_yaxes(**ykw)
 
 
+# --- EXPERIMENTAL: per-state centroid markers on the UMAP panels --------------
+# Hand-set switch (see the question in the session that added this). When True,
+# each UMAP panel gets one diamond marker per state at the state's *expression
+# centroid*, projected into the displayed embedding.
+SHOW_STATE_CENTROIDS: bool = True
+
+# Each UMAP embedding paired with the PCA representation it was trained on, so a
+# centroid can be projected in the same space UMAP's neighbor graph used.
+_UMAP_TO_PCA: dict[str, str] = {
+    OBSM_UMAP: OBSM_PCA,
+    OBSM_UMAP_SHARED_GENES: OBSM_PCA_SHARED_GENES,
+}
+
+
+def _project_state_centroids(
+    coords: np.ndarray,
+    rep: np.ndarray,
+    states: np.ndarray,
+    *,
+    n_neighbors: int = 15,
+) -> dict[int, tuple[float, float]]:
+    """Locate each state's expression centroid within the displayed UMAP.
+
+    ``sc.tl.umap`` discards the fitted reducer, so there is no exact
+    ``transform`` for a fresh point. Instead the centroid is taken in ``rep``
+    (the PCA space the embedding was trained on) -- where, PCA being linear, the
+    mean of a state's cells equals the projection of that state's gene-space
+    expression centroid -- and then placed in the embedding by averaging the
+    UMAP coordinates of its ``n_neighbors`` nearest cells in ``rep``. This is a
+    cheap, deterministic stand-in for ``umap.transform`` that, unlike refitting,
+    lands the centroid in the *same* embedding the cells are plotted in.
+
+    Returns ``{state: (umap_x, umap_y)}``.
+    """
+    n = min(n_neighbors, rep.shape[0])
+    out: dict[int, tuple[float, float]] = {}
+    for state in sorted(np.unique(states).tolist()):
+        centroid = rep[states == state].mean(axis=0)
+        d2 = np.sum((rep - centroid) ** 2, axis=1)
+        nn = np.argpartition(d2, n - 1)[:n]  # n nearest cells in PCA space
+        out[int(state)] = (float(coords[nn, 0].mean()), float(coords[nn, 1].mean()))
+    return out
+
+
+def _add_state_centroid_markers(
+    fig: go.Figure,
+    adata_sc: AnnData,
+    coords: np.ndarray,
+    states: np.ndarray,
+    umap_key: str,
+    *,
+    row: int,
+    col: int,
+    palette: dict[int, tuple],
+    dot_size: float,
+) -> None:
+    """Overlay one diamond per state at its projected expression centroid.
+
+    Each marker shares the state's ``legendgroup`` (so the existing legend
+    toggles it with its cells) and carries no legend entry of its own. Silently
+    skips if the matching PCA representation is absent from the scaffold.
+    """
+    pca_key = _UMAP_TO_PCA.get(umap_key)
+    if pca_key is None or pca_key not in adata_sc.obsm:
+        logger.warning(
+            "SHOW_STATE_CENTROIDS: %s missing from scaffold; skipping centroids "
+            "for %s.",
+            pca_key,
+            umap_key,
+        )
+        return
+    rep = np.asarray(adata_sc.obsm[pca_key])
+    for state, (cx, cy) in _project_state_centroids(coords, rep, states).items():
+        fig.add_trace(
+            go.Scattergl(
+                x=[cx],
+                y=[cy],
+                mode="markers",
+                marker=dict(
+                    size=dot_size * 3.0 + 6.0,
+                    color=_hex(palette.get(state)),
+                    symbol="diamond",
+                    line=dict(width=1.5, color="black"),
+                    opacity=1.0,
+                ),
+                name=f"State {state} centroid",
+                legendgroup=f"state{state}",
+                showlegend=False,
+                hovertemplate=f"State {state} centroid<extra></extra>",
+            ),
+            row=row,
+            col=col,
+        )
+
+
 def _add_umap_traces(
     fig: go.Figure,
     adata_sc: AnnData,
@@ -268,6 +365,19 @@ def _add_umap_traces(
         equal_aspect=equal_aspect,
         hide_ticks=True,
     )
+
+    if SHOW_STATE_CENTROIDS:
+        _add_state_centroid_markers(
+            fig,
+            adata_sc,
+            coords,
+            states,
+            umap_key,
+            row=row,
+            col=col,
+            palette=palette,
+            dot_size=dot_size,
+        )
 
 
 def _pin_spatial_axes(

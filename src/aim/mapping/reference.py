@@ -25,6 +25,7 @@ _ALIGNERS = {
     "tangram": ("tangram_env", "reference_aligners.run_tangram"),
     "tacco": ("tacco_env", "reference_aligners.run_tacco"),
     "dot": ("dot_env", "reference_aligners.run_dot"),
+    "spann": ("spann_env", "reference_aligners.run_spann"),
 }
 
 # src/aim/mapping/reference.py -> repo root (parents: mapping, aim, src, root)
@@ -102,8 +103,8 @@ class ReferenceMapper(SpotStateMapper):
             var=pd.DataFrame(index=shared),
         ).write_h5ad(self._sc_path)
 
-        # Carry spatial coordinates through: spatially-aware aligners (DOT) need
-        # them; the others simply ignore the extra obsm entry.
+        # Carry spatial coordinates through: spatially-aware aligners (DOT, SPANN)
+        # need them; the others simply ignore the extra obsm entry.
         st_obsm = {}
         if OBSM_SPATIAL in adata_st.obsm:
             st_obsm[OBSM_SPATIAL] = np.asarray(adata_st.obsm[OBSM_SPATIAL])

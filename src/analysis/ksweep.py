@@ -76,7 +76,7 @@ def collect_k_metrics(output_folder: Path, ks: list[int]) -> pd.DataFrame:
         modularity = _load_json(data_dir / "modularity_metrics.json")
         mod_shared = modularity.get("modularity_shared", np.nan)
 
-        # Present only for mappers that define a confidence (nearest*/majority_vote*);
+        # Present only for mappers that define a confidence (nearest / wann);
         # absent -> NaN -> the curve simply does not appear for this run.
         confidence = _load_json(data_dir / "confidence_summary.json")
         mean_conf = confidence.get("mean", np.nan)

@@ -1,8 +1,8 @@
 """Per-spot mapping-confidence summary for the post-mapping analysis.
 
 Only produced when the mapper defined a confidence (``obs[OBS_MAPPING_CONFIDENCE]``,
-loaded by ``loading.py``); the learned and reference mappers define none, so the
-step is a no-op for them and the GUI simply omits the confidence view.
+loaded by ``loading.py``); the reference mappers define none, so the step is a
+no-op for them and the GUI simply omits the confidence view.
 """
 
 from __future__ import annotations

@@ -88,6 +88,21 @@ def _get_align_fn(aligner: str) -> Callable:
 
         return _align
 
+    if aligner == "spann":
+        from reference_aligners.run_spann import spann_align_data
+
+        def _align(
+            sc_path: Path, st_path: Path, ct_key: str, output_folder: Path
+        ) -> None:
+            spann_align_data(
+                sc_path=sc_path,
+                st_path=st_path,
+                cell_type_key=ct_key,
+                output_folder=output_folder,
+            )
+
+        return _align
+
     raise ValueError(f"Unknown aligner: {aligner!r}")
 
 
@@ -98,7 +113,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--aligner",
-        choices=["tangram", "tacco", "dot"],
+        choices=["tangram", "tacco", "dot", "spann"],
         required=True,
         help="Which aligner to run. Activate the matching conda env before running",
     )

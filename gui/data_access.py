@@ -71,7 +71,7 @@ def load_soft(root: Path, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | 
 
     ``P`` is the S x K soft matrix, ``hard`` its per-spot argmax, and
     ``confidence`` the per-spot value in [0, 1] or ``None`` when the mapper wrote
-    none (learned / tangram / tacco / dot).
+    none (tangram / tacco / dot / spann).
     """
     path = k_dir(root, k) / "spot_to_state_mapping_soft.h5ad"
     if not path.exists():

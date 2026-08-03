@@ -1,8 +1,8 @@
 """Per-spot mapping confidence in [0, 1]: how decisively each spot was assigned.
 
 Confidence is optional — a mapper returns ``None`` alongside its P when it does
-not define one (the ``learned`` and external ``reference`` mappers). Where a
-mapper does define it, higher means a more decisive assignment.
+not define one (the external ``reference`` mappers). Where a mapper does define
+it, higher means a more decisive assignment.
 """
 
 import math

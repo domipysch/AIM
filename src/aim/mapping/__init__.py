@@ -1,24 +1,14 @@
-"""Spot->state mapping: the ``SpotStateMapper`` API and its ``NearestMapper`` and
-``LearnedMapper`` implementations."""
+"""Spot->state mapping: the ``SpotStateMapper`` API and its ``NearestCentroidMapper``,
+``WANNMapper``, and ``ReferenceMapper`` implementations."""
 
 from .base import SpotStateMapper
-from .nearest import NearestMapper
-from .nearest_scaled import NearestScaledMapper
-from .nearest_euclidean import NearestEuclideanMapper
-from .nearest_euclidean_scaled import NearestEuclideanScaledMapper
-from .learned import LearnedMapper
-from .majority_vote import MajorityVoteMapper
-from .majority_vote_euclidean import MajorityVoteEuclideanMapper
+from .nearest_centroid import NearestCentroidMapper
+from .wann import WANNMapper
 from .reference import ReferenceMapper
 
 __all__ = [
     "SpotStateMapper",
-    "NearestMapper",
-    "NearestScaledMapper",
-    "NearestEuclideanMapper",
-    "NearestEuclideanScaledMapper",
-    "LearnedMapper",
-    "MajorityVoteMapper",
-    "MajorityVoteEuclideanMapper",
+    "NearestCentroidMapper",
+    "WANNMapper",
     "ReferenceMapper",
 ]

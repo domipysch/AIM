@@ -47,8 +47,6 @@ UNS_LEIDEN_EXPR_SUMS_SHARED_GENES = (
 UNS_LEIDEN_CENTROIDS_SHARED_GENES = "leiden_centroids_shared"  # (L x G_shared) — mean raw expression per cluster (all-zero rows set to 1e-6)
 UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM = "leiden_expr_sums_shared_norm"  # (L x G_shared) — summed lognorm expression per cluster
 UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM = "leiden_centroids_shared_norm"  # (L x G_shared) — mean lognorm expression per cluster
-UNS_LEIDEN_UNIT_SUMS_SHARED_GENES = "leiden_unit_sums_shared"  # (L x G_shared) — summed L2-normalized raw expression per cluster (sum of unit vectors), for cell-level cosine dispersion
-UNS_LEIDEN_SUMSQ_SHARED_GENES_NORM = "leiden_sumsq_shared_norm"  # (L,) — summed squared L2-norm of the lognorm shared-gene cell vectors per cluster, for cell-level Euclidean dispersion in lognorm space
 
 # ── adata_st ───────────────────────────────────────────────────────────────
 
@@ -61,7 +59,7 @@ OBS_MAPPING_HARD = (
     "mapping_hard"  # (n_spots,) int — argmax state index (0..K-1) at the current K
 )
 OBS_MAPPING_STATE_CAT = "mapping_state"  # (n_spots,) str categorical — hard state label as a category, for squidpy neighbourhood tools (nhood_enrichment)
-OBS_MAPPING_CONFIDENCE = "mapping_confidence"  # (n_spots,) float in [0,1] — per-spot assignment confidence at the current K; absent when the mapper defines no confidence (learned/reference)
+OBS_MAPPING_CONFIDENCE = "mapping_confidence"  # (n_spots,) float in [0,1] — per-spot assignment confidence at the current K; absent when the mapper defines no confidence (reference)
 
 # obsm/obsp/uns — K-independent spatial/expression graphs, built once and reused across the K-sweep
 OBSP_SPATIAL_CONNECTIVITIES = "spatial_connectivities"  # (n_spots x n_spots) sparse — squidpy spatial KNN graph (local purity + neighbourhood enrichment)

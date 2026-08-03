@@ -1,6 +1,6 @@
 # Spatial Transcriptomics Alignment
 
-Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`nearest` nearest-centroid or `learned` soft assignment).
+Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`nearest_centroid` nearest-centroid or `wann` reliability-weighted adaptive-kNN label transfer).
 
 ## Repository Structure
 
@@ -14,13 +14,13 @@ src/
 │   ├── clustering.py            #   clustering half: Leiden over-clustering (all genes + shared genes)
 │   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
 │   ├── tree.py                  #   clustering half: agglomeration tree + cut at K -> labels_k
-│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest / nearest_scaled / nearest_euclidean / nearest_euclidean_scaled / majority_vote / majority_vote_euclidean / learned)
+│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest_centroid / wann / reference: tangram / tacco / dot / spann)
 │   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
 │   └── sweep.py                 #   the K-sweep orchestration
 ├── analysis/                    # Post-mapping analysis: orchestration + loaders (writes metrics only, no figures)
 └── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
 gui/                             # Interactive Streamlit results explorer — the sole visualization layer (Plotly + kaleido export)
-reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
+reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT, SPANN)
 └── run_reference_aligner_all_pairs.py  # Batch driver for the baselines
 data_preparation/                # Dataset utilities (validate, convert, split, …)
 sample_dataset/                  # Minimal dataset mirroring the database layout (scRNA/, ST/, pairs.csv)
@@ -78,6 +78,7 @@ Each method requires its own conda environment.
 | Tangram | `tangram_env` | `conda env create -f reference_aligners/environment_tangram.yml` |
 | TACCO | `tacco_env` | `conda env create -f reference_aligners/environment_tacco.yml` |
 | DOT | `dot_env` | `conda env create -f reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
+| SPANN | `spann_env` | `conda env create -f reference_aligners/environment_spann.yml` |
 
 ---
 
@@ -87,7 +88,7 @@ Each method requires its own conda environment.
 
 ### 1. Run a reference aligner (single pair)
 
-All three aligners share the same interface.
+All four aligners share the same interface.
 
 ```bash
 # Tangram
@@ -113,6 +114,14 @@ python -m reference_aligners.run_dot \
     --stdata        <path/to/st.h5ad> \
     --output_folder <sample_output/dot/pair_0> \
     --cell_type_key <obs_column_with_cell_types>
+
+# SPANN (VAE + optimal-transport annotator; GPU recommended; novel-cell detection disabled)
+conda activate spann_env
+python -m reference_aligners.run_spann \
+    --scdata        <path/to/sc.h5ad> \
+    --stdata        <path/to/st.h5ad> \
+    --output_folder <sample_output/spann/pair_0> \
+    --cell_type_key <obs_column_with_cell_types>
 ```
 
 Each aligner writes `gep_prob.h5ad` and `gep_det.h5ad` to the output folder.
@@ -135,9 +144,9 @@ Runs the chosen aligner for every row in `pairs.csv`, iterating over all cell-ty
 defined in `scRNA/index.csv`. Metrics are computed automatically after each run.
 
 ```bash
-conda activate tangram_env   # or tacco_env / dot_env
+conda activate tangram_env   # or tacco_env / dot_env / spann_env
 python -m reference_aligners.run_reference_aligner_all_pairs \
-    --aligner    tangram/tacco/dot \
+    --aligner    tangram/tacco/dot/spann \
     --pairs_csv  <path/to/pairs.csv> \
     --sc_dir     <path/to/scRNA> \
     --st_dir     <path/to/ST> \
@@ -164,39 +173,26 @@ agglomeration tree (average-linkage on shared-gene cosine distance), and for
 every `K` from `L` down to `1` cuts the tree into `K` cell states and maps each
 ST spot onto them. The spot→state mapping is **modular** (`--mapping`):
 
-- **`nearest`** (default) — zero-parameter nearest-centroid: each spot is assigned
+- **`nearest_centroid`** (default) — zero-parameter nearest-centroid: each spot is assigned
   to the state whose profile is most cosine-similar to it. No training; the
   assignment is one-hot, so soft and deterministic reconstructions coincide.
-- **`nearest_scaled`** — like `nearest`, but each spot→centroid cosine distance is
-  divided by the state's cell-level cosine dispersion (its "diameter") before the
-  argmin, so diffuse (heavily merged) states claim more distant spots and tight
-  states only nearby ones. One-hot `P`. Adds `--dispersion_shrinkage` (shrinks each
-  state's dispersion toward the global mean; large values reproduce `nearest`).
-- **`nearest_euclidean`** — nearest-centroid by **Euclidean** distance instead of
-  cosine, computed in `normalize_total`+`log1p` shared-gene space (both the ST spots
-  and the state centroids come from the lognorm shared-gene values). Because library
-  size / depth are normalised out first, the straight Euclidean distance is meaningful
-  (unlike on raw counts, where it would be dominated by total counts). One-hot `P`.
-- **`nearest_euclidean_scaled`** — the Euclidean analogue of `nearest_scaled`: like
-  `nearest_euclidean`, but each spot→centroid Euclidean distance is divided by the
-  state's cell-level Euclidean dispersion (its RMS radius in lognorm space) before the
-  argmin, so diffuse states claim more distant spots. One-hot `P`. Adds
-  `--dispersion_shrinkage` (large values reproduce `nearest_euclidean`).
-- **`majority_vote`** — kNN label transfer: each spot takes its top-N most
-  cosine-similar reference cells (shared genes), and `P` is the fraction of those
-  neighbours in each state. Adds `--n_neighbors` (default 10).
-- **`majority_vote_euclidean`** — like `majority_vote`, but each spot's neighbours are
-  its top-N **Euclidean**-nearest reference cells in `normalize_total`+`log1p`
-  shared-gene space instead of its most cosine-similar ones. Adds `--n_neighbors`.
-- **`learned`** — a soft `P` trained by gradient descent, minimizing spot-wise +
-  gene-wise cosine distance with a quadratic `spot_gini` sharpener (optional
-  warmup). Adds `--epochs / --lr / --lambda_spot_gini / --spot_gini_warmup_frac`.
-- **`tangram` / `tacco` / `dot`** — delegate the spot→state step to that external
-  aligner. For each `K` the reference cells are labelled by their AIM state and the
-  aligner maps ST spots onto those states. The aligners run **out-of-process** via
-  `conda run` in their own env (`tangram_env` / `tacco_env` / `dot_env`), so those
-  envs must exist and `conda` must be on `PATH`; one alignment runs **per K**, so a
-  full sweep is slow.
+- **`wann`** — Weighted Adaptive Nearest Neighbor (Gallo et al., TMLR 2025). For each
+  `K` every reference cell gets a **label-reliability** score `η` = the inverse of the
+  smallest neighbourhood size `k'` (odd grid `11…51`) at which its own state is recovered
+  by a vote of its nearest reference cells (cosine, shared genes); deep-in-class cells
+  score high, boundary/ambiguous cells low. Each spot then **inherits** the neighbourhood
+  size `k_T = 1/η` of its single nearest reference cell and votes over its top-`k_T`
+  neighbours **weighted by their reliability** `η`, so cleanly-labelled cells dominate.
+  Parameter-free (no `--n_neighbors`); the neighbourhood auto-shrinks near clean labels
+  and grows near noisy ones.
+- **`tangram` / `tacco` / `dot` / `spann`** — delegate the spot→state step to that
+  external aligner. For each `K` the reference cells are labelled by their AIM state and
+  the aligner maps ST spots onto those states. The aligners run **out-of-process** via
+  `conda run` in their own env (`tangram_env` / `tacco_env` / `dot_env` / `spann_env`),
+  so those envs must exist and `conda` must be on `PATH`; one alignment runs **per K**,
+  so a full sweep is slow. `spann` (a VAE + optimal-transport annotator, GPU
+  recommended) is the slowest — it retrains per K, with novel-cell detection disabled so
+  every spot maps to a state — and returns a one-hot `P` (SPANN emits a hard label).
 
 ```bash
 conda activate aim_env
@@ -204,14 +200,11 @@ python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
     --output_dir    <output/pair_0> \
-    [--mapping nearest|nearest_scaled|nearest_euclidean|nearest_euclidean_scaled|majority_vote|majority_vote_euclidean|learned|tangram|tacco|dot] \
+    [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
     [--leiden_resolution 3.0] \
     [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1] \
-    [--logging verbose] \
-    # learned-mode only:
-    [--epochs 400] [--lr 0.02] \
-    [--lambda_spot_gini 1.0] [--spot_gini_warmup_frac 0.5]
+    [--logging verbose]
 ```
 
 > `K` is not a single value — the run sweeps every `K` in `[k_min, k_max]` (default
@@ -225,10 +218,8 @@ Writes to `output_dir/`:
 - `k_<kkk>/` — one folder per `K`, in the layout the post-mapping analysis consumes:
   - `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`);
     carries `obs["mapping_confidence"]` (per-spot assignment confidence in `[0,1]`)
-    when the mapper defines one (`nearest`/`nearest_scaled`/`nearest_euclidean`/
-    `nearest_euclidean_scaled`: top-state distance margin; `majority_vote`/
-    `majority_vote_euclidean`: vote one-hotness; absent for `learned` and the
-    reference aligners).
+    when the mapper defines one (`nearest_centroid`: top-state distance margin;
+    `wann`: vote one-hotness; absent for the reference aligners).
   - `spot_to_state_mapping.csv` — `P` as CSV (tiny values zeroed, rounded) for eyeballing.
   - `leiden_to_state.csv` — the subcluster→state tree cut (`labels_k`).
   - `analysis/data/` — the post-mapping analysis metrics for that `K` (machine-readable
@@ -263,7 +254,7 @@ python main.py \
     --sc_dir     <path/to/scRNA> \
     --st_dir     <path/to/ST> \
     --output_dir <output/agglomerative> \
-    [--mapping nearest|nearest_scaled|nearest_euclidean|nearest_euclidean_scaled|majority_vote|majority_vote_euclidean|learned] \
+    [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
     [--leiden_resolution 3.0] [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1]
 ```
@@ -303,5 +294,5 @@ python -m gui \
 
 Then open the printed URL (default http://localhost:8501), pick a mapper in the
 sidebar, click **Run**, and wait for the sweep to finish. Mappers without a
-per-spot confidence (`learned`, `tangram`, `tacco`, `dot`) disable the confidence
+per-spot confidence (`tangram`, `tacco`, `dot`, `spann`) disable the confidence
 slider. `streamlit` is included in `environment.yml`.

@@ -9,12 +9,9 @@ holds only the CLI and the thin single-pair / batch drivers.
 Run (single pair):
     PYTHONPATH=src python main.py \
         --scdata <sc.h5ad> --stdata <st.h5ad> --output_dir <out> \
-        [--mapping nearest|learned] \
-        [--leiden_resolution 3.0] [--normalize_and_log] \
-        [--k_min 1] [--k_max <L>] [--k_step 1] \
-        # learned-mode only:
-        [--epochs 400] [--lr 0.02] [--lambda_spot_gini 1.0] \
-        [--spot_gini_warmup_frac 0.5]
+        [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
+        [--leiden_resolution 3.0] \
+        [--k_min 1] [--k_max <L>] [--k_step 1]
 
 Run (all pairs in pairs.csv, one after the other):
     PYTHONPATH=src python main.py \
@@ -130,7 +127,7 @@ def run_batch(
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Agglomerative-K sweep — modular nearest / learned spot-to-state mapping"
+        description="Agglomerative-K sweep — modular nearest_centroid / wann spot-to-state mapping"
     )
     # Single-pair mode
     parser.add_argument(
@@ -165,64 +162,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mapping",
         choices=list(MAPPING_CHOICES),
-        default="nearest",
-        help="Spot-to-state mapping: 'nearest' (zero-parameter nearest-centroid by "
-        "cosine on raw counts, default), 'nearest_scaled' (nearest-centroid scaled "
-        "by per-state cosine dispersion), 'nearest_euclidean' (nearest-centroid by "
-        "Euclidean distance in normalize_total+log1p shared-gene space), "
-        "'nearest_euclidean_scaled' (nearest_euclidean scaled by per-state "
-        "lognorm-space dispersion), 'majority_vote' (soft vote of the top-N nearest "
-        "reference cells' states by cosine on raw counts), 'majority_vote_euclidean' "
-        "(same vote, but neighbours by Euclidean distance in lognorm space), "
-        "'learned' (gradient-descent soft P), or an external reference aligner "
-        "'tangram' / 'tacco' / 'dot' (each runs out-of-process in its own conda env, "
-        "once per K). The learned-mode flags below apply only to 'learned'.",
+        default="nearest_centroid",
+        help="Spot-to-state mapping: 'nearest_centroid' (zero-parameter "
+        "nearest-centroid by cosine, default), 'wann' (reliability-weighted "
+        "adaptive-kNN label transfer; "
+        "each spot's neighbourhood size is set adaptively from the label reliability "
+        "of its nearest reference cell, no parameters), or an external reference "
+        "aligner 'tangram' / 'tacco' / 'dot' / 'spann' (each runs out-of-process in "
+        "its own conda env, once per K).",
     )
     parser.add_argument("--leiden_resolution", type=float, default=3.0)
-    parser.add_argument("--normalize_and_log", action="store_true", default=False)
     parser.add_argument("--k_min", type=int, default=None)
     parser.add_argument("--k_max", type=int, default=None)
     parser.add_argument("--k_step", type=int, default=1)
-    # nearest_scaled-mode only
-    parser.add_argument(
-        "--dispersion_shrinkage",
-        type=float,
-        default=1.0,
-        help="[nearest_scaled / nearest_euclidean_scaled] pseudocount shrinking each "
-        "state's dispersion toward the global mean (guards tiny/singleton states). "
-        "Large values -> uniform dispersion -> reproduces the unscaled variant.",
-    )
-    # majority_vote-mode only
-    parser.add_argument(
-        "--n_neighbors",
-        type=int,
-        default=10,
-        help="[majority_vote / majority_vote_euclidean] number of nearest reference "
-        "cells each spot votes over (top-N by shared-gene cosine similarity, or by "
-        "lognorm-space Euclidean distance for majority_vote_euclidean).",
-    )
-    # Learned-mode only
-    parser.add_argument(
-        "--epochs", type=int, default=400, help="[learned] per-K deconvolution epochs"
-    )
-    parser.add_argument(
-        "--lr", type=float, default=0.02, help="[learned] learning rate"
-    )
-    parser.add_argument(
-        "--lambda_spot_gini",
-        type=float,
-        default=1.0,
-        help="[learned] quadratic (Gini/Tsallis-2) spot sharpener on P — the strong "
-        "one-hot lever. Set 0 to disable.",
-    )
-    parser.add_argument(
-        "--spot_gini_warmup_frac",
-        type=float,
-        default=0.5,
-        help="[learned] fraction of epochs to train with spot_gini OFF before "
-        "ramping it in linearly (e.g. 0.5 = pure reconstruction for the first half, "
-        "then ramp to full by the last epoch). 0 = constant weight from the start.",
-    )
     parser.add_argument("--logging", choices=["normal", "verbose"], default="normal")
     return parser
 
@@ -231,13 +183,6 @@ def _config_from_args(args: argparse.Namespace) -> AIMConfig:
     return AIMConfig(
         mapping=args.mapping,
         leiden_resolution=args.leiden_resolution,
-        normalize_and_log=args.normalize_and_log,
-        dispersion_shrinkage=args.dispersion_shrinkage,
-        n_neighbors=args.n_neighbors,
-        epochs=args.epochs,
-        lr=args.lr,
-        lambda_spot_gini=args.lambda_spot_gini,
-        spot_gini_warmup_frac=args.spot_gini_warmup_frac,
         k_min=args.k_min,
         k_max=args.k_max,
         k_step=args.k_step,

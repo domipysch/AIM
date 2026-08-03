@@ -43,24 +43,23 @@ jobs:
           miniforge-version: latest
           cache-environment: true
 
-      - name: Novel method – single pair (nearest mapping)
+      - name: Novel method – single pair (nearest_centroid mapping)
         run: |
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_dir    sample_output/novel/nearest \
-            --mapping           nearest \
+            --output_dir    sample_output/novel/nearest_centroid \
+            --mapping           nearest_centroid \
             --leiden_resolution 3.0
 
-      - name: Novel method – single pair (learned mapping)
+      - name: Novel method – single pair (wann mapping)
         run: |
           python main.py \
             --scdata        sample_dataset/scRNA/sample_sc.h5ad \
             --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_dir    sample_output/novel/learned \
-            --mapping           learned \
-            --leiden_resolution 3.0 \
-            --epochs            5
+            --output_dir    sample_output/novel/wann \
+            --mapping           wann \
+            --leiden_resolution 3.0
 
       - name: Novel method – all pairs (batch mode)
         run: |
@@ -69,7 +68,7 @@ jobs:
             --sc_dir     sample_dataset/scRNA \
             --st_dir     sample_dataset/ST \
             --output_dir sample_output/novel/sample_batch \
-            --mapping           nearest \
+            --mapping           nearest_centroid \
             --leiden_resolution 3.0
 
   sample-reference-aligners:
