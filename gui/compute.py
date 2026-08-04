@@ -41,6 +41,7 @@ class MapperRun:
         k_min: int | None,
         k_max: int | None,
         k_step: int,
+        agglo_tree_method: str = "ward",
     ) -> None:
         self.mapper = mapper
         self.sc_path = Path(sc_path)
@@ -50,6 +51,7 @@ class MapperRun:
         self.k_min = k_min
         self.k_max = k_max
         self.k_step = k_step
+        self.agglo_tree_method = agglo_tree_method
         self.error: str | None = None
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -63,6 +65,7 @@ class MapperRun:
             cfg = AIMConfig(
                 mapping=self.mapper,
                 leiden_resolution=DEFAULT_LEIDEN_RESOLUTION,
+                agglo_tree_method=self.agglo_tree_method,
                 k_min=self.k_min,
                 k_max=self.k_max,
                 k_step=self.k_step,
@@ -76,6 +79,7 @@ class MapperRun:
                 st_path=self.st_path,
                 output_folder=self.root,
                 mapper=cfg.build_mapper(),
+                agglo_tree_method=cfg.agglo_tree_method,
                 leiden_resolution=cfg.leiden_resolution,
                 k_min=self.k_min,
                 k_max=self.k_max,

@@ -27,6 +27,8 @@ class AIMConfig:
 
     mapping: str = "nearest_centroid"
     leiden_resolution: float = 3.0
+    # Agglomeration-tree linkage: "ward" (balanced states) or "average" (UPGMA).
+    agglo_tree_method: str = "ward"
     # K sweep range
     k_min: int | None = None
     k_max: int | None = None

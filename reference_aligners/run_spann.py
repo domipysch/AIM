@@ -15,6 +15,11 @@ assignment is the one-hot of ``pred_cls`` (metrics row-normalise internally; arg
 unaffected -- the same representation the in-process ``nearest_centroid`` mapper produces).
 """
 
+# SPANN pins Python 3.9 (see environment_spann.yml), which evaluates function
+# annotations eagerly and so rejects PEP 604 ``str | None`` unions at import time.
+# Defer all annotations to strings so the modern syntax is accepted.
+from __future__ import annotations
+
 from pathlib import Path
 
 import argparse

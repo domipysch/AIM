@@ -67,6 +67,7 @@ def run_one_pair(
         st_path=st_path,
         output_folder=output_folder,
         mapper=config.build_mapper(),
+        agglo_tree_method=config.agglo_tree_method,
         leiden_resolution=config.leiden_resolution,
         k_min=config.k_min,
         k_max=config.k_max,

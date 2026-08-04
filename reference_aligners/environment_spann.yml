@@ -14,3 +14,9 @@ dependencies:
   - pip
   - pip:
       - spann
+      # SPANN pins numpy ~1.21, but its transitive scanpy pulls a numba that
+      # demands numpy >= 1.22 -> "Numba needs NumPy 1.22 or greater. Got 1.21"
+      # at import. Pin numba/llvmlite to the last pair compatible with numpy 1.21
+      # (numba 0.56 supports numpy 1.18-1.23) so the env imports cleanly.
+      - numba==0.56.4
+      - llvmlite==0.39.1

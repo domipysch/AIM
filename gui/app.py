@@ -38,30 +38,14 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 # Args & cached loaders
 # --------------------------------------------------------------------------- #
-# K range: min/max are always the defaults (full sweep); only the step is
-# user-editable in the sidebar.
-_DEFAULT_K_MIN: int | None = None
+# Everything is configured in the sidebar — the launcher only forwards the server
+# port. The K range is fixed to the full sweep (k_min = 1, k_max = L, where L is
+# the Leiden over-cluster count discovered at runtime); only the step is
+# user-editable. The agglomeration linkage is chosen in the sidebar.
+_DEFAULT_K_MIN: int = 1
 _DEFAULT_K_MAX: int | None = None
 _DEFAULT_K_STEP = 1
-
-
-@st.cache_resource
-def _cli_defaults() -> argparse.Namespace:
-    """Optional CLI args, used only to PREFILL the sidebar inputs.
-
-    Everything is optional now — the GUI can be launched bare and configured in
-    the sidebar. ``--k_min``/``--k_max`` are accepted for backwards-compat but
-    ignored (the K range always uses the defaults).
-    """
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scdata", type=str, default="")
-    parser.add_argument("--stdata", type=str, default="")
-    parser.add_argument("--output_dir", type=str, default="")
-    parser.add_argument("--k_step", type=int, default=_DEFAULT_K_STEP)
-    parser.add_argument("--k_min", type=int, default=None)
-    parser.add_argument("--k_max", type=int, default=None)
-    known, _ = parser.parse_known_args(sys.argv[1:])
-    return known
+_AGGLO_METHODS = ("ward", "average")
 
 
 @st.cache_data(show_spinner=False)
@@ -853,6 +837,7 @@ def _clear_session() -> None:
     st.session_state["cfg_st"] = ""
     st.session_state["cfg_out"] = ""
     st.session_state["cfg_kstep"] = _DEFAULT_K_STEP
+    st.session_state["cfg_agglo"] = _AGGLO_METHODS[0]
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
     st.session_state.pop("_run_requested", None)
@@ -870,7 +855,6 @@ def _sidebar() -> argparse.Namespace | None:
 
     Returns the run settings once the paths are valid, else ``None``.
     """
-    d = _cli_defaults()
     st.sidebar.title("AIM GUI")
 
     # -- data paths + K step ---------------------------------------------
@@ -887,10 +871,11 @@ def _sidebar() -> argparse.Namespace | None:
         "</style>",
         unsafe_allow_html=True,
     )
-    st.session_state.setdefault("cfg_sc", d.scdata)
-    st.session_state.setdefault("cfg_st", d.stdata)
-    st.session_state.setdefault("cfg_out", d.output_dir)
-    st.session_state.setdefault("cfg_kstep", int(d.k_step))
+    st.session_state.setdefault("cfg_sc", "")
+    st.session_state.setdefault("cfg_st", "")
+    st.session_state.setdefault("cfg_out", "")
+    st.session_state.setdefault("cfg_kstep", _DEFAULT_K_STEP)
+    st.session_state.setdefault("cfg_agglo", _AGGLO_METHODS[0])
 
     def _path_row(label: str, key: str, kind: str, browse_key: str) -> str:
         # Text field with an icon-only Browse button to its right (bottom-aligned
@@ -917,7 +902,16 @@ def _sidebar() -> argparse.Namespace | None:
         min_value=1,
         step=1,
         key="cfg_kstep",
-        help="K min/max always use the defaults (full sweep); only the step is set here.",
+        help="The K range is fixed to the full sweep (K = 1 … L, where L is the "
+        "Leiden over-cluster count); only the step is set here.",
+    )
+    agglo_method = st.sidebar.selectbox(
+        "Agglomeration linkage",
+        _AGGLO_METHODS,
+        key="cfg_agglo",
+        help="Linkage for the agglomeration tree over the Leiden subclusters. "
+        "'ward' carries a size term and tends to produce balanced states; "
+        "'average' (UPGMA) peels small tight groups off a dominant state.",
     )
     st.sidebar.button(
         "Clear",
@@ -951,6 +945,7 @@ def _sidebar() -> argparse.Namespace | None:
         k_min=_DEFAULT_K_MIN,
         k_max=_DEFAULT_K_MAX,
         k_step=int(k_step),
+        agglo_tree_method=str(agglo_method),
     )
 
     # -- methods: locked (computed) + status + selectable remainder ------
@@ -1123,6 +1118,7 @@ def main() -> None:
             settings.k_min,
             settings.k_max,
             settings.k_step,
+            agglo_tree_method=settings.agglo_tree_method,
         ).start()
         running = True
         just_started = True

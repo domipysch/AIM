@@ -32,6 +32,11 @@ _CSS = """
   box-sizing: border-box;
   color: var(--st-text-color, inherit);
   font-family: var(--st-font, sans-serif);
+  /* Track/thumb geometry + theme colours in one place. */
+  --track: var(--st-border-color, rgba(151, 166, 195, 0.35));
+  --fill: var(--st-primary-color, #ff4b4b);
+  --bar: 6px;     /* track thickness */
+  --thumb: 16px;  /* thumb diameter  */
 }
 .label {
   font-size: 0.8rem;
@@ -40,7 +45,8 @@ _CSS = """
 }
 .track-area {
   position: relative;
-  padding-top: 1.35rem;   /* room for the floating value bubble */
+  /* Room for the floating value bubble above the track, with breathing space. */
+  padding-top: 1.7rem;
 }
 .bubble {
   position: absolute;
@@ -53,53 +59,76 @@ _CSS = """
   font-variant-numeric: tabular-nums;
   pointer-events: none;
 }
+/* The input is as tall as the thumb so the thumb never clips; the visible thin
+   track is drawn by the ::track pseudo-element, which the browser centres inside
+   that full-height box. The fill percentage is driven by the ``--pct`` variable
+   (0..100) that the JS updates on every drag step. */
 input.range {
+  --pct: 0;
   -webkit-appearance: none;
   appearance: none;
   display: block;
   width: 100%;
-  height: 6px;
-  border-radius: 9999px;
+  height: var(--thumb);
+  background: transparent;
   outline: none;
   margin: 0;
+  padding: 0;
   cursor: pointer;
-  background: var(--st-border-color, rgba(151, 166, 195, 0.35));
+}
+input.range::-webkit-slider-runnable-track {
+  height: var(--bar);
+  border-radius: 9999px;
+  background: linear-gradient(
+    90deg,
+    var(--fill) calc(var(--pct) * 1%),
+    var(--track) calc(var(--pct) * 1%)
+  );
 }
 input.range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -5px;   /* centre the 16px thumb on the 6px track */
+  width: var(--thumb);
+  height: var(--thumb);
+  /* Centre the thumb on the (thinner) track. */
+  margin-top: calc((var(--bar) - var(--thumb)) / 2);
   border: none;
   border-radius: 50%;
-  background: var(--st-primary-color, #ff4b4b);
+  background: var(--fill);
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
   transition: box-shadow 0.15s ease;
 }
 input.range::-webkit-slider-thumb:hover {
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--st-primary-color, #ff4b4b) 25%, transparent);
-}
-input.range::-moz-range-thumb {
-  width: 16px;
-  height: 16px;
-  border: none;
-  border-radius: 50%;
-  background: var(--st-primary-color, #ff4b4b);
-  cursor: pointer;
-}
-input.range::-moz-range-track {
-  height: 6px;
-  border-radius: 9999px;
-  background: transparent;
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--fill) 25%, transparent);
 }
 input.range:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--st-primary-color, #ff4b4b) 25%, transparent);
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--fill) 25%, transparent);
+}
+/* Firefox: the track + native progress fill are value-driven, no JS needed. */
+input.range::-moz-range-track {
+  height: var(--bar);
+  border-radius: 9999px;
+  background: var(--track);
+}
+input.range::-moz-range-progress {
+  height: var(--bar);
+  border-radius: 9999px;
+  background: var(--fill);
+}
+input.range::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: none;
+  border-radius: 50%;
+  background: var(--fill);
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 .ends {
   display: flex;
   justify-content: space-between;
-  margin-top: 0.3rem;
+  margin-top: 0.4rem;
   font-size: 0.72rem;
   opacity: 0.5;
   font-variant-numeric: tabular-nums;
@@ -150,14 +179,11 @@ export default function (component) {
   endMin.textContent = fmt(min)
   endMax.textContent = fmt(max)
 
-  const track = "var(--st-border-color, rgba(151, 166, 195, 0.35))"
-  const fill = "var(--st-primary-color, #ff4b4b)"
-
-  // Paint the fill gradient + position the value bubble over the thumb.
+  // Drive the WebKit fill via --pct (the ::track gradient reads it) + position the
+  // value bubble over the thumb. Firefox fills natively via ::-moz-range-progress.
   const paint = (v) => {
     const pct = max > min ? ((v - min) / (max - min)) * 100 : 0
-    input.style.background =
-      `linear-gradient(90deg, ${fill} ${pct}%, ${track} ${pct}%)`
+    input.style.setProperty("--pct", String(pct))
     // Correct for thumb width so the bubble stays centred over the handle.
     const offset = (0.5 - pct / 100) * THUMB
     bubble.style.left = `calc(${pct}% + ${offset}px)`
