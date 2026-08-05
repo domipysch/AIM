@@ -22,6 +22,7 @@ from metrics import (
     CossimResult,
     assemble_state_centroids,
     compute_and_save_cossim,
+    cossim_null_medians,
     predict_expression,
 )
 
@@ -30,14 +31,26 @@ from .utils import to_dense
 logger = logging.getLogger(__name__)
 
 
+N_PERM_RECONSTRUCTION = 20  # label shuffles for the reconstruction null
+
+
 def analyse_reconstruction(
     adata_sc: ad.AnnData,
     adata_st: ad.AnnData,
     leiden_to_state: np.ndarray,
     output_data_dir: Path,
+    n_perm: int = N_PERM_RECONSTRUCTION,
+    seed: int = 0,
 ) -> None:
     """Cosine similarity of predicted (``mapping @ state_centroids``) vs. measured
     spot expression, per gene and per spot, for the four soft/hard x raw/norm combos.
+
+    Each *hard* combo also gets a label-shuffling null (``median_*_null``): the same
+    medians with the spot->state labels permuted, averaged over ``n_perm`` shuffles.
+    That is the chance level of the reconstruction — with only positive expression
+    profiles in play it is far above zero, so it is the reference the K-sweep view
+    compares against. The soft combos have no null (their assignment is a
+    distribution, not a label) and come through as NaN.
 
     ``leiden_to_state`` is this K's subcluster->state cut (L,).
     Requires: adata_st.obsm[OBSM_MAPPING_SOFT], adata_st.obs[OBS_MAPPING_HARD],
@@ -82,6 +95,7 @@ def analyse_reconstruction(
     cossim_summary: dict[str, dict] = {}
     cossim_dir = output_data_dir / "cossim"
     cossim_results: dict[str, CossimResult] = {}
+    rng = np.random.default_rng(seed)
     for label, (m, centroids, st_ref, is_hard) in combos.items():
         pred = centroids[m] if is_hard else predict_expression(m, centroids)
         pred_adata = ad.AnnData(
@@ -93,9 +107,18 @@ def analyse_reconstruction(
             st_ref, pred_adata, cossim_dir, suffix=f"-{label}"
         )
         cossim_results[label] = result
+        # ``st_ref`` is already restricted to the shared genes in centroid column
+        # order, so the null reduces the very same matrices as the observed value.
+        null = (
+            cossim_null_medians(to_dense(st_ref), centroids, m, n_perm=n_perm, rng=rng)
+            if label == "hard-raw"
+            else {"median_spot": float("nan"), "median_gene": float("nan")}
+        )
         cossim_summary[label] = {
             "median_gene": result.median_gene,
             "median_spot": result.median_spot,
+            "median_gene_null": null["median_gene"],
+            "median_spot_null": null["median_spot"],
         }
 
     pd.DataFrame(cossim_summary).T.to_csv(output_data_dir / "cossim_summary.csv")

@@ -5,22 +5,6 @@ from __future__ import annotations
 
 import numpy as np
 
-# Thresholds for the "fraction of rows with max prob >= threshold" reporting.
-DOMINANCE_THRESHOLDS = (
-    0.99,
-    0.95,
-    0.90,
-    0.80,
-    0.70,
-    0.60,
-    0.50,
-    0.40,
-    0.30,
-    0.20,
-    0.10,
-    0.0,
-)
-
 
 def onehot_metrics(mapping: np.ndarray) -> dict:
     """Per-row one-hotness of a soft assignment matrix (n_rows x n_cols).

@@ -71,7 +71,7 @@ def load_soft(root: Path, k: int) -> tuple[np.ndarray, np.ndarray, np.ndarray | 
 
     ``P`` is the S x K soft matrix, ``hard`` its per-spot argmax, and
     ``confidence`` the per-spot value in [0, 1] or ``None`` when the mapper wrote
-    none (tangram / tacco / dot / spann).
+    none (tangram / tacco / dot).
     """
     path = k_dir(root, k) / "spot_to_state_mapping_soft.h5ad"
     if not path.exists():
@@ -120,24 +120,65 @@ def ksweep_csv(root: Path) -> pd.DataFrame | None:
     return pd.read_csv(path) if path.exists() else None
 
 
-def ksweep_table(root: Path) -> pd.DataFrame | None:
-    """``k_comparison.csv`` augmented with a ``modularity_st_expression`` column.
+# Columns the sweep CSV gained after some runs were already computed. When a
+# k_comparison.csv predates them they are recovered from each K's analysis outputs
+# (same values, just not yet collected into the table), so an older run root still
+# shows every curve without re-running the sweep. Nothing is computed here. The
+# modularities carry no null — a shuffled modularity is meaningless, so the sweep
+# never measures one and the coherence criterion simply has no crosshair.
+_MODULARITY_COLUMNS = ("modularity_st_expression",)
+# csv column -> cossim_summary.csv column, both on the "hard-raw" row
+_COSSIM_NULL_COLUMNS = {
+    "cossim_hard_raw_spot_null": "median_spot_null",
+    "cossim_hard_raw_gene_null": "median_gene_null",
+}
 
-    The sweep CSV records ``modularity_shared`` but not the mapping-dependent
-    ``modularity_st_expression`` (transcriptional coherence), so read that per K
-    from each K's ``modularity_metrics.json``. Returns ``None`` if the CSV is
-    absent.
+
+def _as_float(value) -> float:
+    return float(value) if isinstance(value, (int, float)) else float("nan")
+
+
+def _cossim_summary_row(root: Path, k: int, row: str) -> dict:
+    """One row of a K's ``cossim_summary.csv`` as a plain dict (empty if absent)."""
+    path = data_dir(root, k) / "cossim_summary.csv"
+    if not path.exists():
+        return {}
+    try:
+        table = pd.read_csv(path, index_col=0)
+    except (OSError, pd.errors.ParserError):
+        return {}
+    if row not in table.index:
+        return {}
+    return table.loc[row].to_dict()
+
+
+def ksweep_table(root: Path) -> pd.DataFrame | None:
+    """``k_comparison.csv``, back-filled for run roots written by an older sweep.
+
+    The sweep collects every metric the GUI plots — including the label-shuffle
+    nulls measured by the post-mapping analysis — so this is a plain read; only
+    columns absent from the CSV are looked up in the per-K analysis outputs.
+    Returns ``None`` if the CSV is absent.
     """
     df = ksweep_csv(root)
     if df is None or "k" not in df.columns:
         return df
     df = df.copy()
-    st_mod = []
-    for k in df["k"].astype(int).tolist():
-        m = load_data_json(root, k, "modularity_metrics.json") or {}
-        v = m.get("modularity_st_expression")
-        st_mod.append(float(v) if isinstance(v, (int, float)) else float("nan"))
-    df["modularity_st_expression"] = st_mod
+    ks = df["k"].astype(int).tolist()
+
+    missing = [c for c in _MODULARITY_COLUMNS if c not in df.columns]
+    if missing:
+        per_k = [load_data_json(root, k, "modularity_metrics.json") or {} for k in ks]
+        for column in missing:
+            df[column] = [_as_float(m.get(column)) for m in per_k]
+
+    missing = [c for c in _COSSIM_NULL_COLUMNS if c not in df.columns]
+    if missing:
+        per_k = [_cossim_summary_row(root, k, "hard-raw") for k in ks]
+        for column in missing:
+            source = _COSSIM_NULL_COLUMNS[column]
+            df[column] = [_as_float(row.get(source)) for row in per_k]
+
     return df
 
 

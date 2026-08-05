@@ -112,26 +112,3 @@ def assemble_state_profiles_shared_genes(
         adata_sc.uns[UNS_LEIDEN_SIZES],
         eps,
     )
-
-
-def assemble_state_profiles_shared_genes_norm(
-    labels_k: np.ndarray,
-    k: int,
-    adata_sc: AnnData,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    """
-    Size-weighted per-state lognorm expression profiles M (k x G_shared): like
-    ``assemble_state_profiles_shared_genes`` but pooling the normalize_total+log1p
-    expression sums, so M lives in the same space as OBSM_LOGNORM_SHARED_GENES
-    (for Euclidean matching against lognorm ST spots).
-
-    Requires: adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM], adata_sc.uns[UNS_LEIDEN_SIZES].
-    """
-    return _size_weighted_state_profiles(
-        labels_k,
-        k,
-        adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM],
-        adata_sc.uns[UNS_LEIDEN_SIZES],
-        eps,
-    )

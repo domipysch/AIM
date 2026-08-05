@@ -9,7 +9,7 @@ holds only the CLI and the thin single-pair / batch drivers.
 Run (single pair):
     PYTHONPATH=src python main.py \
         --scdata <sc.h5ad> --stdata <st.h5ad> --output_dir <out> \
-        [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
+        [--mapping nearest_centroid|wann|tangram|tacco|dot] \
         [--leiden_resolution 3.0] \
         [--k_min 1] [--k_max <L>] [--k_step 1]
 
@@ -54,18 +54,29 @@ logger = logging.getLogger(__name__)
 
 
 def run_one_pair(
-    sc_path: Path, st_path: Path, output_folder: Path, config: AIMConfig
+    sc_path: Path,
+    st_path: Path,
+    root_output_folder: Path,
+    config: AIMConfig,
 ) -> pd.DataFrame:
-    """Write config.yaml + run the K-sweep for a single sc/st pair."""
-    output_folder = Path(output_folder)
-    output_folder.mkdir(parents=True, exist_ok=True)
-    with open(output_folder / "config.yaml", "w") as f:
+    """Write config.yaml + run the K-sweep for a single sc/st pair.
+
+    The mapper-independent reference scaffold (over-clustering + aggregates +
+    UMAPs) is cached under ``root_output_folder`` and reused across mappers, so
+    running several mappers for one pair computes it once (the GUI relies on this).
+    """
+    root_output_folder = Path(root_output_folder)
+    root_output_folder.mkdir(parents=True, exist_ok=True)
+    mapping_output_folder = Path(root_output_folder) / config.mapping
+    mapping_output_folder.mkdir(parents=True, exist_ok=True)
+
+    with open(mapping_output_folder / "config.yaml", "w") as f:
         yaml.safe_dump({**asdict(config)}, f, sort_keys=False)
 
     return run(
         sc_path=sc_path,
         st_path=st_path,
-        output_folder=output_folder,
+        root_output_folder=root_output_folder,
         mapper=config.build_mapper(),
         agglo_tree_method=config.agglo_tree_method,
         leiden_resolution=config.leiden_resolution,
@@ -169,7 +180,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "adaptive-kNN label transfer; "
         "each spot's neighbourhood size is set adaptively from the label reliability "
         "of its nearest reference cell, no parameters), or an external reference "
-        "aligner 'tangram' / 'tacco' / 'dot' / 'spann' (each runs out-of-process in "
+        "aligner 'tangram' / 'tacco' / 'dot' (each runs out-of-process in "
         "its own conda env, once per K).",
     )
     parser.add_argument("--leiden_resolution", type=float, default=3.0)

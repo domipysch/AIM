@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     src_path = repo_root / "src"
 
     env = os.environ.copy()
-    # The app imports the in-repo packages (aim / analysis / plots / adata_schema)
+    # The app imports the in-repo packages (aim / analysis / metrics / adata_schema)
     # which live under src/, exactly like every other entry point in this repo.
     env["PYTHONPATH"] = os.pathsep.join(
         p for p in (str(src_path), env.get("PYTHONPATH", "")) if p

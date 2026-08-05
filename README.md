@@ -1,6 +1,6 @@
-# Spatial Transcriptomics Alignment
+# AIM - Annotation Independent Mapping
 
-Maps scRNA-seq reference data onto high-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`nearest_centroid` nearest-centroid or `wann` reliability-weighted adaptive-kNN label transfer).
+Maps scRNA-seq reference data onto single-cell-resolution spatial transcriptomics (ST) spots: Leiden over-clusters the reference, one agglomeration tree merges the subclusters into `K` cell states, and every ST spot is assigned to those states. The spot→state step is modular (`nearest_centroid` nearest-centroid or `wann` reliability-weighted adaptive-kNN label transfer).
 
 ## Repository Structure
 
@@ -14,13 +14,13 @@ src/
 │   ├── clustering.py            #   clustering half: Leiden over-clustering (all genes + shared genes)
 │   ├── aggregation.py           #   clustering half: per-subcluster / per-state profiles
 │   ├── tree.py                  #   clustering half: agglomeration tree + cut at K -> labels_k
-│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest_centroid / wann / reference: tangram / tacco / dot / spann)
+│   ├── mapping/                 #   mapping half: unified SpotStateMapper API (nearest_centroid / wann / reference: tangram / tacco / dot)
 │   ├── io.py                    #   per-K disk outputs (h5ad + CSV)
 │   └── sweep.py                 #   the K-sweep orchestration
 ├── analysis/                    # Post-mapping analysis: orchestration + loaders (writes metrics only, no figures)
 └── metrics/                     # Evaluation metrics (cosine reconstruction, one-hotness, spatial/biology, modularity)
 gui/                             # Interactive Streamlit results explorer — the sole visualization layer (Plotly + kaleido export)
-reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT, SPANN)
+reference_aligners/              # Baseline method wrappers (Tangram, TACCO, DOT)
 └── run_reference_aligner_all_pairs.py  # Batch driver for the baselines
 data_preparation/                # Dataset utilities (validate, convert, split, …)
 sample_dataset/                  # Minimal dataset mirroring the database layout (scRNA/, ST/, pairs.csv)
@@ -78,7 +78,6 @@ Each method requires its own conda environment.
 | Tangram | `tangram_env` | `conda env create -f reference_aligners/environment_tangram.yml` |
 | TACCO | `tacco_env` | `conda env create -f reference_aligners/environment_tacco.yml` |
 | DOT | `dot_env` | `conda env create -f reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
-| SPANN | `spann_env` | `conda env create -f reference_aligners/environment_spann.yml` |
 
 ---
 
@@ -88,7 +87,7 @@ Each method requires its own conda environment.
 
 ### 1. Run a reference aligner (single pair)
 
-All four aligners share the same interface.
+All three aligners share the same interface.
 
 ```bash
 # Tangram
@@ -114,17 +113,10 @@ python -m reference_aligners.run_dot \
     --stdata        <path/to/st.h5ad> \
     --output_folder <sample_output/dot/pair_0> \
     --cell_type_key <obs_column_with_cell_types>
-
-# SPANN (VAE + optimal-transport annotator; GPU recommended; novel-cell detection disabled)
-conda activate spann_env
-python -m reference_aligners.run_spann \
-    --scdata        <path/to/sc.h5ad> \
-    --stdata        <path/to/st.h5ad> \
-    --output_folder <sample_output/spann/pair_0> \
-    --cell_type_key <obs_column_with_cell_types>
 ```
 
-Each aligner writes `gep_prob.h5ad` and `gep_det.h5ad` to the output folder.
+Each aligner writes `mapping_prob.h5ad` (a spots × cell-types soft-assignment
+AnnData) to the output folder.
 
 **Example with sample dataset** (`cellType` and `cellTypeMinor` are the cell-type keys in `sample_sc.h5ad`):
 ```bash
@@ -142,11 +134,13 @@ python -m reference_aligners.run_tangram \
 
 Runs the chosen aligner for every row in `pairs.csv`, iterating over all cell-type keys
 defined in `scRNA/index.csv`. Metrics are computed automatically after each run.
+Run this from `aim_env` — the aligner itself runs in its own env via `conda run`,
+so only `conda` on `PATH` is required (no need to activate the aligner's env).
 
 ```bash
-conda activate tangram_env   # or tacco_env / dot_env / spann_env
+conda activate aim_env
 python -m reference_aligners.run_reference_aligner_all_pairs \
-    --aligner    tangram/tacco/dot/spann \
+    --aligner    tangram/tacco/dot \
     --pairs_csv  <path/to/pairs.csv> \
     --sc_dir     <path/to/scRNA> \
     --st_dir     <path/to/ST> \
@@ -155,7 +149,7 @@ python -m reference_aligners.run_reference_aligner_all_pairs \
 
 **Example with sample dataset:**
 ```bash
-conda activate tangram_env
+conda activate aim_env
 python -m reference_aligners.run_reference_aligner_all_pairs \
     --aligner    tangram \
     --pairs_csv  sample_dataset/pairs.csv \
@@ -163,6 +157,44 @@ python -m reference_aligners.run_reference_aligner_all_pairs \
     --st_dir     sample_dataset/ST \
     --output_dir sample_output/tangram/sample
 ```
+
+---
+
+### Adding a reference aligner
+
+Reference aligners are pluggable. Every one runs the same way — a small wrapper
+script invoked out-of-process in its own conda env — and the whole framework
+learns about it from a **single registry** in
+[`reference_aligners/registry.py`](reference_aligners/registry.py). Adding one is
+two steps:
+
+**1. Create its conda env** (whatever the tool needs), e.g.
+`conda env create -f reference_aligners/environment_<name>.yml`.
+
+**2. Write `reference_aligners/run_<name>.py`** satisfying the CLI contract:
+
+| | Contract |
+|---|---|
+| **Args** | `--scdata`, `--stdata`, `--output_folder`, `--cell_type_key` |
+| **Input** | `scdata` carries the states/types in `obs[cell_type_key]`; `stdata` shares genes with `scdata` and carries spatial coords in `obsm["spatial"]` |
+| **Output** | writes `<output_folder>/mapping_prob.h5ad` — an AnnData with `obs` = spots (in ST order), `var` = state/type names, `X` = float32 soft-assignment matrix (S × T) |
+
+Invoked with only those four args the wrapper must reproduce its canonical
+mapping (bake any other choices into the CLI defaults), so every caller runs it
+identically.
+
+**3. Register it** — add one line to `REFERENCE_ALIGNERS`:
+
+```python
+ReferenceAligner("<name>", "<name>_env", "reference_aligners.run_<name>"),
+```
+
+That's it. The new aligner is now selectable everywhere automatically: `main.py`'s
+`--mapping` choices (so it works as an AIM reference mapper, one alignment per K),
+the all-pairs batch driver's `--aligner` choices, and `ReferenceMapper`. The
+single runner `run_aligner(...)` in the registry is the only code path that ever
+executes an aligner (via `conda run -n <env> python -m <module> …`), so no bespoke
+dispatch code is needed.
 
 ---
 
@@ -185,14 +217,12 @@ ST spot onto them. The spot→state mapping is **modular** (`--mapping`):
   neighbours **weighted by their reliability** `η`, so cleanly-labelled cells dominate.
   Parameter-free (no `--n_neighbors`); the neighbourhood auto-shrinks near clean labels
   and grows near noisy ones.
-- **`tangram` / `tacco` / `dot` / `spann`** — delegate the spot→state step to that
+- **`tangram` / `tacco` / `dot`** — delegate the spot→state step to that
   external aligner. For each `K` the reference cells are labelled by their AIM state and
   the aligner maps ST spots onto those states. The aligners run **out-of-process** via
-  `conda run` in their own env (`tangram_env` / `tacco_env` / `dot_env` / `spann_env`),
+  `conda run` in their own env (`tangram_env` / `tacco_env` / `dot_env`),
   so those envs must exist and `conda` must be on `PATH`; one alignment runs **per K**,
-  so a full sweep is slow. `spann` (a VAE + optimal-transport annotator, GPU
-  recommended) is the slowest — it retrains per K, with novel-cell detection disabled so
-  every spot maps to a state — and returns a one-hot `P` (SPANN emits a hard label).
+  so a full sweep is slow.
 
 ```bash
 conda activate aim_env
@@ -200,9 +230,8 @@ python main.py \
     --scdata        <path/to/sc.h5ad> \
     --stdata        <path/to/st.h5ad> \
     --output_dir    <output/pair_0> \
-    [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
+    [--mapping nearest_centroid|wann|tangram|tacco|dot] \
     [--leiden_resolution 3.0] \
-    [--normalize_and_log] \
     [--k_min 1] [--k_max <L>] [--k_step 1] \
     [--logging verbose]
 ```
@@ -254,8 +283,8 @@ python main.py \
     --sc_dir     <path/to/scRNA> \
     --st_dir     <path/to/ST> \
     --output_dir <output/agglomerative> \
-    [--mapping nearest_centroid|wann|tangram|tacco|dot|spann] \
-    [--leiden_resolution 3.0] [--normalize_and_log] \
+    [--mapping nearest_centroid|wann|tangram|tacco|dot] \
+    [--leiden_resolution 3.0] \
     [--k_min 1] [--k_max <L>] [--k_step 1]
 ```
 
@@ -294,5 +323,5 @@ python -m gui \
 
 Then open the printed URL (default http://localhost:8501), pick a mapper in the
 sidebar, click **Run**, and wait for the sweep to finish. Mappers without a
-per-spot confidence (`tangram`, `tacco`, `dot`, `spann`) disable the confidence
+per-spot confidence (`tangram`, `tacco`, `dot`) disable the confidence
 slider. `streamlit` is included in `environment.yml`.

@@ -4,9 +4,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
@@ -16,33 +13,10 @@ import pandas as pd
 import torch
 
 from adata_schema import OBS_LEIDEN_ALL_GENES, OBSM_SPATIAL, UNS_SHARED_GENES
+from reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
 from .base import SpotStateMapper
 
 logger = logging.getLogger(__name__)
-
-# reference_method -> (conda env, module invoked as `python -m <module>`)
-_ALIGNERS = {
-    "tangram": ("tangram_env", "reference_aligners.run_tangram"),
-    "tacco": ("tacco_env", "reference_aligners.run_tacco"),
-    "dot": ("dot_env", "reference_aligners.run_dot"),
-    "spann": ("spann_env", "reference_aligners.run_spann"),
-}
-
-# src/aim/mapping/reference.py -> repo root (parents: mapping, aim, src, root)
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
-
-def _conda_exe() -> str:
-    """Locate a conda launcher usable from subprocess. ``CONDA_EXE`` (set by conda
-    activation) points to a real executable; ``shutil.which`` is the fallback (on
-    Windows plain "conda" is a .bat that subprocess can't resolve without help)."""
-    exe = os.environ.get("CONDA_EXE") or shutil.which("conda") or shutil.which("mamba")
-    if not exe:
-        raise RuntimeError(
-            "conda not found: reference-mode needs conda on PATH (or CONDA_EXE set) "
-            "to run the aligner in its own environment."
-        )
-    return exe
 
 
 class ReferenceMapper(SpotStateMapper):
@@ -56,16 +30,21 @@ class ReferenceMapper(SpotStateMapper):
     sc/st pair materialised once by ``prepare``.
     """
 
-    name = "reference"
-
     def __init__(self, reference_method: str = "tangram") -> None:
-        if reference_method not in _ALIGNERS:
+        if reference_method not in REFERENCE_ALIGNERS:
             raise ValueError(
-                f"reference_method must be one of {tuple(_ALIGNERS)}, "
+                f"reference_method must be one of {tuple(REFERENCE_ALIGNERS)}, "
                 f"got {reference_method!r}"
             )
         self.reference_method = reference_method
+        # Output-subfolder name = the chosen aligner (``tangram``/``tacco``/``dot``).
+        # The sweep writes results to ``<root>/<mapper.name>/`` while ``main.py``
+        # writes ``config.yaml`` to ``<root>/<config.mapping>/``; naming the mapper
+        # after the aligner keeps the two in the same folder and stops the three
+        # aligners from colliding in a single ``reference/`` directory.
+        self.name = reference_method
         self._prepared = False
+        self._worker: AlignerWorker | None = None
 
     @staticmethod
     def _state_key(k: int) -> str:
@@ -103,7 +82,7 @@ class ReferenceMapper(SpotStateMapper):
             var=pd.DataFrame(index=shared),
         ).write_h5ad(self._sc_path)
 
-        # Carry spatial coordinates through: spatially-aware aligners (DOT, SPANN)
+        # Carry spatial coordinates through: spatially-aware aligners (DOT)
         # need them; the others simply ignore the extra obsm entry.
         st_obsm = {}
         if OBSM_SPATIAL in adata_st.obsm:
@@ -116,6 +95,15 @@ class ReferenceMapper(SpotStateMapper):
         ).write_h5ad(self._st_path)
 
         self._st_obs_names = [str(s) for s in adata_st.obs_names]
+
+        # One long-lived aligner process for the whole K-loop: it loads the
+        # shared-gene pair once and maps every K, instead of a fresh `conda run`
+        # (env activation + heavy imports + h5ad reload) per K.
+        self._worker = AlignerWorker(
+            self.reference_method, self._sc_path, self._st_path
+        )
+        self._worker.start()
+
         self._prepared = True
         logger.info(
             "ReferenceMapper[%s] prepared shared-gene inputs (%d genes, %d K-levels) at %s",
@@ -139,46 +127,24 @@ class ReferenceMapper(SpotStateMapper):
             # A single state is trivial (and degenerate for the aligners).
             return torch.ones((n_spots, 1), dtype=torch.float32), None
 
-        env, module = _ALIGNERS[self.reference_method]
         out_dir = self._workdir / self._state_key(k)
-        out_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("ReferenceMapper[%s] K=%d", self.reference_method, k)
+        assert self._worker is not None  # set in prepare()
+        out_path = self._worker.run_job(self._state_key(k), out_dir)
+        return self._read_mapping(out_path, k), None
 
-        cmd = [
-            _conda_exe(),
-            "run",
-            "-n",
-            env,
-            "python",
-            "-m",
-            module,
-            "--scdata",
-            str(self._sc_path),
-            "--stdata",
-            str(self._st_path),
-            "--output_folder",
-            str(out_dir),
-            "--cell_type_key",
-            self._state_key(k),
-        ]
-        logger.info(
-            "ReferenceMapper[%s] K=%d -> conda run -n %s python -m %s",
-            self.reference_method,
-            k,
-            env,
-            module,
-        )
+    def close(self) -> None:
+        """Stop the persistent aligner worker (called by the sweep after the
+        K-loop; also invoked on garbage collection as a backstop)."""
+        if self._worker is not None:
+            self._worker.stop()
+            self._worker = None
+
+    def __del__(self) -> None:
         try:
-            subprocess.run(
-                cmd, cwd=_REPO_ROOT, check=True, capture_output=True, text=True
-            )
-        except subprocess.CalledProcessError as exc:
-            tail = (exc.stderr or "")[-2000:]
-            raise RuntimeError(
-                f"{self.reference_method} aligner failed (K={k}, exit {exc.returncode}).\n"
-                f"--- stderr tail ---\n{tail}"
-            ) from exc
-
-        return self._read_mapping(out_dir / "mapping_prob.h5ad", k), None
+            self.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup during GC
+            pass
 
     def _read_mapping(self, path: Path, k: int) -> torch.Tensor:
         """Load the aligner's S x (states-present) mapping_prob.h5ad and reindex it
@@ -202,6 +168,3 @@ class ReferenceMapper(SpotStateMapper):
             fill_value=0.0,
         )
         return torch.tensor(frame.to_numpy(dtype=np.float32), dtype=torch.float32)
-
-    def config(self) -> dict:
-        return {"mapping": self.reference_method}

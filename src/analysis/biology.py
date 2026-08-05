@@ -191,13 +191,6 @@ def analyse_modularities(
         )
     modularity_shared_leiden = adata_sc.uns[UNS_MODULARITY_SHARED_LEIDEN]
     modularity_st_expression = _spatial_expression_modularity(adata_st)
-    logger.info(
-        "Modularity: all=%.4f shared=%.4f | shared Leiden ref=%.4f | ST expression=%.4f",
-        modularity_all,
-        modularity_shared,
-        modularity_shared_leiden,
-        modularity_st_expression,
-    )
 
     with open(output_data_dir / "modularity_metrics.json", "w") as f:
         json.dump(

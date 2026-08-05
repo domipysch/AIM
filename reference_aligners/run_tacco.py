@@ -9,34 +9,36 @@ from anndata import AnnData
 import argparse
 
 
-def tacco_align_data(
-    sc_path: Path,
-    st_path: Path,
+def tacco_map(
+    adata_sc: AnnData,
+    adata_st: AnnData,
     map_cell_types: bool,
     cell_type_key: str,
     output_folder: Path,
 ):
     """
-    Run TACCO alignment on a prepared dataset.
-    Saves both probabilistic and deterministic GEPs to output_folder.
+    Run TACCO alignment on already-loaded AnnData objects and write
+    ``mapping_prob.h5ad`` to ``output_folder``.
+
+    The inputs are treated as read-only (copied before ``tc.tl.annotate``, which
+    mutates ``adata_st``) so they can be reused across many K by
+    :class:`AlignerWorker`.
 
     Args:
-        sc_path: Full path to sc.h5ad.
-        st_path: Full path to st.h5ad.
+        adata_sc: Single-cell reference (C x G).
+        adata_st: Spatial data (S x G).
         map_cell_types: If True, aggregate cells by cell_type_key before mapping.
                         If False, map individual cells directly.
         cell_type_key: obs column to use as annotation when map_cell_types=True.
-        output_folder: Folder where to store gep_prob.h5ad and gep_det.h5ad.
-
+        output_folder: Folder where to store mapping_prob.h5ad.
     """
-    assert Path(sc_path).exists(), f"sc.h5ad not found: {sc_path}"
-    assert Path(st_path).exists(), f"st.h5ad not found: {st_path}"
-
+    output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
 
-    logging.info("Load data")
-    adata_sc = anndata.read_h5ad(Path(sc_path))  # C x G
-    adata_st = anndata.read_h5ad(Path(st_path))  # S x G
+    # Copy up front — tc.tl.annotate writes into adata_st (and cell mode adds an
+    # obs column to adata_sc), and the worker reuses the same objects per K.
+    adata_sc = adata_sc.copy()
+    adata_st = adata_st.copy()
 
     # Determine which obs column to use as the annotation key for TACCO
     if map_cell_types:
@@ -88,8 +90,53 @@ def tacco_align_data(
         obs=pd.DataFrame(index=fractions_prob.index),
         var=pd.DataFrame(index=fractions_prob.columns.astype(str)),
     )
-    ad_map.write_h5ad(output_folder / f"mapping_prob.h5ad")
-    logging.info("Saved mapping to %s", output_folder / f"mapping_prob.h5ad")
+    ad_map.write_h5ad(output_folder / "mapping_prob.h5ad")
+    logging.info("Saved mapping to %s", output_folder / "mapping_prob.h5ad")
+
+
+def _load_pair(sc_path: Path, st_path: Path) -> tuple[AnnData, AnnData]:
+    assert Path(sc_path).exists(), f"sc.h5ad not found: {sc_path}"
+    assert Path(st_path).exists(), f"st.h5ad not found: {st_path}"
+    logging.info("Load data")
+    adata_sc = anndata.read_h5ad(Path(sc_path))  # C x G
+    adata_st = anndata.read_h5ad(Path(st_path))  # S x G
+    return adata_sc, adata_st
+
+
+def tacco_align_data(
+    sc_path: Path,
+    st_path: Path,
+    map_cell_types: bool,
+    cell_type_key: str,
+    output_folder: Path,
+):
+    """One-shot: load the pair from disk and run :func:`tacco_map` once."""
+    adata_sc, adata_st = _load_pair(sc_path, st_path)
+    tacco_map(
+        adata_sc,
+        adata_st,
+        map_cell_types=map_cell_types,
+        cell_type_key=cell_type_key,
+        output_folder=output_folder,
+    )
+
+
+def _serve(sc_path: Path, st_path: Path, control_dir: Path) -> None:
+    """Load the pair once, then map one K per job (canonical baseline settings)."""
+    from reference_aligners.registry import serve_loop
+
+    adata_sc, adata_st = _load_pair(sc_path, st_path)
+
+    def handle_job(cell_type_key: str, output_folder: Path) -> None:
+        tacco_map(
+            adata_sc,
+            adata_st,
+            map_cell_types=True,
+            cell_type_key=cell_type_key,
+            output_folder=output_folder,
+        )
+
+    serve_loop(control_dir, handle_job)
 
 
 if __name__ == "__main__":
@@ -116,22 +163,40 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_folder",
         type=Path,
-        required=True,
-        help="Folder where to store results",
+        help="Folder where to store results (required unless --server)",
     )
     parser.add_argument(
         "--cell_type_key",
         type=str,
         required=False,
         default="cellType",
-        help="What cell type key to load from sc data as cell type annotation to be mapped. If not provided, no cell type annotation is loaded and mapping is done cell-based.",
+        help="What cell type key to load from sc data as cell type annotation to be mapped.",
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Persistent-worker mode: load the pair once and map one K per job "
+        "from --control_dir (see reference_aligners.registry.AlignerWorker).",
+    )
+    parser.add_argument(
+        "--control_dir",
+        type=Path,
+        default=None,
+        help="Job-queue directory (required with --server)",
     )
     args = parser.parse_args()
 
-    tacco_align_data(
-        args.scdata,
-        args.stdata,
-        map_cell_types=args.cell_type_key is not None,
-        cell_type_key=args.cell_type_key,
-        output_folder=args.output_folder,
-    )
+    if args.server:
+        if args.control_dir is None:
+            parser.error("--server requires --control_dir")
+        _serve(args.scdata, args.stdata, args.control_dir)
+    else:
+        if args.output_folder is None:
+            parser.error("--output_folder is required")
+        tacco_align_data(
+            args.scdata,
+            args.stdata,
+            map_cell_types=args.cell_type_key is not None,
+            cell_type_key=args.cell_type_key,
+            output_folder=args.output_folder,
+        )

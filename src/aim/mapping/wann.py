@@ -160,7 +160,6 @@ class WANNMapper(SpotStateMapper):
             newly = (pred == y) & ~resolved
             eta = torch.where(newly, torch.full_like(eta, 1.0 / kp), eta)
             resolved |= newly
-            unresolved = n_cells - torch.count_nonzero(resolved)
             if bool(resolved.all()):
                 break
         return eta
@@ -195,10 +194,3 @@ class WANNMapper(SpotStateMapper):
         P.scatter_add_(1, nbr_states, weights)
         P = P / P.sum(dim=1, keepdim=True).clamp_min(self.eps)
         return P, entropy_confidence(P)
-
-    def config(self) -> dict:
-        return {
-            "mapping": self.name,
-            "reliability_k_min": K_MIN,
-            "reliability_k_max": K_MAX,
-        }

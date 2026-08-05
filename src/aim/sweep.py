@@ -117,34 +117,35 @@ def build_reference_scaffold(
 def run(
     sc_path: Path,
     st_path: Path,
-    output_folder: Path,
+    root_output_folder: Path,
     mapper: SpotStateMapper,
     agglo_tree_method: str = "ward",
     leiden_resolution: float = 3.0,
     k_min: int | None = None,
     k_max: int | None = None,
     k_step: int = 1,
-    reference_cache_dir: Path | None = None,
 ):
     """Run the full AIM sweep for one sc/ST pair, writing one folder per K under
-    ``output_folder`` and running the post-mapping analysis on each.
+    ``root_output_folder / mapper.name`` and running the post-mapping analysis on
+    each.
 
-    When ``reference_cache_dir`` is given, the mapper-independent reference
-    scaffold (over-clustering + aggregates + UMAPs) is read from / written to a
-    shared cache there, so running several mappers for one pair computes it once.
+    The mapper-independent reference scaffold (over-clustering + aggregates +
+    UMAPs) is cached under ``root_output_folder`` (see ``reference_scaffold_key`` /
+    ``read_reference_scaffold``), so running several mappers for one pair computes
+    it once.
     """
 
-    output_folder = Path(output_folder)
-    output_folder.mkdir(parents=True, exist_ok=True)
+    root_output_folder = Path(root_output_folder)
+    root_output_folder.mkdir(parents=True, exist_ok=True)
+    mapping_output_folder = Path(root_output_folder) / mapper.name
+    mapping_output_folder.mkdir(parents=True, exist_ok=True)
 
     adata_sc = anndata.read_h5ad(sc_path)
     adata_st = anndata.read_h5ad(st_path)
 
     shared_genes = list(adata_sc.var_names.intersection(adata_st.var_names))
-    cached = None
-    if reference_cache_dir is not None:
-        key = reference_scaffold_key(sc_path, st_path, shared_genes, leiden_resolution)
-        cached = read_reference_scaffold(reference_cache_dir, key)
+    key = reference_scaffold_key(sc_path, st_path, shared_genes, leiden_resolution)
+    cached = read_reference_scaffold(root_output_folder, key)
 
     if cached is not None:
         # Reuse the shared scaffold; only the ST half of preprocessing is left.
@@ -153,11 +154,11 @@ def run(
     else:
         pre_processing(adata_sc, adata_st)
         build_reference_scaffold(adata_sc, leiden_resolution)
-        if reference_cache_dir is not None:
-            write_reference_scaffold(reference_cache_dir, adata_sc, key)
+        if root_output_folder is not None:
+            write_reference_scaffold(root_output_folder, adata_sc, key)
 
     # Every mapper's run root keeps its own copy (the GUI reads it per mapper).
-    write_leiden_overclustering_all_genes(output_folder, adata_sc)
+    write_leiden_overclustering_all_genes(mapping_output_folder, adata_sc)
 
     agglomerative_clustering = build_agglomeration_tree(
         adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES],
@@ -184,28 +185,33 @@ def run(
     }
     mapper.prepare(adata_sc, adata_st, labels_by_k)
 
-    for k in ks:
+    try:
+        for k in ks:
 
-        leiden_to_state = labels_by_k[k]
-        spot_to_state, confidence = mapper.map(leiden_to_state, k)
+            leiden_to_state = labels_by_k[k]
+            spot_to_state, confidence = mapper.map(leiden_to_state, k)
 
-        run_dir = output_folder / f"k_{k:03d}"
-        run_dir.mkdir(parents=True, exist_ok=True)
+            run_dir = mapping_output_folder / f"k_{k:03d}"
+            run_dir.mkdir(parents=True, exist_ok=True)
 
-        write_run_outputs(
-            run_dir=run_dir,
-            spot_to_state=spot_to_state,
-            confidence=confidence,
-            labels_k=leiden_to_state,
-            n_leiden=n_leiden_clusters,
-            k=k,
-            adata_st=adata_st,
-        )
-        logger.info("K=%3d mapped -> %s", k, run_dir)
+            write_run_outputs(
+                run_dir=run_dir,
+                spot_to_state=spot_to_state,
+                confidence=confidence,
+                labels_k=leiden_to_state,
+                n_leiden=n_leiden_clusters,
+                k=k,
+                adata_st=adata_st,
+            )
+            logger.info("K=%3d mapped -> %s", k, run_dir)
 
-        run_analysis(adata_sc, adata_st, run_dir)
+            run_analysis(adata_sc, adata_st, run_dir)
+    finally:
+        # Release any per-sweep resources (e.g. the reference aligner's worker
+        # subprocess) whether the loop finished or raised.
+        mapper.close()
 
     # Cross-K comparison: gather the per-K analysis metrics written above into one
     # table + figure at the run root (independent of the per-K PDF reports).
     logger.info("Comparing K-runs...")
-    compare_k_runs(output_folder, ks)
+    compare_k_runs(mapping_output_folder, ks)

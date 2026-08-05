@@ -1,7 +1,8 @@
-"""Batch runner: reference aligner (Tangram / TACCO / DOT) for every pair × cell-type granularity.
+"""Batch runner: a reference aligner for every pair × cell-type granularity.
 
-Run from the repository root with the appropriate conda environment active:
-    conda activate tangram_env   # or tacco_env / dot_env
+Run from the repository root in ``aim_env`` (the aligner itself runs in its own
+env via ``conda run``, so only ``conda`` on PATH is required):
+    conda activate aim_env
     python -m reference_aligners.run_reference_aligner_all_pairs --aligner tangram [options]
 
 For each pair the script iterates over every non-empty CellTypeKey in scRNA/index.csv
@@ -10,6 +11,9 @@ For each pair the script iterates over every non-empty CellTypeKey in scRNA/inde
     <output_dir>/{PairID:03d}_{scName}__{stName}/{cell_type_key}/
         mapping_prob.h5ad     <- spots x type mapping, var_names = cell type names
         analysis/data/        <- mapping analysis metrics (always run; no figures)
+
+The set of available aligners comes from ``reference_aligners.registry``; adding
+one there makes it selectable here automatically.
 """
 
 import argparse
@@ -17,7 +21,6 @@ import csv
 import logging
 import sys
 from pathlib import Path
-from typing import Callable
 
 # The mapping analysis step imports `metrics.*` / `utils`, which live under
 # src/ — add it to sys.path here so this script works regardless of whether
@@ -28,6 +31,7 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 from reference_aligners.mapping_analysis.analyze import analyze_mapping
+from reference_aligners.registry import REFERENCE_ALIGNERS, run_aligner
 
 logging.basicConfig(
     stream=sys.stdout,
@@ -37,85 +41,17 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _get_align_fn(aligner: str) -> Callable:
-    """Return an align callable with signature (sc_path, st_path, ct_key, output_folder)."""
-    if aligner == "tangram":
-        from reference_aligners.run_tangram import tangram_align_data
-
-        def _align(
-            sc_path: Path, st_path: Path, ct_key: str, output_folder: Path
-        ) -> None:
-            tangram_align_data(
-                sc_path=sc_path,
-                st_path=st_path,
-                normalize_and_log=False,
-                compute_marker_genes=False,
-                map_clusters=True,
-                cell_type_key=ct_key,
-                output_folder=output_folder,
-            )
-
-        return _align
-
-    if aligner == "tacco":
-        from reference_aligners.run_tacco import tacco_align_data
-
-        def _align(
-            sc_path: Path, st_path: Path, ct_key: str, output_folder: Path
-        ) -> None:
-            tacco_align_data(
-                sc_path=sc_path,
-                st_path=st_path,
-                map_cell_types=True,
-                cell_type_key=ct_key,
-                output_folder=output_folder,
-            )
-
-        return _align
-
-    if aligner == "dot":
-        from reference_aligners.run_dot import dot_align_data
-
-        def _align(
-            sc_path: Path, st_path: Path, ct_key: str, output_folder: Path
-        ) -> None:
-            dot_align_data(
-                sc_path=sc_path,
-                st_path=st_path,
-                cell_type_key=ct_key,
-                output_folder=output_folder,
-            )
-
-        return _align
-
-    if aligner == "spann":
-        from reference_aligners.run_spann import spann_align_data
-
-        def _align(
-            sc_path: Path, st_path: Path, ct_key: str, output_folder: Path
-        ) -> None:
-            spann_align_data(
-                sc_path=sc_path,
-                st_path=st_path,
-                cell_type_key=ct_key,
-                output_folder=output_folder,
-            )
-
-        return _align
-
-    raise ValueError(f"Unknown aligner: {aligner!r}")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run a reference aligner (Tangram, TACCO, or DOT) "
-        "for every pair in pairs.csv, once per available cell-type granularity."
+        description="Run a reference aligner for every pair in pairs.csv, "
+        "once per available cell-type granularity."
     )
     parser.add_argument(
         "--aligner",
-        choices=["tangram", "tacco", "dot", "spann"],
+        choices=list(REFERENCE_ALIGNERS),
         required=True,
-        help="Which aligner to run. Activate the matching conda env before running",
+        help="Which reference aligner to run (each runs in its own conda env "
+        "via `conda run`; run this script from aim_env).",
     )
     parser.add_argument(
         "--pairs_csv",
@@ -142,8 +78,6 @@ def main() -> None:
         help="Root folder for all pair outputs",
     )
     args = parser.parse_args()
-
-    align = _get_align_fn(args.aligner)
 
     with open(args.pairs_csv, newline="") as fh:
         pairs = list(csv.DictReader(fh))
@@ -194,7 +128,7 @@ def main() -> None:
 
             logger.info(f"{tag} Running {args.aligner}: {sc_name}  ×  {st_name}")
             try:
-                align(sc_path, st_path, ct_key, granularity_dir)
+                run_aligner(args.aligner, sc_path, st_path, granularity_dir, ct_key)
             except Exception as exc:
                 msg = f"{tag} {args.aligner} FAILED: {exc}"
                 logger.error(msg)

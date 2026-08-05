@@ -3,8 +3,9 @@
 Launched with ``python -m gui --scdata ... --stdata ... --output_dir ...``; the
 launcher (``gui/__main__.py``) starts a Streamlit server running ``gui/app.py``.
 The GUI drives the AIM sweep in-process (one run root per mapper under the given
-output dir) and renders per-K views by reusing the repository's existing plotting
-and analysis code -- it does not modify any existing module.
+output dir) and renders per-K views (Plotly, built here in ``gui/render.py``) from
+the machine-readable metrics the analysis writes -- it does not compute any metric
+itself, and does not modify any existing module.
 """
 
 # --- native import-order guard (Windows) ------------------------------------

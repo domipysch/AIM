@@ -3,6 +3,8 @@
 
 from dataclasses import dataclass
 
+from reference_aligners.registry import REFERENCE_ALIGNERS
+
 from .mapping import (
     NearestCentroidMapper,
     WANNMapper,
@@ -16,7 +18,8 @@ _MAPPERS: dict[str, type[SpotStateMapper]] = {
     WANNMapper.name: WANNMapper,
 }
 # External reference aligners, all served by ReferenceMapper and selected by name.
-_REFERENCE_METHODS = ("tangram", "tacco", "dot", "spann")
+# Sourced from the aligner registry so adding one there is the only edit needed.
+_REFERENCE_METHODS = tuple(REFERENCE_ALIGNERS)
 
 MAPPING_CHOICES = tuple(_MAPPERS) + _REFERENCE_METHODS
 

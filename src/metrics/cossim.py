@@ -22,7 +22,7 @@ GENE_JSON = "cossim-per-gene{suffix}.json"
 SPOT_JSON = "cossim-per-spot{suffix}.json"
 
 
-def _cosine_along_axis(A: np.ndarray, B: np.ndarray, axis: int) -> np.ndarray:
+def cosine_along_axis(A: np.ndarray, B: np.ndarray, axis: int) -> np.ndarray:
     """Cosine similarity of two equally-shaped 2-D arrays reduced along ``axis``.
 
     ``axis=0`` gives one value per column, ``axis=1`` one per row. Zero-norm
@@ -102,8 +102,8 @@ def compute_cossim(ground_truth: AnnData, prediction: AnnData) -> CossimResult:
     genes = list(gt.var_names)
     spots = list(gt.obs_names)
 
-    per_gene = dict(zip(genes, _cosine_along_axis(GT, PR, axis=0).tolist()))
-    per_spot = dict(zip(spots, _cosine_along_axis(GT, PR, axis=1).tolist()))
+    per_gene = dict(zip(genes, cosine_along_axis(GT, PR, axis=0).tolist()))
+    per_spot = dict(zip(spots, cosine_along_axis(GT, PR, axis=1).tolist()))
     return CossimResult(per_gene=per_gene, per_spot=per_spot)
 
 
@@ -124,10 +124,4 @@ def compute_and_save_cossim(
     if output_folder is not None:
         result.save(output_folder, suffix=suffix)
 
-    logger.info(
-        "cossim%s — genewise median=%.4f, spotwise median=%.4f",
-        suffix,
-        result.median_gene if result.median_gene is not None else float("nan"),
-        result.median_spot if result.median_spot is not None else float("nan"),
-    )
     return result

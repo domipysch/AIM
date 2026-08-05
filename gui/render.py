@@ -5,7 +5,9 @@ off disk (each K's ``analysis/data`` folder) and, for the UMAP / profile /
 fractions / merge-map views, the reference scaffold. The headline UMAP(s) +
 spatial map share a single state legend and are recoloured client-side; the
 spatial scatter in particular is rebuilt here on every confidence-threshold
-change so spots below the threshold can be drawn grey.
+change so spots below the threshold can be drawn grey. The threshold-independent
+UMAP-panel data is memoised (``_umap_panel_data``) so a threshold drag rebuilds
+only the spatial panel, not the UMAP.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import plotly.graph_objects as go
+import streamlit as st
 from anndata import AnnData
 from plotly.subplots import make_subplots
 
@@ -33,7 +36,7 @@ from analysis.loading import (
 )
 from analysis.utils import to_dense
 
-from . import data_access
+from . import data_access, scores
 
 logger = logging.getLogger(__name__)
 
@@ -251,33 +254,21 @@ def _project_state_centroids(
 
 def _add_state_centroid_markers(
     fig: go.Figure,
-    adata_sc: AnnData,
-    coords: np.ndarray,
-    states: np.ndarray,
-    umap_key: str,
+    centroids: dict[int, tuple[float, float]],
     *,
     row: int,
     col: int,
     palette: dict[int, tuple],
     dot_size: float,
 ) -> None:
-    """Overlay one diamond per state at its projected expression centroid.
+    """Overlay one diamond per state at its (precomputed) projected expression
+    centroid.
 
     Each marker shares the state's ``legendgroup`` (so the existing legend
-    toggles it with its cells) and carries no legend entry of its own. Silently
-    skips if the matching PCA representation is absent from the scaffold.
+    toggles it with its cells) and carries no legend entry of its own.
+    ``centroids`` maps state -> (umap_x, umap_y); an empty dict adds nothing.
     """
-    pca_key = _UMAP_TO_PCA.get(umap_key)
-    if pca_key is None or pca_key not in adata_sc.obsm:
-        logger.warning(
-            "SHOW_STATE_CENTROIDS: %s missing from scaffold; skipping centroids "
-            "for %s.",
-            pca_key,
-            umap_key,
-        )
-        return
-    rep = np.asarray(adata_sc.obsm[pca_key])
-    for state, (cx, cy) in _project_state_centroids(coords, rep, states).items():
+    for state, (cx, cy) in centroids.items():
         fig.add_trace(
             go.Scattergl(
                 x=[cx],
@@ -300,6 +291,50 @@ def _add_state_centroid_markers(
         )
 
 
+@st.cache_data(show_spinner=False)
+def _umap_panel_data(
+    _adata_sc, root_str: str, k: int, umap_key: str, want_centroids: bool
+):
+    """Threshold-independent UMAP-panel data for ``(root, k, umap_key)``, cached.
+
+    The confidence threshold only recolours the *spatial* panel, but the headline
+    figure is rebuilt on every threshold drag; without this cache each drag would
+    re-run the per-cell state inference and the O(n_cells) centroid projection for
+    the UMAP panel(s) too. Here that work is memoised on ``(root_str, k, umap_key,
+    want_centroids)`` — the scaffold ``_adata_sc`` is passed with a leading
+    underscore so ``st.cache_data`` does not try to hash it (it is the stable,
+    resource-cached scaffold for this run root).
+
+    Returns picklable arrays: per-cell ``states``/``leiden``, the embedding
+    ``coords``, and ``centroids`` = {state: (umap_x, umap_y)} (empty if unwanted
+    or the PCA rep is missing).
+    """
+    leiden_to_state = load_leiden_to_state(data_access.k_dir(Path(root_str), k))
+    leiden = _adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+    states = leiden_to_state[leiden].astype(int)
+    coords = np.asarray(_adata_sc.obsm[umap_key])
+
+    centroids: dict[int, tuple[float, float]] = {}
+    if want_centroids:
+        pca_key = _UMAP_TO_PCA.get(umap_key)
+        if pca_key is not None and pca_key in _adata_sc.obsm:
+            rep = np.asarray(_adata_sc.obsm[pca_key])
+            centroids = _project_state_centroids(coords, rep, states)
+        else:
+            logger.warning(
+                "SHOW_STATE_CENTROIDS: %s missing from scaffold; skipping centroids "
+                "for %s.",
+                pca_key,
+                umap_key,
+            )
+    return {
+        "coords": coords,
+        "leiden": leiden,
+        "states": states,
+        "centroids": centroids,
+    }
+
+
 def _add_umap_traces(
     fig: go.Figure,
     adata_sc: AnnData,
@@ -317,19 +352,17 @@ def _add_umap_traces(
     """Add a UMAP scatter (one trace per state) to subplot (``row``, ``col``).
 
     ``umap_key`` selects the embedding (all-gene ``X_umap`` by default, or the
-    shared-gene ``X_umap_shared_genes``). Applies this K's tree cut to the
-    scaffold (``infer_cell_to_state_cluster``) so ``computed_state`` is correct
-    for ``k`` regardless of PNG-cache state. Each trace joins ``legendgroup``
-    ``state<n>`` so the interaction layer can toggle the same state in every
-    subplot; a state gets a legend entry only the first time it is seen (tracked
-    in ``legend_shown``).
+    shared-gene ``X_umap_shared_genes``). This K's tree cut is applied to the
+    scaffold via the cached ``_umap_panel_data`` so ``computed_state`` is correct
+    for ``k`` without recomputing on unrelated (e.g. threshold) reruns. Each trace
+    joins ``legendgroup`` ``state<n>`` so the interaction layer can toggle the same
+    state in every subplot; a state gets a legend entry only the first time it is
+    seen (tracked in ``legend_shown``).
     """
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-    infer_cell_to_state_cluster(adata_sc, leiden_to_state)
-
-    coords = np.asarray(adata_sc.obsm[umap_key])
-    states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
-    leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+    data = _umap_panel_data(adata_sc, str(root), int(k), umap_key, SHOW_STATE_CENTROIDS)
+    coords = data["coords"]
+    states = data["states"]
+    leiden = data["leiden"]
 
     for state in sorted(np.unique(states).tolist()):
         mask = states == state
@@ -369,10 +402,7 @@ def _add_umap_traces(
     if SHOW_STATE_CENTROIDS:
         _add_state_centroid_markers(
             fig,
-            adata_sc,
-            coords,
-            states,
-            umap_key,
+            data["centroids"],
             row=row,
             col=col,
             palette=palette,
@@ -1115,129 +1145,285 @@ def _card_layout(fig: go.Figure, *, height: int, **extra) -> go.Figure:
     return _base_layout(fig, height=height, font=_CARD_FONT, **extra)
 
 
-def _ksweep_line_figure(
-    df,
-    series: list[tuple[str, str]],
-    *,
-    title: str,
-    ytitle: str,
-    height: int = 300,
-    colors: list[str] | None = None,
+# --------------------------------------------------------------------------- #
+# K-sweep ("Comparing K") figures
+# --------------------------------------------------------------------------- #
+# Two rows of three cards, all linked client-side by ``widgets.linked_plot``: one
+# line card per criterion (its two measured curves plus their harmonic mean, see
+# gui/scores.py) and one scatter card per criterion pair (one dot per K, at its
+# two harmonic means). Every K-indexed trace carries ``customdata[i][0] = K`` --
+# that is what the linked-plot component keys hovering, highlighting and clicking
+# on; the scatter cards additionally stash their null-crosshair coordinates and
+# axis ranges in ``layout.meta["aim"]``.
+
+# The harmonic-mean curve and the shuffle-null crosshair are derived, not
+# measured, so they stay off the categorical palette: light grey dashed for the
+# combined score, slightly darker grey dotted for the null crosshair (they never
+# share a plot). ``_RING_COLOR`` outlines whichever point the linked hover picks.
+_COMBINED_COLOR = "#aeb4bb"
+_NULL_COLOR = "#7c828a"
+_RING_COLOR = "#22262b"
+_MARKER_SIZE = 7
+_SCATTER_MARKER_SIZE = 11
+
+
+def _k_customdata(*columns) -> list[list[float]]:
+    """Per-point ``customdata`` rows whose first column is K (the linking key).
+
+    Returned as plain nested lists on purpose: plotly.py serialises ndarrays as
+    base64 typed arrays, which only Plotly.js itself decodes -- the linked-plot
+    component reads ``customdata`` out of the figure JSON directly.
+    """
+    stacked = [np.asarray(c, dtype=float) for c in columns]
+    return [[float(v) for v in row] for row in zip(*stacked)]
+
+
+def _finite_or_none(value: float) -> float | None:
+    """``None`` for non-finite values, so they survive JSON as ``null``."""
+    v = float(value)
+    return v if np.isfinite(v) else None
+
+
+def _null_text(value: float) -> str:
+    """A null baseline formatted for a hover label ("n/a" when not computed)."""
+    v = float(value)
+    return f"{v:.3f}" if np.isfinite(v) else "n/a"
+
+
+def render_ksweep_criterion_figure(
+    df, criterion, *, index: int = 0, height: int = 300
 ) -> go.Figure:
-    """A K-sweep line chart: each ``(column, label)`` in ``series`` becomes a
-    line over K. Shared look for the three per-method K-sweep cards. ``colors``,
-    when given, sets an explicit per-series colour (by position in ``series``) so
-    lines stay distinct across the separate cards."""
+    """The line card for one criterion: its two curves over K plus their harmonic
+    mean (the score the scatter cards below plot against each other).
+
+    A criterion whose two curves live on different scales (the spatial z-scores)
+    is drawn *scaled* -- each curve divided by its own maximum over the sweep --
+    so both curves and their mean share one axis; the hover still reports the raw
+    value. ``index`` picks the criterion's colour pair out of the shared palette.
+    """
+    k = df["k"].to_numpy()
+    raw_a, raw_b, scaled_a, scaled_b = scores.scaled_curves(df, criterion)
+    palette = (_mapper_color(2 * index), _mapper_color(2 * index + 1))
+
     fig = go.Figure()
-    for i, (col, label) in enumerate(series):
-        if col in df.columns:
-            c = colors[i] if colors else None
-            fig.add_trace(
-                go.Scatter(
-                    x=df["k"],
-                    y=df[col],
-                    mode="lines+markers",
-                    name=label,
-                    line=dict(color=c),
-                    marker=dict(color=c),
-                    hovertemplate=f"{label}<br>K %{{x}}<br>%{{y:.3f}}<extra></extra>",
-                )
+    for column, label, raw, scaled, color in zip(
+        criterion.columns,
+        criterion.curve_labels,
+        (raw_a, raw_b),
+        (scaled_a, scaled_b),
+        palette,
+    ):
+        if column not in df.columns:
+            continue
+        if criterion.scale_to_max:
+            hover = (
+                f"{label}<br>K %{{customdata[0]:.0f}}<br>"
+                "scaled %{y:.3f}  (raw %{customdata[1]:.2f})<extra></extra>"
             )
+        else:
+            hover = f"{label}<br>K %{{customdata[0]:.0f}}<br>%{{y:.3f}}<extra></extra>"
+        fig.add_trace(
+            go.Scatter(
+                x=k,
+                y=scaled,
+                customdata=_k_customdata(k, raw),  # [K, raw value]
+                mode="lines+markers",
+                name=label,
+                line=dict(color=color),
+                marker=dict(
+                    color=color,
+                    size=_MARKER_SIZE,
+                    line=dict(width=0, color=_RING_COLOR),
+                ),
+                hovertemplate=hover,
+            )
+        )
+
+    combined = scores.harmonic_mean(scaled_a, scaled_b)
+    fig.add_trace(
+        go.Scatter(
+            x=k,
+            y=combined,
+            customdata=_k_customdata(k),
+            mode="lines+markers",
+            name="harmonic mean",
+            line=dict(color=_COMBINED_COLOR, dash="dash", width=2),
+            # The mean is undefined wherever either curve is (a K with no
+            # neighbourhood-enrichment z, say); bridge those Ks rather than break
+            # the line, the missing markers already show where they are.
+            connectgaps=True,
+            marker=dict(
+                color=_COMBINED_COLOR,
+                size=_MARKER_SIZE,
+                symbol="diamond",
+                line=dict(width=0, color=_RING_COLOR),
+            ),
+            hovertemplate=(
+                "harmonic mean<br>K %{customdata[0]:.0f}<br>%{y:.3f}<extra></extra>"
+            ),
+        )
+    )
+
     return _base_layout(
         fig,
         height=height,
         font=_CARD_FONT,
-        title=dict(text=title, font=dict(size=13)),
+        title=dict(text=criterion.label, font=dict(size=13)),
         xaxis_title="K",
-        yaxis_title=ytitle,
+        yaxis_title=criterion.unit,
         margin=dict(l=10, r=10, t=40, b=52),
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
     )
 
 
-def render_ksweep_reconstruction_figure(df) -> go.Figure:
-    """K-sweep reconstruction cosine similarity: the raw hard-assignment combos
-    (spot/gene) on one y-axis over K."""
-    return _ksweep_line_figure(
-        df,
-        [
-            ("cossim_hard_raw_spot", "raw · spot"),
-            ("cossim_hard_raw_gene", "raw · gene"),
-        ],
-        title="Reconstruction cosine similarity",
-        ytitle="cosine similarity",
-        colors=[_mapper_color(0), _mapper_color(1)],
+def _score_axis_range(
+    *value_arrays, pad_lo: float = 0.06, pad_hi: float = 0.06, from_zero: bool = False
+) -> list[float] | None:
+    """A padded [lo, hi] range covering every finite value, or ``None``.
+
+    The scatter axes are pinned (rather than autoranged) so the client-side null
+    crosshair can span the full axis and so hovering never re-zooms the view; any
+    null baseline is included, which is why a null far from the observed values
+    compresses the dots — the plots stay drag-zoomable. The two paddings are
+    separate fractions of the span because each dot carries its K as a label above
+    it, which needs more headroom at the top than anywhere else. ``from_zero`` pins
+    the low end at 0 (no bottom pad) so a criterion is read in absolute terms.
+    """
+    values = np.concatenate([np.asarray(a, dtype=float).ravel() for a in value_arrays])
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return None
+    lo, hi = float(finite.min()), float(finite.max())
+    if from_zero:
+        lo = min(lo, 0.0)
+    span = (hi - lo) if hi > lo else max(abs(hi), 1.0)
+    lo_out = 0.0 if from_zero and lo >= 0.0 else lo - pad_lo * span
+    return [lo_out, hi + pad_hi * span]
+
+
+def render_ksweep_scatter_figure(
+    score_table, x_criterion, y_criterion, *, mask=None, height: int = 320
+) -> go.Figure:
+    """One criterion's combined score against another's -- one dot per K.
+
+    The dots are joined in K order so the sweep's trajectory is readable. A grey
+    line marks an axis's label-shuffle null where one exists (only reconstruction
+    does; spatial's is always 0 and coherence has none, so those axes get no
+    line). The lines start hidden: the linked-plot component moves them to the
+    hovered K's null (its per-K coordinates travel in ``layout.meta["aim"]["nulls"]``,
+    keyed by K, ``null`` where absent) and hides them again on unhover.
+
+    ``mask`` (a boolean array over the table's rows) restricts the plot to a
+    subset of K -- the Pareto-optimal ones, say. The colour scale still spans the
+    full sweep, so a K keeps its colour whether or not the rest is shown.
+    """
+    full_k = score_table["k"].to_numpy(dtype=int)
+    if mask is not None:
+        score_table = score_table[np.asarray(mask, dtype=bool)]
+    k = score_table["k"].to_numpy(dtype=int)
+    xs = score_table[x_criterion.key].to_numpy(dtype=float)
+    ys = score_table[y_criterion.key].to_numpy(dtype=float)
+    x_null = score_table[f"{x_criterion.key}{scores.NULL_SUFFIX}"].to_numpy(dtype=float)
+    y_null = score_table[f"{y_criterion.key}{scores.NULL_SUFFIX}"].to_numpy(dtype=float)
+
+    # Extra room where the K labels go (above each dot) and to either side, so a
+    # dot at the edge of the data still has its label fully inside the card.
+    x_range = _score_axis_range(
+        xs, x_null, pad_lo=0.10, pad_hi=0.10, from_zero=x_criterion.axis_from_zero
+    )
+    y_range = _score_axis_range(
+        ys, y_null, pad_lo=0.06, pad_hi=0.18, from_zero=y_criterion.axis_from_zero
     )
 
-
-def render_ksweep_spatial_figure(df, *, height: int = 300) -> go.Figure:
-    """K-sweep spatial organisation: neighbourhood-enrichment and local-purity
-    z-scores over K, each on its own y-axis (nhood left, local purity right)
-    because the two z-scores live on very different scales."""
-    palette = [_mapper_color(2), _mapper_color(3)]
     fig = go.Figure()
-    if "nhood_mean_self_zscore" in df.columns:
+    # The K-ordered path, drawn under the dots.
+    fig.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            mode="lines",
+            line=dict(color="rgba(150,150,150,0.5)", width=1),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    # Null crosshair: positioned client-side, spanning the (fixed) axis ranges.
+    # Kept out of the legend -- the card's caption explains the grey lines, and a
+    # legend entry blinking in and out on every hover is more distracting.
+    for tag in ("nullV", "nullH"):
         fig.add_trace(
             go.Scatter(
-                x=df["k"],
-                y=df["nhood_mean_self_zscore"],
-                mode="lines+markers",
-                name="nhood enrichment z",
-                yaxis="y",
-                line=dict(color=palette[0]),
-                marker=dict(color=palette[0]),
-                hovertemplate="nhood enrichment z<br>K %{x}<br>%{y:.3f}<extra></extra>",
+                x=[],
+                y=[],
+                mode="lines",
+                meta=tag,
+                line=dict(color=_NULL_COLOR, width=1.5, dash="dot"),
+                hoverinfo="skip",
+                showlegend=False,
+                visible=False,
             )
         )
-    if "local_purity_zscore" in df.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=df["k"],
-                y=df["local_purity_zscore"],
-                mode="lines+markers",
-                name="local purity z",
-                yaxis="y2",
-                line=dict(color=palette[1]),
-                marker=dict(color=palette[1]),
-                hovertemplate="local purity z<br>K %{x}<br>%{y:.3f}<extra></extra>",
-            )
+    fig.add_trace(
+        go.Scatter(
+            x=xs,
+            y=ys,
+            # [K, x null, y null] -- the nulls pre-formatted so an uncomputed one
+            # reads "n/a" in the hover instead of an empty number.
+            customdata=[
+                [float(kk), _null_text(xn), _null_text(yn)]
+                for kk, xn, yn in zip(k, x_null, y_null)
+            ],
+            mode="markers+text",
+            text=[str(v) for v in k],
+            textposition="top center",
+            textfont=dict(size=9, color="#6b7280"),
+            # Draw dot and label whole even when they reach past the axis — the
+            # padding above keeps them off the title, and a half-cropped K label is
+            # worse than one overhanging the plot area.
+            cliponaxis=False,
+            name="K",
+            showlegend=False,
+            marker=dict(
+                size=_SCATTER_MARKER_SIZE,
+                color=k,
+                colorscale="Viridis",
+                cmin=float(full_k.min()) if full_k.size else 0.0,
+                cmax=float(full_k.max()) if full_k.size else 1.0,
+                showscale=False,
+                line=dict(width=0, color=_RING_COLOR),
+            ),
+            hovertemplate=(
+                "K %{customdata[0]:.0f}<br>"
+                f"{x_criterion.short} %{{x:.3f}}  (null %{{customdata[1]}})<br>"
+                f"{y_criterion.short} %{{y:.3f}}  (null %{{customdata[2]}})"
+                "<extra></extra>"
+            ),
         )
-    return _base_layout(
+    )
+
+    _base_layout(
         fig,
         height=height,
         font=_CARD_FONT,
-        title=dict(text="Spatial organisation", font=dict(size=13)),
-        xaxis_title="K",
-        yaxis=dict(
-            title=dict(text="nhood enrichment z", font=dict(color=palette[0])),
-            tickfont=dict(color=palette[0]),
+        title=dict(
+            text=f"{y_criterion.short} vs {x_criterion.short}", font=dict(size=13)
         ),
-        yaxis2=dict(
-            title=dict(text="local purity z", font=dict(color=palette[1])),
-            tickfont=dict(color=palette[1]),
-            overlaying="y",
-            side="right",
-            showgrid=False,
-        ),
+        xaxis=dict(title=x_criterion.label, range=x_range),
+        yaxis=dict(title=y_criterion.label, range=y_range),
         margin=dict(l=10, r=10, t=40, b=52),
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
+        # Read by widgets.linked_plot (not by Plotly itself).
+        meta=dict(
+            aim=dict(
+                nulls={
+                    str(int(kk)): [_finite_or_none(xn), _finite_or_none(yn)]
+                    for kk, xn, yn in zip(k, x_null, y_null)
+                },
+                ranges=dict(x=x_range, y=y_range),
+            )
+        ),
     )
-
-
-def render_ksweep_coherence_figure(df) -> go.Figure:
-    """K-sweep transcriptional coherence over K: the ST-expression modularity of
-    the mapped spots (mapping-side) alongside the reference-side modularity of the
-    computed-state partition on the sc shared-gene graph (mapper-independent)."""
-    return _ksweep_line_figure(
-        df,
-        [
-            ("modularity_st_expression", "ST expression (mapping)"),
-            ("modularity_shared", "SC shared-gene (reference)"),
-        ],
-        title="Transcriptional coherence",
-        ytitle="modularity",
-        colors=[_mapper_color(4), _mapper_color(5)],
-    )
+    return fig
 
 
 def render_fractions_figure(

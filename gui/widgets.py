@@ -7,15 +7,21 @@ Streamlit Custom Component v2 (CCv2): an ``<input type="range">`` whose ``input`
 event (fired on every drag step) calls ``setStateValue``, which triggers a
 rerun. That makes the plots update live as the handle moves.
 
-Trade-off: every drag step is a full Streamlit rerun. For the confidence
-threshold that is cheap (recolour only, cached data); for K it reloads that K's
-mapping and rebuilds the figures on each step, so dragging K can feel heavy on
-large datasets.
+Trade-off: every drag step is a Streamlit rerun. The confidence-threshold slider
+lives inside a per-mapper ``st.fragment`` and only its tab reruns; the UMAP panels
+come from ``render._umap_panel_data``'s cache, so a drag rebuilds just that tab's
+spatial panel. The K slider is global (it drives every tab), so a K drag is a full
+rerun that reloads that K's mapping and rebuilds the figures — heavier on large
+datasets.
 
 ``headline_plot`` renders a Plotly figure client-side (CCv2 + Plotly.js) and
 handles state selection in the browser with no reruns: single click on a legend
 entry or any point toggles that state; double click isolates it (or restores
 all); inactive states are recoloured to a single light gray rather than hidden.
+
+``linked_plot`` renders a Plotly figure client-side too, but links every figure
+in a group by K: hovering a point highlights the same K in all of them (browser
+only) and clicking one reports that K back to Python.
 """
 
 from __future__ import annotations
@@ -472,3 +478,198 @@ def headline_plot(fig, key: str, *, off_color: str = "#dcdcdc") -> None:
         key=key,
         data={"figureJson": fig.to_json(), "offColor": off_color},
     )
+
+
+# --------------------------------------------------------------------------- #
+# Linked plot component (K-synced hover across several figures)
+# --------------------------------------------------------------------------- #
+# Renders one Plotly figure client-side and links it to every other instance in
+# the same ``group``, so the K-sweep cards behave like one figure:
+#   * hovering a point highlights the same K in every linked figure (browser
+#     only, no rerun), and
+#   * clicking a point emits that K to Python (one rerun) so the shared K slider
+#     can follow.
+# The link is a per-group registry on ``window`` (CCv2 components share the page,
+# they are not iframes), which each instance joins on render and leaves on
+# unmount.
+#
+# Contract with the figures (see render.py): every K-indexed trace carries
+# ``customdata`` whose first column is K; a trace's ``meta`` may be "nullV" /
+# "nullH" to mark the two null-crosshair lines, whose per-K coordinates and axis
+# span come from ``layout.meta.aim`` = {nulls: {K: [x, y]}, ranges: {x, y}}.
+_LINKED_JS = """
+const CDN = "https://esm.sh/plotly.js-dist-min@2.35.2"
+
+const kOf = (cd) => {
+  if (cd == null) return null
+  const v = Array.isArray(cd) ? cd[0] : cd
+  return v == null || isNaN(v) ? null : Number(v)
+}
+
+export default async function (component) {
+  const { parentElement, data, key, setTriggerValue } = component
+
+  let gd = parentElement.querySelector(".aim-linked-gd")
+  if (!gd) {
+    gd = document.createElement("div")
+    gd.className = "aim-linked-gd"
+    gd.style.width = "100%"
+    parentElement.appendChild(gd)
+  }
+
+  let Plotly = window.Plotly || window.__aimPlotly
+  if (!Plotly) {
+    try {
+      Plotly = (await import(CDN)).default
+      window.__aimPlotly = Plotly
+    } catch (e) {
+      gd.textContent = "Could not load Plotly.js (needs internet): " + e
+      return
+    }
+  }
+
+  const fig = JSON.parse(data.figureJson)
+  const group = String(data.group || "default")
+  const aim = (fig.layout && fig.layout.meta && fig.layout.meta.aim) || {}
+
+  await Plotly.react(gd, fig.data, fig.layout || {}, {
+    responsive: true,
+    displaylogo: false,
+  })
+
+  // Streamlit lays out hidden tab panels at zero width; refit when one is shown.
+  if (!gd.__aimResizeWired && typeof ResizeObserver !== "undefined") {
+    gd.__aimResizeWired = true
+    let lastW = gd.clientWidth
+    new ResizeObserver(() => {
+      const w = gd.clientWidth
+      if (w > 0 && w !== lastW) {
+        lastW = w
+        Plotly.Plots.resize(gd)
+      }
+    }).observe(gd)
+  }
+
+  // Per-trace K of every point, base marker sizes, and the null-line traces.
+  const kPerTrace = fig.data.map((tr) =>
+    (tr.customdata || []).map((cd) => kOf(cd))
+  )
+  const baseSize = fig.data.map((tr) => Number((tr.marker && tr.marker.size) || 7))
+  const nullTrace = { nullV: -1, nullH: -1 }
+  fig.data.forEach((tr, i) => {
+    if (tr.meta === "nullV" || tr.meta === "nullH") nullTrace[tr.meta] = i
+  })
+
+  // Highlight the given K here (null clears): grow that point and give it a ring
+  // in every K-indexed trace, and move the null crosshair to that K's null.
+  const highlight = (k) => {
+    const idx = [], sizes = [], widths = []
+    kPerTrace.forEach((ks, i) => {
+      if (!ks.length || fig.data[i].meta === "nullV" || fig.data[i].meta === "nullH")
+        return
+      idx.push(i)
+      sizes.push(ks.map((v) => (k !== null && v === k ? baseSize[i] * 1.8 : baseSize[i])))
+      widths.push(ks.map((v) => (k !== null && v === k ? 2 : 0)))
+    })
+    if (idx.length) {
+      Plotly.restyle(gd, { "marker.size": sizes, "marker.line.width": widths }, idx)
+    }
+
+    const nulls = aim.nulls || {}
+    const ranges = aim.ranges || {}
+    const pair = k !== null ? nulls[String(k)] : null
+    const place = (tag, axis, value) => {
+      const i = nullTrace[tag]
+      if (i < 0) return
+      const span = ranges[axis === "x" ? "y" : "x"]
+      if (value == null || !span) {
+        Plotly.restyle(gd, { visible: false }, [i])
+        return
+      }
+      const along = [value, value]
+      const across = [span[0], span[1]]
+      Plotly.restyle(
+        gd,
+        axis === "x"
+          ? { x: [along], y: [across], visible: true }
+          : { x: [across], y: [along], visible: true },
+        [i]
+      )
+    }
+    place("nullV", "x", pair ? pair[0] : null)
+    place("nullH", "y", pair ? pair[1] : null)
+  }
+
+  // Join the group registry (shared across every instance on the page).
+  if (!window.__aimLinked) window.__aimLinked = {}
+  const registry = window.__aimLinked
+  if (!registry[group]) registry[group] = new Map()
+  const peers = registry[group]
+  peers.set(key, highlight)
+
+  const broadcast = (k) => peers.forEach((fn) => fn(k))
+
+  // Re-point the (once-attached) handlers at this render's closures.
+  gd.__aimLinkCtx = { broadcast, setTriggerValue }
+  if (!gd.__aimLinkWired) {
+    gd.__aimLinkWired = true
+    gd.on("plotly_hover", (ev) => {
+      const pt = ev.points && ev.points[0]
+      const k = pt ? kOf(pt.customdata) : null
+      if (k !== null) gd.__aimLinkCtx.broadcast(k)
+    })
+    gd.on("plotly_unhover", () => gd.__aimLinkCtx.broadcast(null))
+    gd.on("plotly_click", (ev) => {
+      const pt = ev.points && ev.points[0]
+      const k = pt ? kOf(pt.customdata) : null
+      if (k !== null) gd.__aimLinkCtx.setTriggerValue("picked_k", k)
+    })
+  }
+
+  // Leave the group on unmount -- but only if this render's entry is still the
+  // registered one, so a late cleanup cannot unregister a fresh re-render.
+  return () => {
+    if (peers.get(key) === highlight) peers.delete(key)
+  }
+}
+"""
+
+_LINKED_PLOT = st.components.v2.component(
+    "aim_linked_plot", js=_LINKED_JS, isolate_styles=False
+)
+
+
+def linked_plot(fig, key: str, *, group: str, on_pick=None) -> None:
+    """Render ``fig`` linked to every other ``linked_plot`` in the same ``group``.
+
+    Hovering a point highlights the same K in all of them without a rerun;
+    clicking one emits that K as the ``picked_k`` trigger, which ``on_pick`` (a
+    no-argument callback, run before the script body) can act on -- read the K
+    from ``st.session_state[key]``.
+    """
+    _LINKED_PLOT(
+        key=key,
+        data={"figureJson": fig.to_json(), "group": group},
+        on_picked_k_change=on_pick if on_pick is not None else lambda: None,
+    )
+
+
+def picked_k(key: str) -> int | None:
+    """The K last clicked in the ``linked_plot`` mounted under ``key``, if any.
+
+    Reads the component's ``picked_k`` trigger out of session state (which is a
+    dict on some Streamlit versions and an attribute bag on others), so it works
+    from inside the ``on_pick`` callback.
+    """
+    state = st.session_state.get(key)
+    if state is None:
+        return None
+    value = getattr(state, "picked_k", None)
+    if value is None and hasattr(state, "get"):
+        value = state.get("picked_k")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

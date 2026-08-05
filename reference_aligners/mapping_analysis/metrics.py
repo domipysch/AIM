@@ -11,14 +11,13 @@ import logging
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 from anndata import AnnData
 
 from metrics.reconstruction import predict_expression
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["celltype_centroids", "top_marker_genes", "predict_expression"]
+__all__ = ["celltype_centroids", "predict_expression"]
 
 
 def celltype_centroids(
@@ -43,36 +42,3 @@ def celltype_centroids(
     return pd.DataFrame(
         np.vstack(rows).astype(np.float32), index=cell_types, columns=adata.var_names
     )
-
-
-def top_marker_genes(adata_norm: AnnData, cell_type_key: str, n_top: int) -> list[str]:
-    """Top n_top marker genes per cell type (union, order preserved), via
-    scanpy's rank_genes_groups on already normalized+log1p data.
-
-    Cell types with fewer than 2 cells are skipped: the Wilcoxon test needs
-    at least two samples per group, and scanpy errors out otherwise."""
-    adata_copy = adata_norm.copy()
-
-    counts = adata_copy.obs[cell_type_key].value_counts()
-    valid_groups = counts[counts >= 2].index.astype(str).tolist()
-    dropped = counts[counts < 2].index.astype(str).tolist()
-    if dropped:
-        logger.warning(
-            "Skipping cell type(s) with <2 cells in marker ranking: %s",
-            ", ".join(dropped),
-        )
-
-    sc.tl.rank_genes_groups(
-        adata_copy, groupby=cell_type_key, groups=valid_groups, method="wilcoxon"
-    )
-    names = adata_copy.uns["rank_genes_groups"]["names"]
-    markers: list[str] = []
-    for group in names.dtype.names:
-        markers.extend(list(names[group][:n_top]))
-    seen: set[str] = set()
-    unique_markers = []
-    for g in markers:
-        if g not in seen:
-            seen.add(g)
-            unique_markers.append(g)
-    return unique_markers

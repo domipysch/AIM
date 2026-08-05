@@ -10,7 +10,7 @@ import math
 import torch
 
 # How many top candidate states the margin-based confidence looks at.
-N_TOP_STATES = 3
+N_TOP_STATES = 4
 
 
 def top_margin_confidence(score: torch.Tensor, n: int = N_TOP_STATES) -> torch.Tensor:

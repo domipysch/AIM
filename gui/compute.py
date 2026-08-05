@@ -13,12 +13,10 @@ from __future__ import annotations
 import logging
 import threading
 import traceback
-from dataclasses import asdict
 from pathlib import Path
 
-import yaml
-
-from aim import AIMConfig, run as aim_run
+from aim import AIMConfig
+from main import run_one_pair
 
 from . import data_access
 
@@ -61,7 +59,6 @@ class MapperRun:
 
     def _run(self) -> None:
         try:
-            self.root.mkdir(parents=True, exist_ok=True)
             cfg = AIMConfig(
                 mapping=self.mapper,
                 leiden_resolution=DEFAULT_LEIDEN_RESOLUTION,
@@ -70,23 +67,14 @@ class MapperRun:
                 k_max=self.k_max,
                 k_step=self.k_step,
             )
-            # Mirror main.py: record the run knobs next to the outputs.
-            with open(self.root / "config.yaml", "w") as f:
-                yaml.safe_dump(asdict(cfg), f, sort_keys=False)
-
-            aim_run(
-                sc_path=self.sc_path,
-                st_path=self.st_path,
-                output_folder=self.root,
-                mapper=cfg.build_mapper(),
-                agglo_tree_method=cfg.agglo_tree_method,
-                leiden_resolution=cfg.leiden_resolution,
-                k_min=self.k_min,
-                k_max=self.k_max,
-                k_step=self.k_step,
-                # Shared across all mappers of this pair: build the reference
-                # scaffold once at the pair root, then reuse it.
-                reference_cache_dir=self.output_dir,
+            # Same entry point as the CLI. The reference scaffold is cached at the
+            # pair output root and shared across all mappers of this pair: build it
+            # once, then reuse it.
+            run_one_pair(
+                self.sc_path,
+                self.st_path,
+                self.output_dir,
+                cfg,
             )
         except Exception:  # noqa: BLE001 - surface any failure to the UI
             self.error = traceback.format_exc()

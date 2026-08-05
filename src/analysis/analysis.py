@@ -53,20 +53,20 @@ def run_analysis(adata_sc: AnnData, adata_st: AnnData, run_dir: Path) -> None:
     # Load spot to state mapping
     load_spot_to_state_mapping_soft_and_hard(run_dir, adata_st)
 
-    logger.info("Computing one-hot metrics...")
+    # logger.info("Computing one-hot metrics...")
     analyse_spot_to_state_one_hotness(adata_st, data_dir)
 
-    logger.info("Summarising per-spot mapping confidence (if available)...")
+    # logger.info("Summarising per-spot mapping confidence (if available)...")
     analyse_spot_confidence(adata_st, data_dir)
 
-    logger.info("Computing spatial organisation of mapped spots...")
+    # logger.info("Computing spatial organisation of mapped spots...")
     analyse_spatial_organization(adata_st, data_dir)
 
-    logger.info("Computing substate merge coherence...")
+    # logger.info("Computing substate merge coherence...")
     analyse_substate_coherence(adata_sc, leiden_to_state, data_dir)
 
-    logger.info("Computing reconstruction cosine similarities...")
+    # logger.info("Computing reconstruction cosine similarities...")
     analyse_reconstruction(adata_sc, adata_st, leiden_to_state, data_dir)
 
-    logger.info("Computing modularity for computed assignment...")
+    # logger.info("Computing modularity for computed assignment...")
     analyse_modularities(adata_sc, adata_st, data_dir)
