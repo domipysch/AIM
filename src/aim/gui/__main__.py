@@ -12,6 +12,7 @@ the agglomeration linkage - is set in the app's sidebar.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 from importlib.resources import as_file, files
@@ -37,7 +38,19 @@ def launch(server_port: int = 8501) -> int:
 
     The app imports the installed ``aim`` package directly, so PYTHONPATH does
     not need to be set.
+
+    The GUI dependencies are optional; if they are missing, print an install
+    hint instead of letting the streamlit subprocess fail obscurely.
     """
+    if importlib.util.find_spec("streamlit") is None:
+        print(
+            "The AIM GUI needs the optional 'gui' dependencies "
+            "(streamlit, plotly, kaleido). Install them with:\n"
+            "    pip install 'spatial-aim[gui]'",
+            file=sys.stderr,
+        )
+        return 1
+
     app_resource = files("aim.gui") / "app.py"
     with as_file(app_resource) as app_path:
         cmd = [
