@@ -21,8 +21,8 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
-from metrics.cossim import CossimResult, compute_and_save_cossim
-from metrics.onehot import onehot_metrics
+from aim.metrics.cossim import CossimResult, compute_and_save_cossim
+from aim.metrics.onehot import onehot_metrics
 
 from .metrics import (
     celltype_centroids,

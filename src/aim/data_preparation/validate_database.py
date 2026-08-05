@@ -232,9 +232,10 @@ def validate_pair(
     return errors, warns
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Validates scRNA and ST datasets listed in index CSVs (h5ad format)"
+        prog="aim data validate",
+        description="Validates scRNA and ST datasets listed in index CSVs (h5ad format)",
     )
     parser.add_argument(
         "--data-root",
@@ -243,7 +244,7 @@ def main() -> None:
         default=Path(r"/01_Datasets"),
         help="Root folder containing scRNA/, ST/, pairs.csv, scRNA/index.csv, ST/index.csv",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     root: Path = args.data_root
     sc_dir = root / "scRNA"

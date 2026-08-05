@@ -4,10 +4,10 @@ from pathlib import Path
 import pandas as pd
 from anndata import AnnData
 
-from adata_schema import (
+from aim.adata_schema import (
     OBSM_MAPPING_SOFT,
 )
-from metrics.onehot import onehot_metrics
+from aim.metrics.onehot import onehot_metrics
 
 logger = logging.getLogger(__name__)
 

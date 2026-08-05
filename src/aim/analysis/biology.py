@@ -10,7 +10,7 @@ import numpy as np
 import scanpy as sc
 from anndata import AnnData
 
-from adata_schema import (
+from aim.adata_schema import (
     LAYER_LOGNORM,
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_SHARED_GENES,
@@ -20,7 +20,7 @@ from adata_schema import (
     UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM,
     UNS_MODULARITY_SHARED_LEIDEN,
 )
-from metrics.biology import (
+from aim.metrics.biology import (
     _pairwise_cosine_stats,
     leiden_state_groups,
     compute_modularity,

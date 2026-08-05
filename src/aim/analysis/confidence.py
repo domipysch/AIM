@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from adata_schema import OBS_MAPPING_CONFIDENCE
+from aim.adata_schema import OBS_MAPPING_CONFIDENCE
 
 logger = logging.getLogger(__name__)
 

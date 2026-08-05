@@ -178,7 +178,7 @@ def tangram_align_data(
 
 def _serve(sc_path: Path, st_path: Path, control_dir: Path) -> None:
     """Load the pair once, then map one K per job (canonical baseline settings)."""
-    from reference_aligners.registry import serve_loop
+    from aim.reference_aligners.registry import serve_loop
 
     adata_sc, adata_st = _load_pair(sc_path, st_path)
 

@@ -21,7 +21,7 @@ _SRC_DIR = str(_REPO_ROOT / "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
-from reference_aligners.mapping_analysis.analyze import analyze_mapping
+from aim.reference_aligners.mapping_analysis.analyze import analyze_mapping
 
 if __name__ == "__main__":
     logging.basicConfig(

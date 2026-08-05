@@ -6,7 +6,7 @@ from pathlib import Path
 
 import anndata
 import scanpy as sc
-from adata_schema import (
+from aim.adata_schema import (
     UNS_LEIDEN_CENTROIDS_SHARED_GENES,
     UNS_SHARED_GENES,
     LAYER_LOGNORM,
@@ -16,8 +16,8 @@ from adata_schema import (
     UNS_NEIGHBORS_SHARED_GENES,
     OBSM_UMAP_SHARED_GENES,
 )
-from analysis.analysis import run_analysis
-from analysis.ksweep import compare_k_runs
+from aim.analysis.analysis import run_analysis
+from aim.analysis.ksweep import compare_k_runs
 from .aggregation import compute_leiden_aggregates
 from .clustering import (
     run_leiden_clustering_all_genes,

@@ -28,11 +28,11 @@ import logging
 import numpy as np
 import torch
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_LEIDEN_ALL_GENES,
     UNS_SHARED_GENES,
 )
-from analysis.utils import to_dense
+from aim.analysis.utils import to_dense
 from .base import SpotStateMapper
 from .confidence import entropy_confidence
 

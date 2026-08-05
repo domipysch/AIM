@@ -9,7 +9,7 @@ import pandas as pd
 import scanpy as sc
 from anndata import AnnData
 
-from adata_schema import (
+from aim.adata_schema import (
     LAYER_LOGNORM,
     OBS_LEIDEN_ALL_GENES,
     OBS_LEIDEN_SHARED_GENES,

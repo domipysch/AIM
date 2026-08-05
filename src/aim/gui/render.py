@@ -21,7 +21,7 @@ import streamlit as st
 from anndata import AnnData
 from plotly.subplots import make_subplots
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_COMPUTED_STATE,
     OBS_LEIDEN_ALL_GENES,
     OBSM_PCA,
@@ -30,11 +30,11 @@ from adata_schema import (
     OBSM_UMAP_SHARED_GENES,
     UNS_SHARED_GENES,
 )
-from analysis.loading import (
+from aim.analysis.loading import (
     infer_cell_to_state_cluster,
     load_leiden_to_state,
 )
-from analysis.utils import to_dense
+from aim.analysis.utils import to_dense
 
 from . import data_access, scores
 

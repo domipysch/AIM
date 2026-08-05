@@ -9,7 +9,7 @@ import numpy as np
 import anndata as ad
 import pandas as pd
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_MAPPING_HARD,
     OBSM_LOGNORM_SHARED_GENES,
     OBSM_MAPPING_SOFT,
@@ -18,7 +18,7 @@ from adata_schema import (
     UNS_LEIDEN_SIZES,
     UNS_SHARED_GENES,
 )
-from metrics import (
+from aim.metrics import (
     CossimResult,
     assemble_state_centroids,
     compute_and_save_cossim,

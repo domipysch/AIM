@@ -33,7 +33,7 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from data_preparation.build_xenium_breast_pair import (
+from aim.data_preparation.build_xenium_breast_pair import (
     _uppercase_and_collapse,
     _append_row,
 )

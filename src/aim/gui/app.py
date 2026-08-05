@@ -11,27 +11,19 @@ two mappers side by side.
 from __future__ import annotations
 
 import argparse
-import sys
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, NamedTuple
 
-# Ensure the in-repo packages under src/ are importable even if PYTHONPATH was
-# not inherited (e.g. when Streamlit re-execs the script).
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-for _p in (str(_REPO_ROOT / "src"), str(_REPO_ROOT)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+import numpy as np
+import pandas as pd
+import streamlit as st
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
-import streamlit as st  # noqa: E402
+from aim import MAPPING_CHOICES
+from aim.adata_schema import OBSM_UMAP_SHARED_GENES
+from aim.mapping.confidence import N_TOP_STATES
 
-from adata_schema import OBSM_UMAP_SHARED_GENES  # noqa: E402
-from aim import MAPPING_CHOICES  # noqa: E402
-from aim.mapping.confidence import N_TOP_STATES  # noqa: E402
-
-from gui import (  # noqa: E402
+from aim.gui import (
     compute,
     data_access,
     render,

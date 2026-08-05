@@ -4,8 +4,8 @@ the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut.
 from abc import ABC, abstractmethod
 import torch
 import anndata as ad
-from adata_schema import UNS_SHARED_GENES
-from analysis.utils import to_dense
+from aim.adata_schema import UNS_SHARED_GENES
+from aim.analysis.utils import to_dense
 from ..aggregation import assemble_state_profiles_shared_genes
 
 

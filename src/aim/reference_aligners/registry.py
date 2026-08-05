@@ -1,19 +1,18 @@
-"""Single source of truth for the external reference aligners + the one runner
-that executes them.
+"""Registry of the external reference aligners and the runner that executes them.
 
 Adding a reference aligner is two steps:
 
-  1. Write ``reference_aligners/run_<name>.py`` satisfying the CLI contract (see
-     ``ReferenceAligner`` / ``run_aligner`` below, or the README section
+  1. Write ``aim/reference_aligners/run_<name>.py`` satisfying the CLI contract
+     (see ``ReferenceAligner`` / ``run_aligner`` below, or the README section
      "Adding a reference aligner").
   2. Add one ``ReferenceAligner(...)`` line to ``REFERENCE_ALIGNERS``.
 
-It then appears automatically in ``main.py``'s ``--mapping`` choices, in the
-all-pairs batch driver, and as an AIM reference mapper (``ReferenceMapper``) —
-no other edits.
+The aligner is then available in ``aim run --mapping <name>``,
+``aim run-reference --aligner <name>``, and as an AIM reference mapper
+(``ReferenceMapper``).
 
-Kept import-light (stdlib only) so it is safe to import from any conda env,
-including ``aim_env`` where torch/scanpy/aligner deps are not installed.
+Import-light (stdlib only) so it is safe to import from any conda env, including
+``aim_env`` where torch/scanpy/aligner deps are not installed.
 """
 
 from __future__ import annotations
@@ -33,9 +32,6 @@ logger = logging.getLogger(__name__)
 
 # The file every wrapper must write, and every caller reads back.
 MAPPING_PROB_FILENAME = "mapping_prob.h5ad"
-
-# reference_aligners/registry.py -> repo root (parents: reference_aligners, root)
-_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 @dataclass(frozen=True)
@@ -65,9 +61,11 @@ class ReferenceAligner:
 REFERENCE_ALIGNERS: dict[str, ReferenceAligner] = {
     a.name: a
     for a in (
-        ReferenceAligner("tangram", "tangram_env", "reference_aligners.run_tangram"),
-        ReferenceAligner("tacco", "tacco_env", "reference_aligners.run_tacco"),
-        ReferenceAligner("dot", "dot_env", "reference_aligners.run_dot"),
+        ReferenceAligner(
+            "tangram", "tangram_env", "aim.reference_aligners.run_tangram"
+        ),
+        ReferenceAligner("tacco", "tacco_env", "aim.reference_aligners.run_tacco"),
+        ReferenceAligner("dot", "dot_env", "aim.reference_aligners.run_dot"),
     )
 }
 
@@ -99,9 +97,8 @@ def run_aligner(
     to the ``mapping_prob.h5ad`` it must produce. Raises ``RuntimeError`` (with the
     stderr tail) if the aligner exits non-zero or leaves no mapping behind.
 
-    This is the single execution path for every reference aligner — both
-    ``ReferenceMapper`` (per K, inside an AIM sweep) and the all-pairs batch driver
-    call it, so a new aligner needs no bespoke dispatch code.
+    Both ``ReferenceMapper`` (per K, inside an AIM sweep) and the ``run-reference``
+    driver call this, so it is the only path that executes an aligner.
     """
     if name not in REFERENCE_ALIGNERS:
         raise ValueError(
@@ -135,7 +132,7 @@ def run_aligner(
         aligner.module,
     )
     try:
-        subprocess.run(cmd, cwd=_REPO_ROOT, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "")[-2000:]
         raise RuntimeError(
@@ -266,7 +263,6 @@ class AlignerWorker:
         )
         self._proc = subprocess.Popen(
             cmd,
-            cwd=_REPO_ROOT,
             stdin=subprocess.DEVNULL,
             stdout=self._log,
             stderr=subprocess.STDOUT,

@@ -21,7 +21,7 @@ from pathlib import Path
 
 import anndata as ad
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_LEIDEN_ALL_GENES,
     UNS_LEIDEN_NUMBER_STATES_ALL_GENES,
 )

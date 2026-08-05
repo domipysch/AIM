@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from adata_schema import (
+from aim.adata_schema import (
     OBSM_MAPPING_SOFT,
     OBS_MAPPING_HARD,
     OBS_MAPPING_CONFIDENCE,

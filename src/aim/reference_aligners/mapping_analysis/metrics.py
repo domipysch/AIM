@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from anndata import AnnData
 
-from metrics.reconstruction import predict_expression
+from aim.metrics.reconstruction import predict_expression
 
 logger = logging.getLogger(__name__)
 

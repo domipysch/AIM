@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from anndata import AnnData
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_LEIDEN_ALL_GENES,
     OBSM_LOGNORM_SHARED_GENES,
     UNS_LEIDEN_CENTROIDS_SHARED_GENES,

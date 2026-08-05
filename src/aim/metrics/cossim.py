@@ -14,7 +14,7 @@ import anndata
 import numpy as np
 from anndata import AnnData
 
-from analysis.utils import to_dense
+from aim.analysis.utils import to_dense
 
 logger = logging.getLogger(__name__)
 

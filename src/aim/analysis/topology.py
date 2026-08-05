@@ -10,12 +10,12 @@ import numpy as np
 import anndata as ad
 import squidpy as sq
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_MAPPING_HARD,
     OBSM_SPATIAL,
     OBSP_SPATIAL_CONNECTIVITIES,
 )
-from metrics.topology import local_spatial_purity, permutation_test
+from aim.metrics.topology import local_spatial_purity, permutation_test
 
 logger = logging.getLogger(__name__)
 

@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from adata_schema import OBS_LEIDEN_ALL_GENES, OBSM_SPATIAL, UNS_SHARED_GENES
-from reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
+from aim.adata_schema import OBS_LEIDEN_ALL_GENES, OBSM_SPATIAL, UNS_SHARED_GENES
+from aim.reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
 from .base import SpotStateMapper
 
 logger = logging.getLogger(__name__)

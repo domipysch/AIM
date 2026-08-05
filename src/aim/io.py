@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from adata_schema import (
+from aim.adata_schema import (
     OBS_LEIDEN_ALL_GENES,
     OBS_MAPPING_CONFIDENCE,
     UNS_LEIDEN_NUMBER_STATES_ALL_GENES,
