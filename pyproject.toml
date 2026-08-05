@@ -64,7 +64,7 @@ dev = [
 aim = "aim.cli:main"
 
 [project.urls]
-Repository = "https://github.com/domi1504/Alignment-Repository"
+Repository = "https://github.com/domi1504/AIM"
 
 [tool.setuptools.packages.find]
 where = ["src"]
