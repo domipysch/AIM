@@ -35,8 +35,10 @@ def test_sweep_writes_expected_outputs(tmp_path):
     mapping_dir = out / "nearest_centroid"
     assert (mapping_dir / "config.yaml").is_file()
     assert (mapping_dir / "leiden_overclustering.h5ad").is_file()
+    assert (mapping_dir / "k_comparison.csv").is_file()
 
-    k_dirs = sorted(mapping_dir.glob("k_*"))
+    # Per-K output folders (k_NNN); exclude the k_comparison.csv summary file.
+    k_dirs = sorted(p for p in mapping_dir.glob("k_[0-9]*") if p.is_dir())
     assert k_dirs, "no per-K output folders were written"
     for k_dir in k_dirs:
         assert (k_dir / "leiden_to_state.csv").is_file()
