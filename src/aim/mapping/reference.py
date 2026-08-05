@@ -10,7 +10,6 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
-import torch
 
 from aim.adata_schema import OBS_LEIDEN_ALL_GENES, OBSM_SPATIAL, UNS_SHARED_GENES
 from aim.reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
@@ -113,7 +112,7 @@ class ReferenceMapper(SpotStateMapper):
             self._workdir,
         )
 
-    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, None]:
+    def map(self, leiden_to_state, k) -> tuple[np.ndarray, None]:
         """Delegate to the external aligner and return ``(P, None)`` — the
         reference aligners do not expose a per-spot confidence."""
         if not self._prepared:
@@ -125,7 +124,7 @@ class ReferenceMapper(SpotStateMapper):
         n_spots = int(self.adata_st.n_obs)
         if k < 2:
             # A single state is trivial (and degenerate for the aligners).
-            return torch.ones((n_spots, 1), dtype=torch.float32), None
+            return np.ones((n_spots, 1), dtype=np.float32), None
 
         out_dir = self._workdir / self._state_key(k)
         logger.info("ReferenceMapper[%s] K=%d", self.reference_method, k)
@@ -146,7 +145,7 @@ class ReferenceMapper(SpotStateMapper):
         except Exception:  # noqa: BLE001 — best-effort cleanup during GC
             pass
 
-    def _read_mapping(self, path: Path, k: int) -> torch.Tensor:
+    def _read_mapping(self, path: Path, k: int) -> np.ndarray:
         """Load the aligner's S x (states-present) mapping_prob.h5ad and reindex it
         into a dense (S x K) matrix aligned to the ST spot order and states 0..K-1
         (states with no assigned mass come back as zero columns).
@@ -167,4 +166,4 @@ class ReferenceMapper(SpotStateMapper):
             columns=[str(i) for i in range(k)],
             fill_value=0.0,
         )
-        return torch.tensor(frame.to_numpy(dtype=np.float32), dtype=torch.float32)
+        return frame.to_numpy(dtype=np.float32)

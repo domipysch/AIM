@@ -81,8 +81,8 @@ pip install "spatial-aim[gui]"     # + the Streamlit results GUI (aim gui)
 This installs one command, `aim`, with subcommands (`aim --help`).
 
 **Recommended (conda), for the GUI and reproducibility.** The core pulls heavy
-scientific deps (torch, scanpy, squidpy); the pinned conda environment is the
-tested setup:
+scientific deps (scanpy, squidpy); the pinned conda environment is the tested
+setup:
 
 ```bash
 conda env create -f environment.yml     # creates aim_env with everything

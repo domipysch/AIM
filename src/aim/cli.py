@@ -10,8 +10,8 @@ Subcommands:
 * ``aim data validate``  - validate a dataset directory against its index CSVs.
 
 The method itself lives in the ``aim`` package (see ``aim/__init__.py`` for the
-module map). Heavy imports (torch / scanpy / squidpy) are deferred into the
-individual command handlers so that light commands - ``aim gui``,
+module map). Heavy imports (scanpy / squidpy) are deferred into the individual
+command handlers so that light commands - ``aim gui``,
 ``aim run-reference``, ``aim data validate``, ``aim --help`` - start without
 loading the full sweep stack.
 """
@@ -43,7 +43,7 @@ warnings.filterwarnings(
     category=SyntaxWarning,
 )
 
-# Light imports only - both are torch/scanpy-free and just feed the parser.
+# Light imports only - both are scanpy-free and just feed the parser.
 from aim.aim_config import MAPPING_CHOICES
 from aim.reference_aligners.registry import REFERENCE_ALIGNERS
 

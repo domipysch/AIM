@@ -12,9 +12,9 @@ if TYPE_CHECKING:
     from .mapping import SpotStateMapper
 
 # In-process mapping strategy names. Kept as plain strings (not derived from the
-# mapper classes) so ``MAPPING_CHOICES`` — used to build the CLI parser — needs
-# no heavy import (the mapper modules pull in torch). ``build_mapper`` below
-# asserts these stay in sync with the classes' own ``.name``.
+# mapper classes) so ``MAPPING_CHOICES`` — used to build the CLI parser — needs no
+# import of the mapper modules. ``build_mapper`` below asserts these stay in sync
+# with the classes' own ``.name``.
 _INPROCESS_METHODS = ("nearest_centroid", "wann")
 # External reference aligners, all served by ReferenceMapper and selected by name.
 # Sourced from the aligner registry so adding one there is the only edit needed.
@@ -39,8 +39,8 @@ class AIMConfig:
     def build_mapper(self) -> "SpotStateMapper":
         """Build the ``SpotStateMapper`` named by ``self.mapping``.
 
-        The heavy mapper modules (torch) are imported here, lazily, so merely
-        reading ``AIMConfig``/``MAPPING_CHOICES`` stays cheap.
+        The mapper modules are imported here, lazily, so merely reading
+        ``AIMConfig``/``MAPPING_CHOICES`` does not import them.
         """
         from .mapping import (
             NearestCentroidMapper,

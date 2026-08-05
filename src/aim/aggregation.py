@@ -2,7 +2,6 @@
 and the size-weighted per-state expression profiles M for a given K cut."""
 
 import numpy as np
-import torch
 from anndata import AnnData
 
 from aim.adata_schema import (
@@ -81,7 +80,7 @@ def _size_weighted_state_profiles(
     expr_sums: np.ndarray,
     sizes: np.ndarray,
     eps: float,
-) -> torch.Tensor:
+) -> np.ndarray:
     """Pool per-subcluster expression sums into size-weighted per-state means M
     (k x G_shared): M[s] = sum of expr_sums over its subclusters / sum of sizes."""
     state_sums = np.zeros((k, expr_sums.shape[1]), dtype=np.float32)
@@ -90,7 +89,7 @@ def _size_weighted_state_profiles(
     np.add.at(state_sizes, labels_k, sizes)
 
     m = state_sums / (state_sizes[:, None] + eps)
-    return torch.as_tensor(m, dtype=torch.float32)
+    return m.astype(np.float32, copy=False)
 
 
 def assemble_state_profiles_shared_genes(
@@ -98,7 +97,7 @@ def assemble_state_profiles_shared_genes(
     k: int,
     adata_sc: AnnData,
     eps: float = 1e-8,
-) -> torch.Tensor:
+) -> np.ndarray:
     """
     Size-weighted per-state raw expression profiles M (k x G_shared) for a
     subcluster->state label array (mean raw counts per state).

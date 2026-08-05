@@ -26,7 +26,6 @@ fixed-N ``majority_vote`` mapper and takes no ``n_neighbors`` parameter.
 import logging
 
 import numpy as np
-import torch
 
 from aim.adata_schema import (
     OBS_LEIDEN_ALL_GENES,
@@ -49,6 +48,18 @@ K_STEP = 2
 # tie the class with the *nearer* members wins. Kept small enough that the summed
 # bonus over any window stays < 1 and never overturns a real majority.
 RANK_EPS = 1e-4
+
+
+def _topk_indices(scores: np.ndarray, k: int) -> np.ndarray:
+    """Indices of the ``k`` largest values per row of ``scores`` (rows x N), each
+    row ordered largest-first. numpy has no ``torch.topk``: ``argpartition`` picks
+    the top ``k`` (unordered), then a stable ``argsort`` orders those ``k`` by
+    value descending. Returns a (rows x k) index array."""
+    k = min(k, scores.shape[1])
+    part = np.argpartition(scores, -k, axis=1)[:, -k:]
+    part_scores = np.take_along_axis(scores, part, axis=1)
+    order = np.argsort(-part_scores, axis=1, kind="stable")
+    return np.take_along_axis(part, order, axis=1)
 
 
 class WANNMapper(SpotStateMapper):
@@ -88,50 +99,47 @@ class WANNMapper(SpotStateMapper):
 
         shared = self.adata_sc.uns[UNS_SHARED_GENES]
         Zs = self._spatial_data_matrix()  # (S, G) raw shared ST
-        Zc = torch.tensor(
-            to_dense(self.adata_sc[:, shared]), dtype=torch.float32
+        Zc = np.asarray(
+            to_dense(self.adata_sc[:, shared]), dtype=np.float32
         )  # (C, G) raw shared reference
-        Zs = Zs / (Zs.norm(dim=1, keepdim=True) + self.eps)
-        Zc = Zc / (Zc.norm(dim=1, keepdim=True) + self.eps)
+        Zs = Zs / (np.linalg.norm(Zs, axis=1, keepdims=True) + self.eps)
+        Zc = Zc / (np.linalg.norm(Zc, axis=1, keepdims=True) + self.eps)
 
         # (C, nn_max) ref->ref and (S, nn_max) spot->ref nearest-neighbour indices.
         self._ref_nbr_idx = self._cosine_topk(Zc, Zc, nn_max, exclude_self=True)
         self._spot_nbr_idx = self._cosine_topk(Zs, Zc, nn_max, exclude_self=False)
         self._spot_nn = self._spot_nbr_idx[:, 0]  # (S,) each spot's nearest cell
 
-        self._leiden = torch.as_tensor(
-            self.adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy(),
-            dtype=torch.long,
-        )
+        self._leiden = self.adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
 
     @staticmethod
     def _cosine_topk(
-        Q: torch.Tensor,
-        R: torch.Tensor,
+        Q: np.ndarray,
+        R: np.ndarray,
         k: int,
         exclude_self: bool,
         batch_rows: int = 4096,
-    ) -> torch.Tensor:
+    ) -> np.ndarray:
         """Top-``k`` most cosine-similar rows of ``R`` for each row of ``Q``.
 
         ``Q`` and ``R`` must be L2-normalised so ``Q @ R.T`` is cosine similarity.
         Batched over ``Q`` rows to avoid materialising the full (|Q| x |R|)
         similarity matrix (|R| = n_cells can be large). When ``exclude_self``,
         ``Q is R`` and the diagonal (a cell with itself) is masked out. Returns a
-        (|Q|, k) LongTensor of ``R`` indices, nearest first.
+        (|Q|, k) int index array of ``R`` indices, nearest first.
         """
         out = []
         for start in range(0, Q.shape[0], batch_rows):
             q = Q[start : start + batch_rows]
-            sim = q @ R.t()  # (b, |R|)
+            sim = q @ R.T  # (b, |R|)
             if exclude_self:
-                rows = torch.arange(q.shape[0])
-                cols = torch.arange(start, start + q.shape[0])
-                sim[rows, cols] = float("-inf")
-            out.append(torch.topk(sim, k, dim=1).indices)
-        return torch.cat(out, dim=0)
+                rows = np.arange(q.shape[0])
+                cols = np.arange(start, start + q.shape[0])
+                sim[rows, cols] = -np.inf
+            out.append(_topk_indices(sim, k))
+        return np.concatenate(out, axis=0)
 
-    def _reliability(self, y: torch.Tensor, k: int) -> torch.Tensor:
+    def _reliability(self, y: np.ndarray, k: int) -> np.ndarray:
         """Per-cell reliability eta (C,) at this K via Algorithm 1.
 
         ``y`` is the (C,) state id of every reference cell at this K. For each cell
@@ -142,9 +150,10 @@ class WANNMapper(SpotStateMapper):
         """
         n_cells = y.shape[0]
         nbr_states = y[self._ref_nbr_idx]  # (C, nn_max) neighbour state ids
-        counts = torch.zeros(n_cells, k, dtype=torch.float32)
-        eta = torch.full((n_cells,), 1.0 / self._grid[-1], dtype=torch.float32)
-        resolved = torch.zeros(n_cells, dtype=torch.bool)
+        counts = np.zeros((n_cells, k), dtype=np.float32)
+        eta = np.full(n_cells, 1.0 / self._grid[-1], dtype=np.float32)
+        resolved = np.zeros(n_cells, dtype=bool)
+        rows = np.arange(n_cells)
 
         prev = 0
         for kp in self._grid:
@@ -152,19 +161,17 @@ class WANNMapper(SpotStateMapper):
             # so this adds K_STEP columns per iteration, nn_max columns in total).
             for j in range(prev, kp):
                 w = 1.0 + RANK_EPS * (self._nn_max - j)
-                counts.scatter_add_(
-                    1, nbr_states[:, j : j + 1], torch.full((n_cells, 1), w)
-                )
+                np.add.at(counts, (rows, nbr_states[:, j]), np.float32(w))
             prev = kp
-            pred = counts.argmax(dim=1)
+            pred = np.argmax(counts, axis=1)
             newly = (pred == y) & ~resolved
-            eta = torch.where(newly, torch.full_like(eta, 1.0 / kp), eta)
+            eta[newly] = np.float32(1.0 / kp)
             resolved |= newly
-            if bool(resolved.all()):
+            if resolved.all():
                 break
         return eta
 
-    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor]:
+    def map(self, leiden_to_state, k) -> tuple[np.ndarray, np.ndarray]:
         """WANN spot->state soft assignment at this K.
 
         Labels every reference cell by its state, scores each cell's reliability,
@@ -173,7 +180,7 @@ class WANNMapper(SpotStateMapper):
         Returns P (S x K, rows summing to 1) and the ``entropy_confidence`` of each
         vote row (1 = unanimous, 0 = uniform across states).
         """
-        labels = torch.as_tensor(np.asarray(leiden_to_state), dtype=torch.long)
+        labels = np.asarray(leiden_to_state, dtype=np.int64)
         y = labels[self._leiden]  # (C,) state id per reference cell
 
         eta = self._reliability(y, k)  # (C,)
@@ -181,16 +188,19 @@ class WANNMapper(SpotStateMapper):
         # Adaptive neighbourhood size per spot: the k' of its nearest cell
         # (1/eta), clamped to what was cached. eta = 1/k' exactly, so round() is a
         # safe float->int recovery.
-        k_t = torch.round(1.0 / eta[self._spot_nn]).long().clamp(1, self._nn_max)
+        k_t = np.clip(
+            np.round(1.0 / eta[self._spot_nn]).astype(np.int64), 1, self._nn_max
+        )
 
         n_spots = self._spot_nbr_idx.shape[0]
         nbr_states = y[self._spot_nbr_idx]  # (S, nn_max)
         nbr_eta = eta[self._spot_nbr_idx]  # (S, nn_max)
         # Keep only each spot's first k_t neighbours, weight them by reliability.
-        keep = torch.arange(self._nn_max)[None, :] < k_t[:, None]  # (S, nn_max)
-        weights = nbr_eta * keep  # (S, nn_max)
+        keep = np.arange(self._nn_max)[None, :] < k_t[:, None]  # (S, nn_max)
+        weights = (nbr_eta * keep).astype(np.float32)  # (S, nn_max)
 
-        P = torch.zeros(n_spots, k, dtype=torch.float32)
-        P.scatter_add_(1, nbr_states, weights)
-        P = P / P.sum(dim=1, keepdim=True).clamp_min(self.eps)
+        P = np.zeros((n_spots, k), dtype=np.float32)
+        rows = np.broadcast_to(np.arange(n_spots)[:, None], nbr_states.shape)
+        np.add.at(P, (rows, nbr_states), weights)
+        P = P / np.clip(P.sum(axis=1, keepdims=True), self.eps, None)
         return P, entropy_confidence(P)

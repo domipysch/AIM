@@ -7,13 +7,13 @@ it, higher means a more decisive assignment.
 
 import math
 
-import torch
+import numpy as np
 
 # How many top candidate states the margin-based confidence looks at.
 N_TOP_STATES = 4
 
 
-def top_margin_confidence(score: torch.Tensor, n: int = N_TOP_STATES) -> torch.Tensor:
+def top_margin_confidence(score: np.ndarray, n: int = N_TOP_STATES) -> np.ndarray:
     """Relative margin of the best (lowest) score over its closest runners-up.
 
     ``score`` is (S x K) with lower = better (a distance). For each spot take the
@@ -25,16 +25,16 @@ def top_margin_confidence(score: torch.Tensor, n: int = N_TOP_STATES) -> torch.T
     eps = 1e-8
     n_spots, k = score.shape
     if k == 1:
-        return torch.ones(n_spots, dtype=torch.float32)
+        return np.ones(n_spots, dtype=np.float32)
     n = min(n, k)
-    top = torch.topk(score, n, dim=1, largest=False).values  # (S x n), ascending
+    top = np.sort(score, axis=1)[:, :n]  # (S x n), ascending
     best = top[:, 0]
-    rest = top[:, 1:].mean(dim=1)
+    rest = top[:, 1:].mean(axis=1)
     conf = 1.0 - best / (rest + eps)
-    return conf.clamp(0.0, 1.0).to(torch.float32)
+    return np.clip(conf, 0.0, 1.0).astype(np.float32)
 
 
-def entropy_confidence(p: torch.Tensor) -> torch.Tensor:
+def entropy_confidence(p: np.ndarray) -> np.ndarray:
     """One-hotness of each soft row via normalized Shannon entropy.
 
     ``p`` is (S x K) with rows summing to 1. Returns ``1 - H(row) / log(K)`` in
@@ -45,7 +45,7 @@ def entropy_confidence(p: torch.Tensor) -> torch.Tensor:
     eps = 1e-12
     n_spots, k = p.shape
     if k == 1:
-        return torch.ones(n_spots, dtype=torch.float32)
-    entropy = -(p * torch.log(p + eps)).sum(dim=1)
+        return np.ones(n_spots, dtype=np.float32)
+    entropy = -(p * np.log(p + eps)).sum(axis=1)
     conf = 1.0 - entropy / math.log(k)
-    return conf.clamp(0.0, 1.0).to(torch.float32)
+    return np.clip(conf, 0.0, 1.0).astype(np.float32)

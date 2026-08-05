@@ -2,7 +2,7 @@
 the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut."""
 
 from abc import ABC, abstractmethod
-import torch
+import numpy as np
 import anndata as ad
 from aim.adata_schema import UNS_SHARED_GENES
 from aim.analysis.utils import to_dense
@@ -30,7 +30,7 @@ class SpotStateMapper(ABC):
         self.adata_st = adata_st
 
     @abstractmethod
-    def map(self, leiden_to_state, k) -> tuple[torch.Tensor, torch.Tensor | None]:
+    def map(self, leiden_to_state, k) -> tuple[np.ndarray, np.ndarray | None]:
         """Map ST spots onto the ``k`` states of the current cut.
 
         Returns ``(P, confidence)`` where ``P`` is the spot->state matrix (S x K)
@@ -45,16 +45,15 @@ class SpotStateMapper(ABC):
         """
         raise NotImplementedError
 
-    def _spatial_data_matrix(self) -> torch.Tensor:
-        """ST spots on the shared genes as a dense (S x G_shared) float32 tensor.
+    def _spatial_data_matrix(self) -> np.ndarray:
+        """ST spots on the shared genes as a dense (S x G_shared) float32 array.
 
-        Densified because adata_st.X is often sparse and torch.tensor can't
-        consume it. K-independent.
+        Densified because adata_st.X is often sparse. K-independent.
         """
         z_shared = to_dense(self.adata_st[:, self.adata_sc.uns[UNS_SHARED_GENES]])
-        return torch.tensor(z_shared, dtype=torch.float32)
+        return np.asarray(z_shared, dtype=np.float32)
 
-    def _state_profiles(self, leiden_to_state, k) -> torch.Tensor:
+    def _state_profiles(self, leiden_to_state, k) -> np.ndarray:
         """Size-weighted per-state raw expression profiles M (k x G_shared)."""
         return assemble_state_profiles_shared_genes(leiden_to_state, k, self.adata_sc)
 
