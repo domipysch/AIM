@@ -1,0 +1,26 @@
+name: dot_env
+channels:
+  - conda-forge
+  - defaults
+
+# After creating the environment, install DOTr from GitHub:
+#   Rscript -e "remotes::install_github('saezlab/DOT')"
+
+dependencies:
+  - python=3.13
+  - numpy
+  - pandas
+  - anndata
+  - matplotlib
+  - scikit-learn
+  - networkx
+  - pytorch
+  - scanpy
+  - r-base=4.5
+  - r-matrix
+  - r-remotes
+  - r-hdf5r
+  - r-seurat
+  - pip
+  - pip:
+      - typst

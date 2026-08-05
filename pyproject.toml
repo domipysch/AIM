@@ -1,10 +1,103 @@
+[build-system]
+requires = ["setuptools>=64", "setuptools-scm>=8"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spatial-aim"
+dynamic = ["version"]
+description = "AIM — annotation-independent mapping of scRNA-seq references onto high-resolution spatial transcriptomics"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Dominik Pysch", email = "dominik.pysch@fau.de" }]
+keywords = [
+    "spatial transcriptomics",
+    "single-cell",
+    "scRNA-seq",
+    "cell state mapping",
+    "deconvolution",
+    "bioinformatics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+
+# Core runtime: everything `aim run` (the sweep + analysis + metrics) needs.
+# Reference aligners (tangram/tacco/dot) are NOT dependencies — they live in
+# their own conda envs and are invoked out-of-process (see the README).
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "pandas>=2.2",
+    "pyyaml>=6",
+    "anndata>=0.12",
+    "scanpy>=1.11",
+    "squidpy>=1.4",
+    "torch>=2.2",
+    "igraph>=0.11",
+    "leidenalg>=0.10",
+    "umap-learn>=0.5",
+]
+
+[project.optional-dependencies]
+gui = ["streamlit>=1.40", "plotly>=5.20", "kaleido>=0.2"]
+data = ["matplotlib>=3.9", "scikit-learn>=1.4"]
+dev = [
+    "pytest>=8",
+    "black>=24",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+    "build>=1.2",
+    "twine>=5",
+    "types-PyYAML",
+]
+
+[project.scripts]
+aim = "aim.cli:main"
+
+[project.urls]
+Repository = "https://github.com/domi1504/Alignment-Repository"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the reference-aligner env specs and the DOT R script alongside the package
+# so users can create the reference envs and the dot aligner can find its script.
+"aim.reference_aligners" = ["*.yml", "*.R"]
+
+[tool.setuptools_scm]
+# Version is derived from git tags (e.g. v0.1.0). Falls back to 0.0.0.dev* in a
+# source tree without tags.
+
 [tool.black]
 line-length = 88
 target-version = ["py313"]
-exclude = "00_Playground"
+extend-exclude = "00_Playground"
 
 [tool.mypy]
 python_version = "3.13"
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
 exclude = ["00_Playground"]
+
+# The Streamlit GUI was never type-checked (it lived outside mypy's scope before
+# the package restructure). Kept out of scope here; typing it is left for later.
+[[tool.mypy.overrides]]
+module = "aim.gui.*"
+ignore_errors = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: end-to-end tests that need the full aim_env (scanpy/squidpy) and sample data",
+    "integration: multi-component tests (may shell out or touch disk)",
+]

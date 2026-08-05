@@ -1,0 +1,63 @@
+name: Release
+
+# A vX.Y.Z tag publishes to TestPyPI. A published GitHub Release publishes to
+# PyPI. Both use PyPI trusted publishing (OIDC); configure the trusted publisher
+# for this repo and workflow on (Test)PyPI before use.
+
+on:
+  push:
+    tags: ["v*"]
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # setuptools-scm derives the version from the tag
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Build sdist + wheel
+        run: |
+          pip install build twine
+          python -m build
+          twine check dist/*
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/*
+
+  publish-testpypi:
+    # On a tag push.
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write # OIDC — required for trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    # On a published GitHub Release.
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

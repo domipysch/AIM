@@ -1,3 +1,7 @@
+# Full development environment for AIM (aim_env): core + GUI + data-prep + dev
+# tooling. The published `spatial-aim` package splits these into
+# core / [gui] / [data] / [dev] (see pyproject.toml); this env installs all of
+# them so the GUI, dataset utilities, and dev tools all work in one place.
 name: aim_env
 channels:
   - conda-forge
@@ -6,22 +10,25 @@ channels:
 dependencies:
   - python=3.13
   - pip
+  # --- core (needed by `aim run` / the sweep, analysis and metrics) ---
   - pandas==2.2.3
-  - scipy==1.17.0
+  - scipy==1.18.0
   - pyyaml==6.0.3
   - anndata==0.12.7
-  - pytorch==2.9.1
-  - pytorch_geometric==2.7.0
+  - pytorch==2.9.1          # torch: AIM mappers, aggregation, io
+  - scanpy==1.11.5          # Leiden over-clustering, UMAP, analysis.biology
+  # --- data preparation only ---
   - matplotlib==3.9.2
-  - scanpy==1.11.5
   - pip:
-    - scvi-tools
-    - igraph
-    - leidenalg
-    - typst
-    - squidpy
-    - seaborn
-  # dev
+    # --- core (pip-only) ---
+    - igraph                # modularity (metrics.biology)
+    - leidenalg             # Leiden over-clustering
+    - squidpy               # spatial metrics (analysis.topology)
+    # --- GUI only ---
+    - streamlit
+    - plotly
+    - kaleido               # static PNG/SVG/PDF export of the GUI's Plotly figures
+  # --- dev tooling ---
   - mypy==1.19.1
   - black==26.1.0
   - pytest==9.0.2
