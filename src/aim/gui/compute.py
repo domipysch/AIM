@@ -1,6 +1,6 @@
 """Drive an AIM sweep for one mapper from the GUI.
 
-Runs ``aim.run`` in-process (the same call ``main.py`` makes). The sweep only
+Runs ``aim.run`` in-process (the same call ``aim run`` makes). The sweep only
 writes machine-readable metrics per K -- no figures -- and the GUI renders every
 plot on demand from them. Each mapper writes to its own run root
 ``<output_dir>/<mapper>/`` so several mappers coexist. The sweep runs on a
@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 
 from aim import AIMConfig
-from main import run_one_pair
+from aim.cli import run_one_pair
 
 from . import data_access
 

@@ -38,7 +38,7 @@ class ReferenceMapper(SpotStateMapper):
             )
         self.reference_method = reference_method
         # Output-subfolder name = the chosen aligner (``tangram``/``tacco``/``dot``).
-        # The sweep writes results to ``<root>/<mapper.name>/`` while ``main.py``
+        # The sweep writes results to ``<root>/<mapper.name>/`` while ``run_one_pair``
         # writes ``config.yaml`` to ``<root>/<config.mapping>/``; naming the mapper
         # after the aligner keeps the two in the same folder and stops the three
         # aligners from colliding in a single ``reference/`` directory.
