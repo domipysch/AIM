@@ -70,6 +70,95 @@ REFERENCE_ALIGNERS: dict[str, ReferenceAligner] = {
 }
 
 
+def _conda_from_root(root: Path) -> str | None:
+    """The conda launcher inside a conda install rooted at ``root``, or ``None``.
+
+    Layout differs by OS: Windows keeps it in ``Scripts\\conda.exe`` (or
+    ``condabin\\conda.bat``); POSIX in ``bin/conda`` (or ``condabin/conda``).
+    Returns the first candidate that exists as a file."""
+    if os.name == "nt":
+        candidates = [
+            root / "Scripts" / "conda.exe",
+            root / "condabin" / "conda.bat",
+            root / "condabin" / "conda.exe",
+        ]
+    else:
+        candidates = [root / "bin" / "conda", root / "condabin" / "conda"]
+    for c in candidates:
+        if c.is_file():
+            return str(c)
+    return None
+
+
+def _prefer_real_exe(exe: str) -> str:
+    """Prefer a real conda executable over a Windows batch wrapper.
+
+    ``CONDA_EXE`` (and a ``PATHEXT`` hit from :func:`shutil.which`) frequently
+    points at ``condabin\\conda.bat``. Running that ``.bat`` via ``subprocess``
+    with no shell makes it recurse into itself until Windows aborts it
+    ("BATCH RECURSION exceeds stack limit", exit 255, empty stdout) — so every
+    ``conda env list`` comes back empty and all aligners look uninstalled.
+
+    ``Scripts\\conda.exe`` from the same install root is a normal executable
+    that ``subprocess`` runs cleanly, so resolve to it when the launcher is a
+    ``.bat``. Non-``.bat`` paths (and ``.bat`` paths with no sibling ``.exe``)
+    are returned unchanged."""
+    p = Path(exe)
+    if p.suffix.lower() != ".bat":
+        return exe
+    # condabin\conda.bat -> install root is its grandparent; the real launcher
+    # lives in <root>\Scripts\conda.exe.
+    root = p.parent.parent if p.parent.name.lower() == "condabin" else p.parent
+    real = root / "Scripts" / "conda.exe"
+    return str(real) if real.is_file() else exe
+
+
+def _search_conda_locations() -> str | None:
+    """Best-effort discovery of a conda install when it is not on ``PATH``.
+
+    Checks, in order:
+
+    1. ``CONDA_PREFIX`` / ``CONDA_ROOT`` — set when a conda env is active but
+       conda's launcher dirs were never added to ``PATH`` (a common state when
+       the process is started from an IDE, a service, or a plain shell). From
+       ``CONDA_PREFIX`` we climb to the install root (an env lives at
+       ``<root>/envs/<name>``; base is the root itself).
+    2. The standard per-user install roots for miniforge/miniconda/anaconda —
+       both directly under the home directory and (on Windows) under
+       ``%LOCALAPPDATA%``, where the miniforge installer defaults.
+
+    Returns the launcher path, or ``None`` if nothing is found."""
+    roots: list[Path] = []
+
+    for var in ("CONDA_PREFIX", "CONDA_ROOT"):
+        val = os.environ.get(var)
+        if val:
+            prefix = Path(val)
+            # An active env sits at <root>/envs/<name>; base sits at <root>.
+            if prefix.parent.name == "envs":
+                roots.append(prefix.parent.parent)
+            roots.append(prefix)
+
+    home = Path.home()
+    bases = [home]
+    localappdata = os.environ.get("LOCALAPPDATA")
+    if localappdata:
+        bases.append(Path(localappdata))
+    for base in bases:
+        for name in ("miniforge3", "miniconda3", "anaconda3", "mambaforge"):
+            roots.append(base / name)
+
+    seen: set[Path] = set()
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        exe = _conda_from_root(root)
+        if exe:
+            return exe
+    return None
+
+
 def conda_exe() -> str:
     """Locate a conda executable, OS-independently, in priority order:
 
@@ -77,14 +166,28 @@ def conda_exe() -> str:
        the full path to a conda/mamba executable), then
     2. ``conda`` found on ``PATH`` via :func:`shutil.which` (which applies
        ``PATHEXT`` on Windows, so it resolves ``conda.exe``/``conda.bat``
-       transparently, and needs no extension elsewhere).
+       transparently, and needs no extension elsewhere), then
+    3. a fallback search of ``CONDA_PREFIX``/``CONDA_ROOT`` and the standard
+       miniforge/miniconda/anaconda install roots (see
+       :func:`_search_conda_locations`) — because a process started outside an
+       activated conda shell (IDE run configs, ``aim gui`` launched from a plain
+       terminal) often has neither ``CONDA_EXE`` set nor conda on ``PATH`` even
+       though conda is installed.
 
-    Raises ``RuntimeError`` if neither yields a conda. That is an expected,
+    Whatever is found is passed through :func:`_prefer_real_exe`, which swaps a
+    Windows ``conda.bat`` wrapper for the sibling ``Scripts\\conda.exe`` (the
+    ``.bat`` recurses to death under ``subprocess``; see that function).
+
+    Raises ``RuntimeError`` if none yields a conda. That is an expected,
     non-fatal state: spatial-aim can be pip-installed into a plain venv with no
     conda at all — only the external reference aligners (Tangram/TACCO/DOT, which
     run in their own conda envs) are unavailable then; the in-process mappers do
     not call this."""
-    exe = os.environ.get("CONDA_EXE") or shutil.which("conda")
+    exe = (
+        os.environ.get("CONDA_EXE")
+        or shutil.which("conda")
+        or _search_conda_locations()
+    )
     if not exe:
         raise RuntimeError(
             "conda not found: the reference aligners run in their own conda env "
@@ -92,7 +195,7 @@ def conda_exe() -> str:
             "conda executable or put conda on PATH. (Not required for the "
             "in-process mappers or for a plain pip/venv install.)"
         )
-    return exe
+    return _prefer_real_exe(exe)
 
 
 def _first_json_object(text: str) -> dict | None:
@@ -127,16 +230,24 @@ def available_conda_envs() -> set[str]:
     except RuntimeError:
         return set()
     try:
+        # Capture RAW BYTES (no text/encoding): conda's output is not reliably
+        # UTF-8 — on a localized Windows it can contain OEM/ANSI-codepage bytes
+        # (e.g. 0x81) that are invalid UTF-8. If subprocess decoded in its reader
+        # thread, that byte would crash the thread mid-read, break conda's stdout
+        # pipe, and surface as a non-zero exit (255) — making every aligner look
+        # uninstalled. Reading bytes and decoding ourselves with errors="replace"
+        # can never raise; the env-path JSON is pure ASCII, so any replaced bytes
+        # only ever land in surrounding notice text. No check=True: parse whatever
+        # came back, so a conda that exits non-zero but still emitted JSON works.
         proc = subprocess.run(
             [exe, "env", "list", "--json"],
-            check=True,
             capture_output=True,
-            text=True,
         )
-    except (subprocess.CalledProcessError, OSError):
+    except OSError:
         return set()
 
-    data = _first_json_object(proc.stdout)
+    stdout = (proc.stdout or b"").decode("utf-8", errors="replace")
+    data = _first_json_object(stdout)
     if data is None:
         return set()
 
@@ -204,7 +315,16 @@ def run_aligner(
         aligner.module,
     )
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        # UTF-8 + errors="replace": don't let a non-cp1252 byte in the aligner's
+        # output turn into a UnicodeDecodeError that masks the real failure (see
+        # available_conda_envs).
+        subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+        )
     except subprocess.CalledProcessError as exc:
         tail = (exc.stderr or "")[-2000:]
         raise RuntimeError(
@@ -387,7 +507,12 @@ class AlignerWorker:
         try:
             if self._log is not None:
                 self._log.flush()
-            return self._log_path.read_text()[-n_chars:]
+            # errors="replace": the worker log holds raw child output, which may
+            # contain non-locale-codepage bytes; don't let decoding it swallow
+            # the diagnostics we're trying to show.
+            return self._log_path.read_text(encoding="utf-8", errors="replace")[
+                -n_chars:
+            ]
         except Exception:  # noqa: BLE001 — best-effort diagnostics only
             return "(worker log unavailable)"
 

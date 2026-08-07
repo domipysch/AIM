@@ -40,9 +40,41 @@ def test_conda_exe_falls_back_to_path(monkeypatch):
     assert registry.conda_exe() == "/usr/bin/conda"
 
 
+def test_conda_exe_falls_back_to_install_search(monkeypatch):
+    # Neither CONDA_EXE nor PATH yields conda (IDE run config / non-init'd
+    # shell), but conda IS installed -> the location search finds it.
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setattr(registry.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        registry, "_search_conda_locations", lambda: "/home/u/miniforge3/bin/conda"
+    )
+    assert registry.conda_exe() == "/home/u/miniforge3/bin/conda"
+
+
+def test_conda_exe_resolves_bat_wrapper_to_real_exe(tmp_path, monkeypatch):
+    # CONDA_EXE points at condabin\conda.bat (recurses to death under
+    # subprocess); conda_exe() must hand back the sibling Scripts\conda.exe.
+    root = tmp_path / "miniforge3"
+    (root / "condabin").mkdir(parents=True)
+    (root / "Scripts").mkdir(parents=True)
+    bat = root / "condabin" / "conda.bat"
+    bat.write_text("@echo off")
+    real = root / "Scripts" / "conda.exe"
+    real.write_text("")
+
+    monkeypatch.setenv("CONDA_EXE", str(bat))
+    assert registry.conda_exe() == str(real)
+
+
+def test_prefer_real_exe_passthrough_for_non_bat():
+    # A plain executable (typical POSIX conda) is returned unchanged.
+    assert registry._prefer_real_exe("/opt/conda/bin/conda") == "/opt/conda/bin/conda"
+
+
 def test_conda_exe_missing_raises(monkeypatch):
     monkeypatch.delenv("CONDA_EXE", raising=False)
     monkeypatch.setattr(registry.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(registry, "_search_conda_locations", lambda: None)
     with pytest.raises(RuntimeError, match="conda not found"):
         registry.conda_exe()
 
@@ -52,6 +84,7 @@ def test_available_conda_envs_empty_without_conda(monkeypatch):
     # aligners offered, and no crash.
     monkeypatch.delenv("CONDA_EXE", raising=False)
     monkeypatch.setattr(registry.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(registry, "_search_conda_locations", lambda: None)
     assert registry.available_conda_envs() == set()
     assert registry.available_reference_aligners() == []
 
