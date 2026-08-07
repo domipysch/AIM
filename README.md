@@ -1,55 +1,49 @@
 # AIM — Annotation-Independent Mapping
 
-AIM maps an scRNA-seq reference onto single-cell-resolution spatial
-transcriptomics (ST) without being told a cell-type granularity up front.
 
-**AIM is the whole framework, not a single mapper.** For a scRNA/ST pair it:
+**AIM** maps an **unannotated** scRNA-seq reference (scRNA) onto single-cell-resolution spatial transcriptomics (ST) in a **GUI** or **CLI**. For a scRNA/ST pair it:
 
-1. **Over-clusters** the reference once with Leiden into `L` subclusters.
+1. **Over-clusters** the scRNA reference once with Leiden into `L` subclusters.
 2. Builds **one agglomeration tree** over those subclusters.
-3. **Sweeps `K`**: for every `K` it cuts the tree into `K` cell states and maps
-   each ST spot onto them, reconstructing spot expression from the state
-   profiles.
+3. **Sweeps `K`**: for every `K` in `(1,L)` it cuts the tree into `K` cell states and assigns **exactly one** to each spot, reconstructing spot expression from the state profiles.
+4. **Finds best `K`**: computes metrics (reconstruction quality, spatial coherence and transcriptional coherence) and helps the user find the most sensible cell state granularity via an interactive GUI.
 
-The spot→state step is **modular** — it can be one of AIM's own mappers
-(`nearest_centroid`, `wann`) or an external reference aligner (`tangram`,
-`tacco`, `dot`) run once per `K`. Because `K` is *swept* rather than chosen, one
-run produces the whole granularity spectrum; the interactive GUI is used to
-browse it.
+The spot→state step is **modular**. In principle, any scRNA to ST alignment tool can be used here. We implement two baseline mappers (`nearest_centroid`, `wann`) and three reference mappers (`tangram`,  `tacco`, `dot`). You are invited to add and try out your mapper of choice!
 
-- [Input data](#input-data)
-- [Installation](#installation)
-- [Environments](#environments)
-- [Usage](#usage)
-  - [GUI](#gui-aim-gui)
-  - [AIM sweep — single & batch](#aim-sweep-aim-run)
-  - [Reference aligner — single & batch](#reference-aligner-aim-run-reference)
-  - [Validate a dataset](#validate-a-dataset-aim-data-validate)
-- [Adding a reference aligner](#adding-a-reference-aligner)
+## Outline
 
----
+- [Why AIM?](#why-aim)
+- [Input data format](#input-data-format)
+- [For users](#for-users)
+- [For developers](#for-developers)
 
-## Input data
+## Why AIM?
 
-You need pairs of an scRNA-seq dataset and a spatial dataset, both as `.h5ad`
-(raw counts preferred, though pre-processed data also works).
+Conventional mapping methods blindly map a **pre-annotated** scRNA reference onto spots, even if there is not enough signal in the spatial data to reliably distinguish between them.
+The hierarchical cell type clustering is based on both the scRNA and the ST data at hand. The user can find a cell type granularity that can be mapped reliably.
 
-- **scRNA `<Name>.h5ad`** — `X` = raw counts (cells × genes, float32);
-  `var_names` = **uppercase** gene symbols; `obs` has at least one cell-type
-  column.
-- **ST `<Name>.h5ad`** — `X` = raw counts (spots × genes, float32);
-  `var_names` = **uppercase** gene symbols; `obsm["spatial"]` = float array
-  (n_spots × 2).
+![aim_gui](./docs/aim_gui.gif)
 
-**Single pair** — just have the two `.h5ad` files.
+## Input data format
 
-**Batch** — organise the pairs relationally so one scRNA reference can be reused
-across many ST slices:
+To run AIM, you need a pair of a scRNA dataset and a ST dataset, both as raw counts in `.h5ad` format.
+
+- **scRNA `<Name>.h5ad`**: `X` = raw counts (cells × genes);  `var_names` = **uppercase** gene symbols.
+- **ST `<Name>.h5ad`**: `X` = raw counts (spots × genes);  `var_names` = **uppercase** gene symbols; `obsm["spatial"]` = (x, y)-coordinates of the spots: (n_spots × 2).
+
+### Single pair
+
+Just have the two `.h5ad` files available and you are good to go.
+
+### Batch processing
+
+AIM also supports batch processing of multiple pairs.
+Organise the data relationally the following way so one scRNA reference can be reused  across many ST slices:
 
 ```
-dataset/
+DATA/
 ├── scRNA/
-│   ├── index.csv          # one row per scRNA dataset (incl. CellTypeKey0/1/2)
+│   ├── index.csv          # one row per scRNA dataset
 │   └── <scName>.h5ad
 ├── ST/
 │   ├── index.csv          # one row per ST dataset
@@ -57,237 +51,208 @@ dataset/
 └── pairs.csv              # links scRNA ↔ ST: PairID, scName, stName, …
 ```
 
-See [`sample_dataset/`](sample_dataset) for a minimal, runnable example, and
-validate your own layout with [`aim data validate`](#validate-a-dataset-aim-data-validate).
+See [`sample_dataset/`](sample_dataset) for a minimal example, and validate your own layout with [`aim data validate`](#validate-a-dataset-aim-data-validate).
 
----
+### Running reference aligners for comparison
 
-## Installation
+If you want to run a reference aligner (such as Tangram) with given cell type annotations for comparison, add at least one cell-type column to `obs` of the scRNA data.
+If you want to run a reference aligner method in batch mode,
+follow the structure of [the scRNA index.csv](./sample_dataset/scRNA/index.csv) and save the used key
+under which the cell types are stored in `obs[key]` in the corresponding column `CellTypeKey0` (or `1`, `2` if multiple annotations are present).
 
-AIM's core (`aim run`) is installable from PyPI:
+## For users
+
+### Installation
+
+AIM is installable from PyPI:
 
 ```bash
-pip install spatial-aim            # core: aim run + aim data validate
-pip install "spatial-aim[gui]"     # + the Streamlit results GUI (aim gui)
+pip install spatial-aim
 ```
-
-> **While the package is on TestPyPI**, pull the package from TestPyPI but its
-> dependencies from PyPI:
-> ```bash
-> pip install --index-url https://test.pypi.org/simple/ \
->             --extra-index-url https://pypi.org/simple/ spatial-aim
-> ```
 
 This installs one command, `aim`, with subcommands (`aim --help`).
+You can now already run `aim` with the baseline mappers.
 
-**Recommended (conda), for the GUI and reproducibility.** The core pulls heavy
-scientific deps (scanpy, squidpy); the pinned conda environment is the tested
-setup:
+If you want to be able to select one of the reference aligners within AIM, you need `conda` installed on your machine.
+Please install the corresponding conda environments on your computer.
 
-```bash
-conda env create -f environment.yml     # creates aim_env with everything
-conda activate aim_env
-pip install spatial-aim --no-deps        # or: pip install -e . --no-deps (from a checkout)
-```
+| Method  | Environment   | Command                                                                                                                                                                              |
+| ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tangram | `tangram_env` | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_tangram.yml`                                                        |
+| TACCO   | `tacco_env`   | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_tacco.yml`                                                          |
+| DOT     | `dot_env`     | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
 
-The reference aligners are **not** installed by any of the above — they live in
-their own conda environments (see below).
+> For AIM to use the environments, please make sure AIM can find your conda executable.
+> Either set the environment variable `CONDA_EXE` or add your path to your conda installation to `PATH`.
+> Make sure `exe = os.environ.get("CONDA_EXE") or shutil.which("conda")` returns the path to your conda.
 
----
+### Validate a dataset pair (`aim data validate`)
 
-## Environments
-
-Each reference aligner runs in its own conda environment; AIM orchestrates them
-out-of-process via `conda run`, so you only need `conda` on `PATH` (no manual
-activation). The env `.yml` files ship with the package and live in the repo
-under `src/aim/reference_aligners/`.
-
-| Method | Environment | Create |
-|--------|-------------|--------|
-| AIM (core + GUI) | `aim_env` | `conda env create -f environment.yml` |
-| Tangram | `tangram_env` | `conda env create -f src/aim/reference_aligners/environment_tangram.yml` |
-| TACCO | `tacco_env` | `conda env create -f src/aim/reference_aligners/environment_tacco.yml` |
-| DOT | `dot_env` | `conda env create -f src/aim/reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
-
-**Make `aim` importable inside each reference env** so its wrapper module can be
-launched there:
+If you have structured your data as shown in section [Batch Processing](#batch-processing), you can check whether the main requirements are met.
+It checks every scRNA and ST `.h5ad` against its `index.csv` row and validates all count matrices (raw counts, uppercase gene names, shapes, ST spatial coords present). Exits non-zero on any error.
 
 ```bash
-conda run -n tangram_env pip install --no-deps spatial-aim   # and tacco_env / dot_env
+aim data validate --data-root path/to/DATA
 ```
 
-`--no-deps` is deliberate: the aligner's heavy deps already live in its env, and
-AIM's core deps must not be pulled in.
+### Run via GUI (`aim gui`)
 
----
-
-## Usage
-
-Everything is a subcommand of `aim`. Reference-aligner commands are run from
-`aim_env`; the aligner itself executes in its own env automatically.
-
-### GUI (`aim gui`)
-
-Interactive [Streamlit](https://streamlit.io) app to run and browse an AIM sweep
-for one sc/ST pair. Everything — the sc/ST paths, output directory, K range,
-linkage, and mapper — is configured in the sidebar; the only CLI argument is the
-port.
+Interactive [Streamlit](https://streamlit.io) app to run AIM from the browser and interactively browse the results for one scRNA/ST pair without any .
 
 ```bash
-conda activate aim_env
-aim gui                         # then configure & Run in the sidebar
-aim gui --server_port 8600
+aim gui [--server_port 8501]
 ```
 
-Open the printed URL (default http://localhost:8501), set the inputs, pick a
-mapper, and click **Run**. The GUI writes each mapper's sweep to
-`<output_dir>/<mapper>/` and renders all plots on demand from the per-K metrics.
-Mappers without a per-spot confidence (`tangram`, `tacco`, `dot`) disable the
-confidence slider.
+Open the printed URL (default http://localhost:8501), set the inputs, pick one or multiple mapper(s), and click **Run**.
+The GUI writes each mapper's sweep to  `<output_dir>/<mapper>/`. The results using each mapper are visualized in different tabs. When having run multiple mappers, also a "Compare" tab appears.
 
-### AIM sweep (`aim run`)
+### Run via CLI (`aim run`)
 
-Runs the full over-cluster → agglomerate → per-K mapping sweep. The spot→state
-mapper is chosen with `--mapping`:
+Run AIM via CLI on a single pair or in batch mode.
+The spot→state mapper is chosen with argument `--mapping`:
 
-- **`nearest_centroid`** (default) — zero-parameter nearest-centroid by cosine.
-  One-hot assignment, so soft and deterministic reconstructions coincide.
-- **`wann`** — Weighted Adaptive Nearest Neighbor (Gallo et al., TMLR 2025):
-  each reference cell gets a label-reliability score; each spot inherits the
-  neighbourhood size of its nearest reference cell and votes over its neighbours
-  weighted by reliability. Parameter-free.
-- **`tangram` / `tacco` / `dot`** — delegate the spot→state step to that external
-  aligner (one alignment per `K`, run in its own conda env; slower). Requires the
-  corresponding reference env (see [Environments](#environments)).
+- **`nearest_centroid`** (default): Per spot, select the cell state by highest cosine similarity between the state's centroid and the spot's expression. One-hot assignment by default.
+- **`wann`**: Weighted Adaptive Nearest Neighbor (Di Salvo et al., TMLR 2025): each reference cell gets a label-reliability score; each spot inherits the neighbourhood size of its nearest reference cell and votes over its nearest neighbours (labelled single reference cells by cosine distance) weighted by reliability.
+- **`tangram` / `tacco` / `dot`**: delegate the spot→state step to given external aligner (one alignment per `K`, run in its own conda env; slower). Requires the corresponding reference env (see [Installation](#installation)).
 
-**Single pair:**
+**Single pair**
 
 ```bash
-conda activate aim_env
-aim run \
-    --scdata     path/to/sc.h5ad \
-    --stdata     path/to/st.h5ad \
-    --output_dir out/pair_0 \
-    [--mapping nearest_centroid|wann|tangram|tacco|dot] \
-    [--leiden_resolution 3.0] \
-    [--k_min 1] [--k_max <L>] [--k_step 1] \
-    [--logging verbose]
+aim run --scdata path/to/sc.h5ad \
+		--stdata path/to/st.h5ad \
+		--output_dir path/to/out_dir \
+		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
+		[--leiden_resolution 3.0] \
+		[--k_min 1] [--k_max <L>] [--k_step 1] \
+		[--logging verbose]
 ```
 
-> `K` is swept, not set: the run covers every `K` in `[k_min, k_max]` (default
-> `1 … L`, where `L` = number of Leiden clusters at `--leiden_resolution`). There
-> is no `--K` argument.
-
-**Batch (all pairs in `pairs.csv`):**
+**Batch mode (all pairs in `pairs.csv`):**
 
 ```bash
-conda activate aim_env
-aim run \
-    --pairs_csv  path/to/pairs.csv \
-    --sc_dir     path/to/scRNA \
-    --st_dir     path/to/ST \
-    --output_dir out/aim \
-    [--mapping … --leiden_resolution … --k_min … --k_max … --k_step …]
+aim run --pairs_csv path/to/pairs.csv \
+		--sc_dir path/to/scRNA \
+		--st_dir path/to/ST \
+		--output_dir path/to/out_dir \
+		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
+		[--leiden_resolution 3.0] \
+		[--k_min 1] [--k_max <L>] [--k_step 1] \
+		[--logging verbose]
 ```
 
-Each pair is written to `<output_dir>/<PairID>_<scName>__<stName>/`.
+Each pair is written to `<out_dir>/<PairID>_<scName>__<stName>/`.
 
 **Output layout** (per pair):
 
 - `<mapping>/config.yaml` — the run configuration.
 - `leiden_overclustering.h5ad` — per-cell Leiden label; computed once, reused for every `K`.
 - `k_<kkk>/` — one folder per `K`:
-  - `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`);
-    carries `obs["mapping_confidence"]` when the mapper defines one.
-  - `spot_to_state_mapping.csv` — `P` as CSV (for eyeballing).
-  - `leiden_to_state.csv` — the subcluster→state tree cut.
-  - `analysis/data/` — machine-readable metrics for that `K` (no figures; the GUI renders them).
+	- `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`);
+	    carries `obs["mapping_confidence"]` when the mapper defines one.
+	- `spot_to_state_mapping.csv` — `P` as CSV (for eyeballing).
+	- `leiden_to_state.csv` — the subcluster→state tree cut.
+	- `analysis/data/` — machine-readable metrics for that `K` (no figures; the GUI renders them).
 
 **Sample-dataset example:**
 
 ```bash
-conda activate aim_env
 aim run \
-    --scdata     sample_dataset/scRNA/sample_sc.h5ad \
-    --stdata     sample_dataset/ST/sample_st.h5ad \
-    --output_dir sample_output/sample
+	--scdata     sample_dataset/scRNA/sample_sc.h5ad \
+	--stdata     sample_dataset/ST/sample_st.h5ad \
+	--output_dir sample_output/sample
 ```
 
-> The sample dataset is for showing usage only — its results carry no biological meaning.
+> The sample dataset is for sample usage only, it has no meaning.
 
-### Reference aligner (`aim run-reference`)
+### Standalone reference aligner (`aim run-reference`)
 
-Runs a reference aligner (Tangram / TACCO / DOT) **directly** (not per-K inside a
-sweep) with its canonical baseline settings, then computes the mapping metrics.
-Run from `aim_env`; the aligner executes in its own env via `conda run`.
+Runs a reference aligner (Tangram / TACCO / DOT) **directly** (not AIM's per-K approach) with its canonical baseline settings, then computes the mapping metrics.  This requires the scRNA data to carry a cell type annotation in `.obs`.
 
-**Single pair** — give the cell-type key (an `obs` column of the scRNA data):
+**Single pair**: give the cell-type key (an `obs` column of the scRNA data):
 
 ```bash
+aim run-reference --aligner [tangram|dot|tacco] \
+	--scdata path/to/sc.h5ad \
+	--stdata path/to/st.h5ad \
+	--output_dir path/to/out_dir \
+	--cell_type_key cellType
+```
+
+**Batch**: one run per pair × cell-type granularity (the keys come from `scRNA/index.csv`'s `CellTypeKey0/1/2`):
+
+```bash
+aim run-reference --aligner [tangram|dot|tacco] \
+	--pairs_csv path/to/pairs.csv \
+	--sc_dir path/to/scRNA \
+	--st_dir path/to/ST \
+	--output_dir path/to/out_dir
+```
+
+Each run writes `mapping_prob.h5ad` (a spots × cell-types soft-assignment AnnData) and `analysis/data/` to its output folder.
+
+## For developers
+
+### Installation of dev environment
+
+If you want to contribute, clone this repository and create a local conda environment.
+This will include everything apart from the reference aligner methods.
+
+```bash
+conda env create -f environment.yml
 conda activate aim_env
-aim run-reference --aligner tangram \
-    --scdata        path/to/sc.h5ad \
-    --stdata        path/to/st.h5ad \
-    --output_dir    out/tangram/pair_0 \
-    --cell_type_key cellType
+
+# Optional: Install the AIM-CLI from local
+pip install -e . --no-deps
 ```
 
-**Batch** — one subtree per pair × cell-type granularity (the keys come from
-`scRNA/index.csv`'s `CellTypeKey0/1/2`):
+#### Environments of reference aligners
 
-```bash
-conda activate aim_env
-aim run-reference --aligner tangram \
-    --pairs_csv  path/to/pairs.csv \
-    --sc_dir     path/to/scRNA \
-    --st_dir     path/to/ST \
-    --output_dir out/tangram
-```
+If you want to use one of the reference aligners within AIM or standalone, you have to additionally create the following environments. Each reference aligner runs in its own conda environment.
 
-Each run writes `mapping_prob.h5ad` (a spots × cell-types soft-assignment
-AnnData) and `analysis/data/` to its output folder.
+AIM orchestrates them out-of-process via `conda run`, so you need `conda` on `PATH`. The env `.yml` files live in the repo under [`src/aim/reference_aligners/`](https://github.com/domipysch/AIM/tree/main/src/aim/reference_aligners).
 
-### Validate a dataset (`aim data validate`)
+| Method  | Environment   | Create                                                                                                                                                                               |
+| ------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tangram | `tangram_env` | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_tangram.yml`                                                        |
+| TACCO   | `tacco_env`   | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_tacco.yml`                                                          |
+| DOT     | `dot_env`     | `conda env create -f https://raw.githubusercontent.com/domipysch/AIM/main/src/aim/reference_aligners/environment_dot.yml` then `Rscript -e "remotes::install_github('saezlab/DOT')"` |
 
-Checks every scRNA and ST `.h5ad` against its `index.csv` row, then validates all
-pairs (raw counts, uppercase gene names, shapes, spatial coords). Exits non-zero
-on any error.
 
-```bash
-aim data validate --data-root path/to/dataset
-```
+### Adding another reference aligner
 
----
+Reference aligners are pluggable.
+Each runs the same way: a wrapper launched out-of-process in its own conda env.
+The framework learns about it from a **single registry**,[`src/aim/reference_aligners/registry.py`](src/aim/reference_aligners/registry.py).
 
-## Adding a reference aligner
+Adding a reference aligner is three steps:
 
-Reference aligners are pluggable. Each runs the same way — a small wrapper
-launched out-of-process in its own conda env — and the whole framework learns
-about it from a **single registry**,
-[`src/aim/reference_aligners/registry.py`](src/aim/reference_aligners/registry.py).
-Adding one is three steps:
+**1. Add the conda environment file and create it**, e.g. `conda env create -f src/aim/reference_aligners/environment_<name>.yml`.
 
-**1. Create its conda env**, e.g. `conda env create -f src/aim/reference_aligners/environment_<name>.yml`.
+**2. Write `src/aim/reference_aligners/run_<name>.py`** satisfying the CLI API:
 
-**2. Write `src/aim/reference_aligners/run_<name>.py`** satisfying the CLI contract:
-
-| | Contract |
-|---|---|
-| **Args** | `--scdata`, `--stdata`, `--output_folder`, `--cell_type_key` |
-| **Input** | `scdata` carries the states/types in `obs[cell_type_key]`; `stdata` shares genes with `scdata` and has spatial coords in `obsm["spatial"]` |
+|            | Contract                                                                                                                                            |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Args**   | `--scdata`, `--stdata`, `--output_folder`, `--cell_type_key`                                                                                        |
+| **Input**  | `scdata` carries the states/types in `obs[cell_type_key]`; `stdata` shares genes with `scdata` and has spatial coords in `obsm["spatial"]`          |
 | **Output** | writes `<output_folder>/mapping_prob.h5ad` — AnnData with `obs` = spots (ST order), `var` = state/type names, `X` = float32 soft-assignment (S × T) |
 
-Invoked with only those four args, the wrapper must reproduce its canonical
-mapping (bake any other choices into the CLI defaults).
+Invoked with only those four args, the wrapper must reproduce its canonical mapping.
 
-**3. Register it** — add one line to `REFERENCE_ALIGNERS`:
+**3. Register it**
+
+Add one line to `REFERENCE_ALIGNERS` ([`src/aim/reference_aligners/registry.py`](src/aim/reference_aligners/registry.py)).
 
 ```python
 ReferenceAligner("<name>", "<name>_env", "aim.reference_aligners.run_<name>"),
 ```
 
-It is then selectable everywhere automatically: `aim run --mapping <name>` (as an
-AIM reference mapper, one alignment per `K`), `aim run-reference --aligner <name>`
-(single/batch), and `ReferenceMapper`. The single runner `run_aligner(...)` in the
-registry is the only code path that executes an aligner, so no bespoke dispatch is
-needed.
+It is then selectable everywhere automatically:
+
+- `aim gui` (it will be selectable in the sidebar)
+- `aim run --mapping <name>` (as an AIM reference mapper, one alignment per `K`),
+- `aim run-reference --aligner <name>` (single/batch for conventional pre-existing label to spot assignment)
+
+**4. Create PR**
+
+Create a PR with those changes to make it available for all users!
+

@@ -44,10 +44,13 @@ dependencies = [
     "igraph>=0.11",
     "leidenalg>=0.10",
     "umap-learn>=0.5",
+    # GUI
+    "streamlit>=1.40",
+    "plotly>=5.20",
+    "kaleido>=0.2"
 ]
 
 [project.optional-dependencies]
-gui = ["streamlit>=1.40", "plotly>=5.20", "kaleido>=0.2"]
 data = ["matplotlib>=3.9", "scikit-learn>=1.4"]
 dev = [
     "pytest>=8",

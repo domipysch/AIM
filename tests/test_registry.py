@@ -28,8 +28,16 @@ def test_run_aligner_unknown_name_raises(tmp_path):
 
 
 def test_conda_exe_prefers_env_var(monkeypatch):
+    # CONDA_EXE wins even when a conda exists on PATH.
     monkeypatch.setenv("CONDA_EXE", "/opt/conda/bin/conda")
+    monkeypatch.setattr(registry.shutil, "which", lambda _name: "/usr/bin/conda")
     assert registry.conda_exe() == "/opt/conda/bin/conda"
+
+
+def test_conda_exe_falls_back_to_path(monkeypatch):
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setattr(registry.shutil, "which", lambda name: "/usr/bin/conda")
+    assert registry.conda_exe() == "/usr/bin/conda"
 
 
 def test_conda_exe_missing_raises(monkeypatch):
@@ -37,6 +45,15 @@ def test_conda_exe_missing_raises(monkeypatch):
     monkeypatch.setattr(registry.shutil, "which", lambda _name: None)
     with pytest.raises(RuntimeError, match="conda not found"):
         registry.conda_exe()
+
+
+def test_available_conda_envs_empty_without_conda(monkeypatch):
+    # No conda at all (e.g. pip install into a plain venv) -> no reference
+    # aligners offered, and no crash.
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setattr(registry.shutil, "which", lambda _name: None)
+    assert registry.available_conda_envs() == set()
+    assert registry.available_reference_aligners() == []
 
 
 def test_run_aligner_builds_conda_run_command(tmp_path, monkeypatch):

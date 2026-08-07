@@ -49,6 +49,19 @@ _AGGLO_METHODS = ("ward", "average")
 
 
 @st.cache_data(show_spinner=False)
+def _selectable_methods() -> list[str]:
+    """MAPPING_CHOICES restricted to methods that can actually run here: the
+    in-process mappers are always available; a reference aligner is offered only
+    if its conda env is currently installed. Cached so conda is queried once per
+    session, not on every rerun."""
+    from aim.aim_config import _INPROCESS_METHODS
+    from aim.reference_aligners.registry import available_reference_aligners
+
+    available = set(_INPROCESS_METHODS) | set(available_reference_aligners())
+    return [m for m in MAPPING_CHOICES if m in available]
+
+
+@st.cache_data(show_spinner=False)
 def _load_soft(root_str: str, k: int):
     return data_access.load_soft(Path(root_str), k)
 
@@ -1060,7 +1073,18 @@ def _sidebar() -> argparse.Namespace | None:
     taken = set(computed) | set(queue)
     if running_mapper:
         taken.add(running_mapper)
-    remaining = [m for m in MAPPING_CHOICES if m not in taken]
+    selectable = _selectable_methods()
+    remaining = [m for m in selectable if m not in taken]
+
+    # Reference aligners whose conda env is missing can't run; flag them (unless
+    # they're already computed on disk from an env that existed earlier).
+    unavailable = [
+        m for m in MAPPING_CHOICES if m not in selectable and m not in computed
+    ]
+    if unavailable:
+        st.sidebar.caption(
+            "Unavailable (conda env not found): " + ", ".join(unavailable)
+        )
 
     if remaining:
         selected = st.sidebar.pills(
@@ -1068,7 +1092,8 @@ def _sidebar() -> argparse.Namespace | None:
             remaining,
             selection_mode="multi",
             key="add_methods",
-            help="Pick one or more; they compute one after another.",
+            help="Pick one or more; they compute one after another. Reference "
+            "aligners appear only when their conda env is installed.",
         )
         if st.sidebar.button("Run selected", disabled=not selected, width="stretch"):
             for m in selected:
