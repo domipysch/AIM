@@ -71,16 +71,88 @@ REFERENCE_ALIGNERS: dict[str, ReferenceAligner] = {
 
 
 def conda_exe() -> str:
-    """Locate a conda launcher usable from subprocess. ``CONDA_EXE`` (set by conda
-    activation) points to a real executable; ``shutil.which`` is the fallback (on
-    Windows plain "conda" is a .bat that subprocess can't resolve without help)."""
-    exe = os.environ.get("CONDA_EXE") or shutil.which("conda") or shutil.which("mamba")
+    """Locate a conda executable, OS-independently, in priority order:
+
+    1. the ``CONDA_EXE`` environment variable, if set (an explicit override —
+       the full path to a conda/mamba executable), then
+    2. ``conda`` found on ``PATH`` via :func:`shutil.which` (which applies
+       ``PATHEXT`` on Windows, so it resolves ``conda.exe``/``conda.bat``
+       transparently, and needs no extension elsewhere).
+
+    Raises ``RuntimeError`` if neither yields a conda. That is an expected,
+    non-fatal state: spatial-aim can be pip-installed into a plain venv with no
+    conda at all — only the external reference aligners (Tangram/TACCO/DOT, which
+    run in their own conda envs) are unavailable then; the in-process mappers do
+    not call this."""
+    exe = os.environ.get("CONDA_EXE") or shutil.which("conda")
     if not exe:
         raise RuntimeError(
-            "conda not found: reference aligners run in their own env via "
-            "`conda run`, which needs conda on PATH (or CONDA_EXE set)."
+            "conda not found: the reference aligners run in their own conda env "
+            "via `conda run`. Install conda and either set CONDA_EXE to the "
+            "conda executable or put conda on PATH. (Not required for the "
+            "in-process mappers or for a plain pip/venv install.)"
         )
     return exe
+
+
+def _first_json_object(text: str) -> dict | None:
+    """Decode the first JSON object in ``text``, ignoring anything before the
+    opening ``{`` or after the closing ``}``.
+
+    conda occasionally leaks notices/warnings into the ``--json`` stdout stream,
+    so a plain ``json.loads`` of the whole capture raises ``JSONDecodeError:
+    Extra data``. ``raw_decode`` parses just the object and stops. Returns
+    ``None`` if no JSON object can be found."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text, start)
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def available_conda_envs() -> set[str]:
+    """Names of the conda envs currently installed, from ``conda env list
+    --json``. Empty set if conda cannot be located or its output cannot be
+    parsed.
+
+    Reads each env's ``name`` from ``envs_details`` (falling back to the path
+    basename for older conda that omits it). The JSON is extracted with
+    :func:`_first_json_object` rather than ``json.loads`` because conda may print
+    extra text around the JSON."""
+    try:
+        exe = conda_exe()
+    except RuntimeError:
+        return set()
+    try:
+        proc = subprocess.run(
+            [exe, "env", "list", "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return set()
+
+    data = _first_json_object(proc.stdout)
+    if data is None:
+        return set()
+
+    details = data.get("envs_details") or {}
+    names = {d.get("name") for d in details.values() if d.get("name")}
+    if names:
+        return names
+    # Older conda without envs_details: derive from the path basename.
+    return {os.path.basename(p.rstrip("/\\")) for p in data.get("envs", [])}
+
+
+def available_reference_aligners() -> list[str]:
+    """Reference aligner names whose registered conda env is currently
+    installed, in ``REFERENCE_ALIGNERS`` order. Empty if none can be found."""
+    envs = available_conda_envs()
+    return [name for name, a in REFERENCE_ALIGNERS.items() if a.conda_env in envs]
 
 
 def run_aligner(

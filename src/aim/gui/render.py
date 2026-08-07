@@ -1523,7 +1523,23 @@ def render_onehot_figure(max_prob: np.ndarray) -> go.Figure:
     max_prob = np.asarray(max_prob, dtype=float)
     mean, median = float(np.mean(max_prob)), float(np.median(max_prob))
 
-    fig = go.Figure(go.Histogram(x=max_prob, nbinsx=40, marker_color=_CELL_COLOR))
+    lo, hi = float(np.min(max_prob)), float(np.max(max_prob))
+    if hi - lo < 1e-9:
+        # Degenerate case (e.g. a fully one-hot mapping): every spot has the
+        # same max probability. A plain histogram auto-ranges to a single giant
+        # bar spanning ~[0.5, 1.5]; instead draw a thin bar at the value with a
+        # tight, readable x-range.
+        center = hi
+        half = 0.05
+        fig = go.Figure(
+            go.Histogram(
+                x=max_prob,
+                xbins=dict(start=center - half, end=center + half, size=half / 5),
+                marker_color=_CELL_COLOR,
+            )
+        )
+    else:
+        fig = go.Figure(go.Histogram(x=max_prob, nbinsx=40, marker_color=_CELL_COLOR))
     fig.add_vline(
         x=mean,
         line_dash="dash",
@@ -1545,6 +1561,8 @@ def render_onehot_figure(max_prob: np.ndarray) -> go.Figure:
         yaxis_title="spots",
         bargap=0.02,
     )
+    if hi - lo < 1e-9:
+        fig.update_xaxes(range=[center - half, center + half])
     return fig
 
 
