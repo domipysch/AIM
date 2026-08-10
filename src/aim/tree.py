@@ -5,9 +5,13 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
+from aim.aim_config import AGGLO_TREE_METHODS
+
 
 def build_agglomeration_tree(
-    centroids: np.ndarray, method: str = "ward", eps: float = 1e-8
+    centroids: np.ndarray,
+    method: str = AGGLO_TREE_METHODS[0],
+    eps: float = 1e-8,
 ) -> np.ndarray:
     """Linkage matrix over the subcluster centroids, following the tree construction of
     Grabski et al. (2023) — the ``testClusters`` routine of their sc-SHC reference
@@ -33,7 +37,8 @@ def build_agglomeration_tree(
     genes) is also omitted — the tree is built on whatever genes ``centroids``
     carries, i.e. all shared genes in the AIM sweep.
 
-    ``method`` is either:
+    ``method`` is one of ``AGGLO_TREE_METHODS`` (``aim_config``), i.e. the same set
+    the ``--agglo_tree_method`` CLI flag and the GUI sidebar offer:
 
     - ``"ward"`` (default): Ward's criterion, reproducing the paper's
       ``hclust(dist(...), method="ward.D")``. scipy's ``method="ward"`` is R's
@@ -53,8 +58,8 @@ def build_agglomeration_tree(
     across every gene stay zero; the all-zero centroid rows nudged to a uniform
     ``1e-6`` by ``compute_leiden_aggregates`` become a uniform composition here.
     """
-    if method not in ("ward", "average"):
-        raise ValueError(f"method must be 'ward' or 'average', got {method!r}")
+    if method not in AGGLO_TREE_METHODS:
+        raise ValueError(f"method must be one of {AGGLO_TREE_METHODS}, got {method!r}")
 
     profiles = np.asarray(centroids, dtype=np.float64)
     if profiles.shape[0] < 2:

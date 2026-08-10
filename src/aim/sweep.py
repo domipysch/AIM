@@ -16,6 +16,7 @@ from aim.adata_schema import (
     UNS_NEIGHBORS_SHARED_GENES,
     OBSM_UMAP_SHARED_GENES,
 )
+from aim.aim_config import AGGLO_TREE_METHODS
 from aim.analysis.analysis import run_analysis
 from aim.analysis.ksweep import compare_k_runs
 from .aggregation import compute_leiden_aggregates
@@ -119,7 +120,7 @@ def run(
     st_path: Path,
     root_output_folder: Path,
     mapper: SpotStateMapper,
-    agglo_tree_method: str = "ward",
+    agglo_tree_method: str = AGGLO_TREE_METHODS[0],
     leiden_resolution: float = 3.0,
     k_min: int | None = None,
     k_max: int | None = None,

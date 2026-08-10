@@ -44,7 +44,7 @@ warnings.filterwarnings(
 )
 
 # Light imports only - both are scanpy-free and just feed the parser.
-from aim.aim_config import MAPPING_CHOICES
+from aim.aim_config import AGGLO_TREE_METHODS, MAPPING_CHOICES
 from aim.reference_aligners.registry import REFERENCE_ALIGNERS
 
 if TYPE_CHECKING:
@@ -168,6 +168,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = AIMConfig(
         mapping=args.mapping,
         leiden_resolution=args.leiden_resolution,
+        agglo_tree_method=args.agglo_tree_method,
         k_min=args.k_min,
         k_max=args.k_max,
         k_step=args.k_step,
@@ -286,6 +287,14 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
         "conda env, once per K).",
     )
     p.add_argument("--leiden_resolution", type=float, default=3.0)
+    p.add_argument(
+        "--agglo_tree_method",
+        choices=list(AGGLO_TREE_METHODS),
+        default=AGGLO_TREE_METHODS[0],
+        help="Linkage for the agglomeration tree over the Leiden subclusters: "
+        "'ward' (default) carries a size term and tends to produce balanced "
+        "states; 'average' (UPGMA) peels small tight groups off a dominant state.",
+    )
     p.add_argument("--k_min", type=int, default=None)
     p.add_argument("--k_max", type=int, default=None)
     p.add_argument("--k_step", type=int, default=1)

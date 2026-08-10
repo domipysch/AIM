@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from aim import MAPPING_CHOICES
+from aim import AGGLO_TREE_METHODS, MAPPING_CHOICES
 from aim.adata_schema import OBSM_UMAP_SHARED_GENES
 from aim.mapping.confidence import N_TOP_STATES
 
@@ -41,11 +41,11 @@ if TYPE_CHECKING:
 # Everything is configured in the sidebar — the launcher only forwards the server
 # port. The K range is fixed to the full sweep (k_min = 1, k_max = L, where L is
 # the Leiden over-cluster count discovered at runtime); only the step is
-# user-editable. The agglomeration linkage is chosen in the sidebar.
+# user-editable. The agglomeration linkage is chosen in the sidebar, from the same
+# AGGLO_TREE_METHODS the `--agglo_tree_method` CLI flag offers.
 _DEFAULT_K_MIN: int = 1
 _DEFAULT_K_MAX: int | None = None
 _DEFAULT_K_STEP = 1
-_AGGLO_METHODS = ("ward", "average")
 
 
 @st.cache_data(show_spinner=False)
@@ -940,7 +940,7 @@ def _clear_session() -> None:
     st.session_state["cfg_st"] = ""
     st.session_state["cfg_out"] = ""
     st.session_state["cfg_kstep"] = _DEFAULT_K_STEP
-    st.session_state["cfg_agglo"] = _AGGLO_METHODS[0]
+    st.session_state["cfg_agglo"] = AGGLO_TREE_METHODS[0]
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
     st.session_state.pop("_run_requested", None)
@@ -978,7 +978,7 @@ def _sidebar() -> argparse.Namespace | None:
     st.session_state.setdefault("cfg_st", "")
     st.session_state.setdefault("cfg_out", "")
     st.session_state.setdefault("cfg_kstep", _DEFAULT_K_STEP)
-    st.session_state.setdefault("cfg_agglo", _AGGLO_METHODS[0])
+    st.session_state.setdefault("cfg_agglo", AGGLO_TREE_METHODS[0])
 
     def _path_row(label: str, key: str, kind: str, browse_key: str) -> str:
         # Text field with an icon-only Browse button to its right (bottom-aligned
@@ -1010,7 +1010,7 @@ def _sidebar() -> argparse.Namespace | None:
     )
     agglo_method = st.sidebar.selectbox(
         "Agglomeration linkage",
-        _AGGLO_METHODS,
+        AGGLO_TREE_METHODS,
         key="cfg_agglo",
         help="Linkage for the agglomeration tree over the Leiden subclusters. "
         "'ward' carries a size term and tends to produce balanced states; "

@@ -115,6 +115,11 @@ The spot→state mapper is chosen with argument `--mapping`:
 - **`wann`**: Weighted Adaptive Nearest Neighbor (Di Salvo et al., TMLR 2025): each reference cell gets a label-reliability score; each spot inherits the neighbourhood size of its nearest reference cell and votes over its nearest neighbours (labelled single reference cells by cosine distance) weighted by reliability.
 - **`tangram` / `tacco` / `dot`**: delegate the spot→state step to given external aligner (one alignment per `K`, run in its own conda env; slower). Requires the corresponding reference env (see [Installation](#installation)).
 
+The linkage of the agglomeration tree over the Leiden subclusters is chosen with `--agglo_tree_method`:
+
+- **`ward`** (default): Ward's criterion (R's `ward.D`); carries a size term and tends to produce balanced states.
+- **`average`**: UPGMA — average pairwise distance; no size term, tends to peel small tight groups off a growing dominant state.
+
 **Single pair**
 
 ```bash
@@ -122,6 +127,7 @@ aim run --scdata path/to/sc.h5ad \
 		--stdata path/to/st.h5ad \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
+		[--agglo_tree_method ward|average] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \
 		[--logging verbose]
@@ -135,6 +141,7 @@ aim run --pairs_csv path/to/pairs.csv \
 		--st_dir path/to/ST \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
+		[--agglo_tree_method ward|average] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \
 		[--logging verbose]

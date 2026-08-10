@@ -22,6 +22,11 @@ _REFERENCE_METHODS = tuple(REFERENCE_ALIGNERS)
 
 MAPPING_CHOICES = _INPROCESS_METHODS + _REFERENCE_METHODS
 
+# Linkage choices for the agglomeration tree over the Leiden subclusters, first
+# entry being the default. Single source of truth: the CLI parser and the GUI
+# sidebar offer these, and ``tree.build_agglomeration_tree`` validates against them.
+AGGLO_TREE_METHODS = ("ward", "average")
+
 
 @dataclass
 class AIMConfig:
@@ -30,7 +35,7 @@ class AIMConfig:
     mapping: str = "nearest_centroid"
     leiden_resolution: float = 3.0
     # Agglomeration-tree linkage: "ward" (balanced states) or "average" (UPGMA).
-    agglo_tree_method: str = "ward"
+    agglo_tree_method: str = AGGLO_TREE_METHODS[0]
     # K sweep range
     k_min: int | None = None
     k_max: int | None = None

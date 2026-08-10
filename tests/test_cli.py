@@ -58,6 +58,22 @@ def test_run_without_paths_errors():
     assert exc.value.code == 2
 
 
+def test_run_agglo_tree_method_choices():
+    from aim.aim_config import AGGLO_TREE_METHODS, AIMConfig
+
+    parser = cli._build_parser()
+    base = ["run", "--scdata", "a.h5ad", "--stdata", "b.h5ad", "--output_dir", "o"]
+    # Default matches AIMConfig's, and every registered linkage is accepted.
+    assert parser.parse_args(base).agglo_tree_method == AIMConfig().agglo_tree_method
+    for method in AGGLO_TREE_METHODS:
+        args = parser.parse_args(base + ["--agglo_tree_method", method])
+        assert args.agglo_tree_method == method
+    # Anything else is rejected by argparse, not silently passed to the tree.
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(base + ["--agglo_tree_method", "complete"])
+    assert exc.value.code == 2
+
+
 def test_run_reference_requires_aligner():
     with pytest.raises(SystemExit) as exc:
         cli.main(["run-reference", "--scdata", "a.h5ad"])

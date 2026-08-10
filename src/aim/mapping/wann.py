@@ -1,6 +1,6 @@
 """Weighted Adaptive Nearest Neighbor (WANN) spot->state mapping.
 
-Ports the reliability-weighted adaptive kNN of Gallo et al. (TMLR 2025,
+Ports the reliability-weighted adaptive kNN of Di Salvo et al. (TMLR 2025,
 *An Embedding is Worth a Thousand Noisy Labels*) to the AIM K-sweep. Reference
 scRNA cells play the role of the (potentially noisy) training set and ST spots
 the test set; a cell's label is its AIM state at the current K.

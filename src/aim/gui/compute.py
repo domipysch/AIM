@@ -15,7 +15,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from aim import AIMConfig
+from aim import AGGLO_TREE_METHODS, AIMConfig
 from aim.cli import run_one_pair
 
 from . import data_access
@@ -39,7 +39,7 @@ class MapperRun:
         k_min: int | None,
         k_max: int | None,
         k_step: int,
-        agglo_tree_method: str = "ward",
+        agglo_tree_method: str = AGGLO_TREE_METHODS[0],
     ) -> None:
         self.mapper = mapper
         self.sc_path = Path(sc_path)
