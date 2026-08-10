@@ -4,7 +4,7 @@
 Both drivers dispatch through :func:`aim.reference_aligners.registry.run_aligner`,
 which runs the chosen aligner in its own conda env via ``conda run``; this module
 adds the per-pair / per-granularity orchestration and the post-mapping analysis.
-``aim run-reference`` (see :mod:`aim.cli`) calls these functions.
+``aim map-annotation`` (see :mod:`aim.cli`) calls these functions.
 """
 
 from __future__ import annotations

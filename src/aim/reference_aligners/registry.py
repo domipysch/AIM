@@ -8,7 +8,7 @@ Adding a reference aligner is two steps:
   2. Add one ``ReferenceAligner(...)`` line to ``REFERENCE_ALIGNERS``.
 
 The aligner is then available in ``aim run --mapping <name>``,
-``aim run-reference --aligner <name>``, and as an AIM reference mapper
+``aim map-annotation --aligner <name>``, and as an AIM reference mapper
 (``ReferenceMapper``).
 
 Import-light (stdlib only) so it is safe to import from any conda env, including
@@ -280,7 +280,7 @@ def run_aligner(
     to the ``mapping_prob.h5ad`` it must produce. Raises ``RuntimeError`` (with the
     stderr tail) if the aligner exits non-zero or leaves no mapping behind.
 
-    Both ``ReferenceMapper`` (per K, inside an AIM sweep) and the ``run-reference``
+    Both ``ReferenceMapper`` (per K, inside an AIM sweep) and the ``map-annotation``
     driver call this, so it is the only path that executes an aligner.
     """
     if name not in REFERENCE_ALIGNERS:

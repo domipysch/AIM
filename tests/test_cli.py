@@ -22,7 +22,7 @@ def test_build_parser_lists_all_subcommands():
     ]
     assert subactions, "no subparsers found on the aim parser"
     choices = set(subactions[0].choices)
-    assert {"run", "run-reference", "gui", "data"} <= choices
+    assert {"run", "map-annotation", "gui", "data"} <= choices
 
 
 def test_building_the_parser_loads_no_heavy_modules():
@@ -74,9 +74,9 @@ def test_run_agglo_tree_method_choices():
     assert exc.value.code == 2
 
 
-def test_run_reference_requires_aligner():
+def test_map_annotation_requires_aligner():
     with pytest.raises(SystemExit) as exc:
-        cli.main(["run-reference", "--scdata", "a.h5ad"])
+        cli.main(["map-annotation", "--scdata", "a.h5ad"])
     assert exc.value.code == 2
 
 

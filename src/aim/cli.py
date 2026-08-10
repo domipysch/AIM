@@ -4,15 +4,15 @@ Subcommands:
 
 * ``aim run``            - run the AIM sweep for a single sc/st pair or a whole
                            ``pairs.csv`` (batch).
-* ``aim run-reference``  - run a reference aligner (tangram / tacco / dot) with
-                           its canonical settings, single pair or batch.
+* ``aim map-annotation`` - map spots straight onto a pre-existing annotation with
+                           one aligner's canonical settings, single pair or batch.
 * ``aim gui``            - launch the interactive Streamlit results GUI.
 * ``aim data validate``  - validate a dataset directory against its index CSVs.
 
 The method itself lives in the ``aim`` package (see ``aim/__init__.py`` for the
 module map). Heavy imports (scanpy / squidpy) are deferred into the individual
 command handlers so that light commands - ``aim gui``,
-``aim run-reference``, ``aim data validate``, ``aim --help`` - start without
+``aim map-annotation``, ``aim data validate``, ``aim --help`` - start without
 loading the full sweep stack.
 """
 
@@ -190,11 +190,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# aim run-reference - reference aligner, single pair or batch
+# aim map-annotation - annotation-based baseline, single pair or batch
 # ---------------------------------------------------------------------------
 
 
-def _cmd_run_reference(args: argparse.Namespace) -> int:
+def _cmd_map_annotation(args: argparse.Namespace) -> int:
     from aim.reference_aligners import driver
 
     _setup_logging(args.logging == "verbose")
@@ -302,13 +302,15 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
     p.set_defaults(func=_cmd_run)
 
 
-def _add_run_reference_parser(sub: "argparse._SubParsersAction") -> None:
+def _add_map_annotation_parser(sub: "argparse._SubParsersAction") -> None:
     p = sub.add_parser(
-        "run-reference",
-        help="Run a reference aligner (tangram/tacco/dot), single pair or batch.",
-        description="Run a reference aligner with its canonical baseline settings. "
-        "Runs from aim_env; each aligner is executed in its own conda env via "
-        "`conda run`.",
+        "map-annotation",
+        help="Map spots onto a pre-existing annotation (tangram/tacco/dot/"
+        "nearest_centroid/wann), single pair or batch.",
+        description="Map spots straight onto the scRNA reference's existing cell-type "
+        "annotation with one aligner's canonical baseline settings - no Leiden "
+        "over-clustering and no agglomeration tree. Runs from aim_env; the external "
+        "aligners are executed in their own conda env via `conda run`.",
     )
     p.add_argument(
         "--aligner",
@@ -344,7 +346,7 @@ def _add_run_reference_parser(sub: "argparse._SubParsersAction") -> None:
         help="Output folder (single) or root for all pair outputs (batch)",
     )
     p.add_argument("--logging", choices=["normal", "verbose"], default="normal")
-    p.set_defaults(func=_cmd_run_reference)
+    p.set_defaults(func=_cmd_map_annotation)
 
 
 def _add_gui_parser(sub: "argparse._SubParsersAction") -> None:
@@ -393,7 +395,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(sub)
-    _add_run_reference_parser(sub)
+    _add_map_annotation_parser(sub)
     _add_gui_parser(sub)
     _add_data_parser(sub)
     return parser

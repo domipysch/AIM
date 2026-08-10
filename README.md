@@ -171,14 +171,14 @@ aim run \
 
 > The sample dataset is for sample usage only, it has no meaning.
 
-### Standalone reference aligner (`aim run-reference`)
+### Annotation-based baseline (`aim map-annotation`)
 
 Runs a reference aligner (Tangram / TACCO / DOT) **directly** (not AIM's per-K approach) with its canonical baseline settings, then computes the mapping metrics.  This requires the scRNA data to carry a cell type annotation in `.obs`.
 
 **Single pair**: give the cell-type key (an `obs` column of the scRNA data):
 
 ```bash
-aim run-reference --aligner [tangram|dot|tacco] \
+aim map-annotation --aligner [tangram|dot|tacco] \
 	--scdata path/to/sc.h5ad \
 	--stdata path/to/st.h5ad \
 	--output_dir path/to/out_dir \
@@ -188,7 +188,7 @@ aim run-reference --aligner [tangram|dot|tacco] \
 **Batch**: one run per pair × cell-type granularity (the keys come from `scRNA/index.csv`'s `CellTypeKey0/1/2`):
 
 ```bash
-aim run-reference --aligner [tangram|dot|tacco] \
+aim map-annotation --aligner [tangram|dot|tacco] \
 	--pairs_csv path/to/pairs.csv \
 	--sc_dir path/to/scRNA \
 	--st_dir path/to/ST \
@@ -257,7 +257,7 @@ It is then selectable everywhere automatically:
 
 - `aim gui` (it will be selectable in the sidebar)
 - `aim run --mapping <name>` (as an AIM reference mapper, one alignment per `K`),
-- `aim run-reference --aligner <name>` (single/batch for conventional pre-existing label to spot assignment)
+- `aim map-annotation --aligner <name>` (single/batch for conventional pre-existing label to spot assignment)
 
 **4. Create PR**
 
