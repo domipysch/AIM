@@ -3,12 +3,17 @@
 
 **AIM** maps an **unannotated** scRNA-seq reference (scRNA) onto single-cell-resolution spatial transcriptomics (ST) in a **GUI** or **CLI**. For a scRNA/ST pair it:
 
-1. **Over-clusters** the scRNA reference once with Leiden into `L` start clusters (or, with `--start_from_annotation`, takes an existing annotation's `L` cell types as the start clusters instead).
+1. **Over-clusters** the scRNA reference once with Leiden into `L` start clusters.
 2. Builds **one agglomeration tree** over those start clusters.
 3. **Sweeps `K`**: for every `K` in `(1,L)` it cuts the tree into `K` cell states and assigns **exactly one** to each spot, reconstructing spot expression from the state profiles.
 4. **Finds best `K`**: computes metrics (reconstruction quality, spatial coherence and transcriptional coherence) and helps the user find the most sensible cell state granularity via an interactive GUI.
 
-The spot→state step is **modular**. In principle, any scRNA to ST alignment tool can be used here. We implement two baseline mappers (`nearest_centroid`, `wann`) and three reference mappers (`tangram`,  `tacco`, `dot`). You are invited to add and try out your mapper of choice!
+The spot→state step is **modular**. In principle, any scRNA to ST alignment tool can be used here.
+We implement two baseline mappers (`nearest_centroid`, `wann`) and three reference mappers (`tangram`,  `tacco`, `dot`).
+You are invited to add and try out your mapper of choice!
+
+If you want to replace the Leiden overclustering from Step 1 with your own annotations,
+`--start_from_annotation` takes an existing annotation's `L` cell types as the start clusters instead.
 
 ## Outline
 
@@ -52,13 +57,6 @@ DATA/
 ```
 
 See [`sample_dataset/`](sample_dataset) for a minimal example, and validate your own layout with [`aim data validate`](#validate-a-dataset-aim-data-validate).
-
-### Running reference aligners for comparison
-
-If you want to run a reference aligner (such as Tangram) with given cell type annotations for comparison, add at least one cell-type column to `obs` of the scRNA data.
-If you want to run a reference aligner method in batch mode,
-follow the structure of [the scRNA index.csv](./sample_dataset/scRNA/index.csv) and save the used key
-under which the cell types are stored in `obs[key]` in the corresponding column `CellTypeKey0` (or `1`, `2` if multiple annotations are present).
 
 ## For users
 
@@ -120,7 +118,10 @@ The linkage of the agglomeration tree over the start clusters is chosen with `--
 - **`ward`** (default): Ward's criterion (R's `ward.D`); carries a size term and tends to produce balanced states.
 - **`average`**: UPGMA — average pairwise distance; no size term, tends to peel small tight groups off a growing dominant state.
 
-The **start clusters** the tree is built over come from the Leiden over-clustering by default. Pass `--start_from_annotation <obs_column>` to use a pre-existing annotation instead: its cell types become the start clusters, no over-clustering is computed at all, and `K` sweeps from the number of annotated types down (cells with no label are dropped; `--leiden_resolution` then only governs the shared-gene reference Leiden). Give such runs their own `--output_dir` — a run root is named after the mapper alone, so the two modes would otherwise overwrite each other.
+The **start clusters** the tree is built over come from the Leiden over-clustering by default.
+Pass `--start_from_annotation <obs_column>` to use a pre-existing annotation instead: its cell types become the start clusters, no over-clustering is computed at all,
+and `K` sweeps from the number of annotated types down (cells with no label are dropped).
+Give such runs their own `--output_dir`: a run root is named after the mapper alone, so the two modes would otherwise overwrite each other.
 
 **Single pair**
 
@@ -177,7 +178,8 @@ aim run \
 
 ### Annotation-based baseline
 
-There is no separate command for it: `aim run --start_from_annotation <obs_column>` covers it. The annotated types become the start clusters, and the sweep's **`K` = number-of-types** level is the baseline — every spot mapped onto the annotation itself, no merging. The levels below it are the same annotation progressively agglomerated, which is the comparison the sweep is for.
+There is no separate command for it: `aim run --start_from_annotation <obs_column>` covers it.
+The annotated types become the start clusters, and the sweep's **`K` = number-of-types** level is the baseline.
 
 ## For developers
 
