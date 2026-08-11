@@ -15,6 +15,8 @@ You are invited to add and try out your mapper of choice!
 If you want to replace the Leiden overclustering from Step 1 with your own annotations,
 `--start_from_annotation` takes an existing annotation's `L` cell types as the start clusters instead.
 
+![aim_figure](./docs/figure_2_1.png)
+
 ## Outline
 
 - [Why AIM?](#why-aim)
