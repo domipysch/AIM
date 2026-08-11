@@ -3,17 +3,16 @@
 Subcommands:
 
 * ``aim run``            - run the AIM sweep for a single sc/st pair or a whole
-                           ``pairs.csv`` (batch).
-* ``aim map-annotation`` - map spots straight onto a pre-existing annotation with
-                           one aligner's canonical settings, single pair or batch.
+                           ``pairs.csv`` (batch). ``--start_from_annotation`` starts
+                           it from a pre-existing annotation instead of a Leiden
+                           over-clustering.
 * ``aim gui``            - launch the interactive Streamlit results GUI.
 * ``aim data validate``  - validate a dataset directory against its index CSVs.
 
 The method itself lives in the ``aim`` package (see ``aim/__init__.py`` for the
 module map). Heavy imports (scanpy / squidpy) are deferred into the individual
-command handlers so that light commands - ``aim gui``,
-``aim map-annotation``, ``aim data validate``, ``aim --help`` - start without
-loading the full sweep stack.
+command handlers so that light commands - ``aim gui``, ``aim data validate``,
+``aim --help`` - start without loading the full sweep stack.
 """
 
 from __future__ import annotations
@@ -45,7 +44,6 @@ warnings.filterwarnings(
 
 # Light imports only - both are scanpy-free and just feed the parser.
 from aim.aim_config import AGGLO_TREE_METHODS, MAPPING_CHOICES
-from aim.reference_aligners.registry import REFERENCE_ALIGNERS
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -83,7 +81,7 @@ def run_one_pair(
 ) -> "pd.DataFrame":
     """Write config.yaml + run the K-sweep for a single sc/st pair.
 
-    The mapper-independent reference scaffold (over-clustering + aggregates +
+    The mapper-independent reference scaffold (start clusters + aggregates +
     UMAPs) is cached under ``root_output_folder`` and reused across mappers, so
     running several mappers for one pair computes it once (the GUI relies on this).
     """
@@ -111,6 +109,7 @@ def run_one_pair(
         k_min=config.k_min,
         k_max=config.k_max,
         k_step=config.k_step,
+        start_from_annotation=config.start_from_annotation,
     )
 
 
@@ -172,6 +171,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         k_min=args.k_min,
         k_max=args.k_max,
         k_step=args.k_step,
+        start_from_annotation=args.start_from_annotation,
     )
 
     batch_mode = args.pairs_csv is not None
@@ -186,39 +186,6 @@ def _cmd_run(args: argparse.Namespace) -> int:
                 "or --pairs_csv/--sc_dir/--st_dir (batch)"
             )
         run_one_pair(args.scdata, args.stdata, args.output_dir, config)
-    return 0
-
-
-# ---------------------------------------------------------------------------
-# aim map-annotation - annotation-based baseline, single pair or batch
-# ---------------------------------------------------------------------------
-
-
-def _cmd_map_annotation(args: argparse.Namespace) -> int:
-    from aim.reference_aligners import driver
-
-    _setup_logging(args.logging == "verbose")
-
-    batch_mode = args.pairs_csv is not None
-    if batch_mode:
-        if args.sc_dir is None or args.st_dir is None or args.output_dir is None:
-            _fail("--pairs_csv requires --sc_dir, --st_dir, and --output_dir")
-        driver.align_batch(
-            args.aligner, args.pairs_csv, args.sc_dir, args.st_dir, args.output_dir
-        )
-    else:
-        if args.scdata is None or args.stdata is None or args.output_dir is None:
-            _fail(
-                "Single-pair mode requires --scdata, --stdata, and --output_dir "
-                "(or use --pairs_csv/--sc_dir/--st_dir for batch)"
-            )
-        driver.align_single(
-            args.aligner,
-            args.scdata,
-            args.stdata,
-            args.output_dir,
-            args.cell_type_key,
-        )
     return 0
 
 
@@ -286,12 +253,25 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
         "aligner 'tangram' / 'tacco' / 'dot' (each runs out-of-process in its own "
         "conda env, once per K).",
     )
+    p.add_argument(
+        "--start_from_annotation",
+        type=str,
+        default=None,
+        metavar="OBS_COLUMN",
+        help="Start the agglomeration from a pre-existing annotation instead of a "
+        "Leiden over-clustering: the named scRNA obs column's cell types become the "
+        "start clusters, no over-clustering is computed, and K sweeps from the "
+        "number of annotated types down (cells with no label are dropped). "
+        "--leiden_resolution then only governs the shared-gene reference Leiden. "
+        "Give such runs their own --output_dir: a run root is named after the "
+        "mapper alone, so the two modes would otherwise overwrite each other.",
+    )
     p.add_argument("--leiden_resolution", type=float, default=3.0)
     p.add_argument(
         "--agglo_tree_method",
         choices=list(AGGLO_TREE_METHODS),
         default=AGGLO_TREE_METHODS[0],
-        help="Linkage for the agglomeration tree over the Leiden subclusters: "
+        help="Linkage for the agglomeration tree over the start clusters: "
         "'ward' (default) carries a size term and tends to produce balanced "
         "states; 'average' (UPGMA) peels small tight groups off a dominant state.",
     )
@@ -300,53 +280,6 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
     p.add_argument("--k_step", type=int, default=1)
     p.add_argument("--logging", choices=["normal", "verbose"], default="normal")
     p.set_defaults(func=_cmd_run)
-
-
-def _add_map_annotation_parser(sub: "argparse._SubParsersAction") -> None:
-    p = sub.add_parser(
-        "map-annotation",
-        help="Map spots onto a pre-existing annotation (tangram/tacco/dot/"
-        "nearest_centroid/wann), single pair or batch.",
-        description="Map spots straight onto the scRNA reference's existing cell-type "
-        "annotation with one aligner's canonical baseline settings - no Leiden "
-        "over-clustering and no agglomeration tree. Runs from aim_env; the external "
-        "aligners are executed in their own conda env via `conda run`.",
-    )
-    p.add_argument(
-        "--aligner",
-        choices=list(REFERENCE_ALIGNERS),
-        required=True,
-        help="Which reference aligner to run.",
-    )
-    # Single-pair mode
-    p.add_argument("--scdata", type=Path, default=None, help="Single-pair: sc .h5ad")
-    p.add_argument("--stdata", type=Path, default=None, help="Single-pair: ST .h5ad")
-    p.add_argument(
-        "--cell_type_key",
-        type=str,
-        default="cellType",
-        help="Single-pair: obs column with the cell-type/state labels to map "
-        "(default 'cellType'). Batch mode reads the keys from scRNA/index.csv.",
-    )
-    # Batch mode
-    p.add_argument("--pairs_csv", type=Path, default=None, help="Batch: pairs.csv")
-    p.add_argument(
-        "--sc_dir",
-        type=Path,
-        default=None,
-        help="Batch: folder of scRNA .h5ad + index.csv",
-    )
-    p.add_argument(
-        "--st_dir", type=Path, default=None, help="Batch: folder of ST .h5ad"
-    )
-    p.add_argument(
-        "--output_dir",
-        type=Path,
-        default=None,
-        help="Output folder (single) or root for all pair outputs (batch)",
-    )
-    p.add_argument("--logging", choices=["normal", "verbose"], default="normal")
-    p.set_defaults(func=_cmd_map_annotation)
 
 
 def _add_gui_parser(sub: "argparse._SubParsersAction") -> None:
@@ -395,7 +328,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(sub)
-    _add_map_annotation_parser(sub)
     _add_gui_parser(sub)
     _add_data_parser(sub)
     return parser

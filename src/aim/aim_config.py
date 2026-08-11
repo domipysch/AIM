@@ -22,7 +22,7 @@ _REFERENCE_METHODS = tuple(REFERENCE_ALIGNERS)
 
 MAPPING_CHOICES = _INPROCESS_METHODS + _REFERENCE_METHODS
 
-# Linkage choices for the agglomeration tree over the Leiden subclusters, first
+# Linkage choices for the agglomeration tree over the start clusters, first
 # entry being the default. Single source of truth: the CLI parser and the GUI
 # sidebar offer these, and ``tree.build_agglomeration_tree`` validates against them.
 AGGLO_TREE_METHODS = ("ward", "average")
@@ -30,12 +30,17 @@ AGGLO_TREE_METHODS = ("ward", "average")
 
 @dataclass
 class AIMConfig:
-    """Per-run knobs for the AIM sweep: mapping choice, hyperparameters, and K range."""
+    """Per-run knobs for the AIM sweep: mapping choice, start clusters,
+    hyperparameters, and K range."""
 
     mapping: str = "nearest_centroid"
     leiden_resolution: float = 3.0
     # Agglomeration-tree linkage: "ward" (balanced states) or "average" (UPGMA).
     agglo_tree_method: str = AGGLO_TREE_METHODS[0]
+    # Start clusters (what the agglomeration tree is built over): None = Leiden
+    # over-clustering; an obs column name = use that annotation instead, in which
+    # case no all-gene Leiden is computed and K sweeps from the number of types.
+    start_from_annotation: str | None = None
     # K sweep range
     k_min: int | None = None
     k_max: int | None = None

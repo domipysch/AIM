@@ -3,8 +3,8 @@
 
 **AIM** maps an **unannotated** scRNA-seq reference (scRNA) onto single-cell-resolution spatial transcriptomics (ST) in a **GUI** or **CLI**. For a scRNA/ST pair it:
 
-1. **Over-clusters** the scRNA reference once with Leiden into `L` subclusters.
-2. Builds **one agglomeration tree** over those subclusters.
+1. **Over-clusters** the scRNA reference once with Leiden into `L` start clusters (or, with `--start_from_annotation`, takes an existing annotation's `L` cell types as the start clusters instead).
+2. Builds **one agglomeration tree** over those start clusters.
 3. **Sweeps `K`**: for every `K` in `(1,L)` it cuts the tree into `K` cell states and assigns **exactly one** to each spot, reconstructing spot expression from the state profiles.
 4. **Finds best `K`**: computes metrics (reconstruction quality, spatial coherence and transcriptional coherence) and helps the user find the most sensible cell state granularity via an interactive GUI.
 
@@ -115,10 +115,12 @@ The spot→state mapper is chosen with argument `--mapping`:
 - **`wann`**: Weighted Adaptive Nearest Neighbor (Di Salvo et al., TMLR 2025): each reference cell gets a label-reliability score; each spot inherits the neighbourhood size of its nearest reference cell and votes over its nearest neighbours (labelled single reference cells by cosine distance) weighted by reliability.
 - **`tangram` / `tacco` / `dot`**: delegate the spot→state step to given external aligner (one alignment per `K`, run in its own conda env; slower). Requires the corresponding reference env (see [Installation](#installation)).
 
-The linkage of the agglomeration tree over the Leiden subclusters is chosen with `--agglo_tree_method`:
+The linkage of the agglomeration tree over the start clusters is chosen with `--agglo_tree_method`:
 
 - **`ward`** (default): Ward's criterion (R's `ward.D`); carries a size term and tends to produce balanced states.
 - **`average`**: UPGMA — average pairwise distance; no size term, tends to peel small tight groups off a growing dominant state.
+
+The **start clusters** the tree is built over come from the Leiden over-clustering by default. Pass `--start_from_annotation <obs_column>` to use a pre-existing annotation instead: its cell types become the start clusters, no over-clustering is computed at all, and `K` sweeps from the number of annotated types down (cells with no label are dropped; `--leiden_resolution` then only governs the shared-gene reference Leiden). Give such runs their own `--output_dir` — a run root is named after the mapper alone, so the two modes would otherwise overwrite each other.
 
 **Single pair**
 
@@ -128,6 +130,7 @@ aim run --scdata path/to/sc.h5ad \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
 		[--agglo_tree_method ward|average] \
+		[--start_from_annotation <obs_column>] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \
 		[--logging verbose]
@@ -142,6 +145,7 @@ aim run --pairs_csv path/to/pairs.csv \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
 		[--agglo_tree_method ward|average] \
+		[--start_from_annotation <obs_column>] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \
 		[--logging verbose]
@@ -152,12 +156,12 @@ Each pair is written to `<out_dir>/<PairID>_<scName>__<stName>/`.
 **Output layout** (per pair):
 
 - `<mapping>/config.yaml` — the run configuration.
-- `leiden_overclustering.h5ad` — per-cell Leiden label; computed once, reused for every `K`.
+- `start_clustering.h5ad` — per-cell start cluster (`start_cluster` id + `start_cluster_name`); computed once, reused for every `K`.
 - `k_<kkk>/` — one folder per `K`:
 	- `spot_to_state_mapping_soft.h5ad` — the spot→state matrix `P` (spots × `K`);
 	    carries `obs["mapping_confidence"]` when the mapper defines one.
 	- `spot_to_state_mapping.csv` — `P` as CSV (for eyeballing).
-	- `leiden_to_state.csv` — the subcluster→state tree cut.
+	- `start_cluster_to_state.csv` — the start-cluster→state tree cut.
 	- `analysis/data/` — machine-readable metrics for that `K` (no figures; the GUI renders them).
 
 **Sample-dataset example:**
@@ -171,31 +175,9 @@ aim run \
 
 > The sample dataset is for sample usage only, it has no meaning.
 
-### Annotation-based baseline (`aim map-annotation`)
+### Annotation-based baseline
 
-Runs a reference aligner (Tangram / TACCO / DOT) **directly** (not AIM's per-K approach) with its canonical baseline settings, then computes the mapping metrics.  This requires the scRNA data to carry a cell type annotation in `.obs`.
-
-**Single pair**: give the cell-type key (an `obs` column of the scRNA data):
-
-```bash
-aim map-annotation --aligner [tangram|dot|tacco] \
-	--scdata path/to/sc.h5ad \
-	--stdata path/to/st.h5ad \
-	--output_dir path/to/out_dir \
-	--cell_type_key cellType
-```
-
-**Batch**: one run per pair × cell-type granularity (the keys come from `scRNA/index.csv`'s `CellTypeKey0/1/2`):
-
-```bash
-aim map-annotation --aligner [tangram|dot|tacco] \
-	--pairs_csv path/to/pairs.csv \
-	--sc_dir path/to/scRNA \
-	--st_dir path/to/ST \
-	--output_dir path/to/out_dir
-```
-
-Each run writes `mapping_prob.h5ad` (a spots × cell-types soft-assignment AnnData) and `analysis/data/` to its output folder.
+There is no separate command for it: `aim run --start_from_annotation <obs_column>` covers it. The annotated types become the start clusters, and the sweep's **`K` = number-of-types** level is the baseline — every spot mapped onto the annotation itself, no merging. The levels below it are the same annotation progressively agglomerated, which is the comparison the sweep is for.
 
 ## For developers
 
@@ -256,8 +238,7 @@ ReferenceAligner("<name>", "<name>_env", "aim.reference_aligners.run_<name>"),
 It is then selectable everywhere automatically:
 
 - `aim gui` (it will be selectable in the sidebar)
-- `aim run --mapping <name>` (as an AIM reference mapper, one alignment per `K`),
-- `aim map-annotation --aligner <name>` (single/batch for conventional pre-existing label to spot assignment)
+- `aim run --mapping <name>` (as an AIM reference mapper, one alignment per `K`) — including `--start_from_annotation`, where it maps onto a pre-existing annotation
 
 **4. Create PR**
 

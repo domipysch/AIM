@@ -22,7 +22,10 @@ def test_build_parser_lists_all_subcommands():
     ]
     assert subactions, "no subparsers found on the aim parser"
     choices = set(subactions[0].choices)
-    assert {"run", "map-annotation", "gui", "data"} <= choices
+    assert {"run", "gui", "data"} <= choices
+    # `aim map-annotation` was removed: `aim run --start_from_annotation` is the
+    # annotation path now.
+    assert "map-annotation" not in choices
 
 
 def test_building_the_parser_loads_no_heavy_modules():
@@ -74,9 +77,32 @@ def test_run_agglo_tree_method_choices():
     assert exc.value.code == 2
 
 
-def test_map_annotation_requires_aligner():
+def test_run_start_from_annotation_defaults_to_none():
+    from aim.aim_config import AIMConfig
+
+    parser = cli._build_parser()
+    base = ["run", "--scdata", "a.h5ad", "--stdata", "b.h5ad", "--output_dir", "o"]
+    # Default = Leiden over-clustering, matching AIMConfig's.
+    assert parser.parse_args(base).start_from_annotation is None
+    assert AIMConfig().start_from_annotation is None
+    # Any obs column name is accepted verbatim (validated against the h5ad at run time).
+    args = parser.parse_args(base + ["--start_from_annotation", "cellType"])
+    assert args.start_from_annotation == "cellType"
+
+
+def test_run_accepts_every_mapper():
+    from aim.aim_config import MAPPING_CHOICES
+
+    parser = cli._build_parser()
+    base = ["run", "--scdata", "a.h5ad", "--stdata", "b.h5ad", "--output_dir", "o"]
+    # The sweep offers the two in-process mappers and every registered reference
+    # aligner.
+    for method in MAPPING_CHOICES:
+        args = parser.parse_args(base + ["--mapping", method])
+        assert args.mapping == method
+    # Anything else is rejected by argparse, not passed on to build_mapper.
     with pytest.raises(SystemExit) as exc:
-        cli.main(["map-annotation", "--scdata", "a.h5ad"])
+        parser.parse_args(base + ["--mapping", "cell2location"])
     assert exc.value.code == 2
 
 

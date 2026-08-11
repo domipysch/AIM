@@ -13,7 +13,7 @@ class NearestCentroidMapper(SpotStateMapper):
     eps: float = 1e-8
     name = "nearest_centroid"
 
-    def map(self, leiden_to_state, k) -> tuple[np.ndarray, np.ndarray]:
+    def map(self, start_cluster_to_state, k) -> tuple[np.ndarray, np.ndarray]:
         """Assign each spot to its most cosine-similar state centroid.
 
         Returns a one-hot P (S x K) plus a (S,) confidence: the margin of the
@@ -21,7 +21,7 @@ class NearestCentroidMapper(SpotStateMapper):
         """
 
         Z_shared = self._spatial_data_matrix()
-        M_shared = self._state_profiles(leiden_to_state, k)
+        M_shared = self._state_profiles(start_cluster_to_state, k)
 
         Zn = Z_shared / (np.linalg.norm(Z_shared, axis=1, keepdims=True) + self.eps)
         Mn = M_shared / (np.linalg.norm(M_shared, axis=1, keepdims=True) + self.eps)

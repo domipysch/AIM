@@ -28,7 +28,7 @@ import logging
 import numpy as np
 
 from aim.adata_schema import (
-    OBS_LEIDEN_ALL_GENES,
+    OBS_START_CLUSTER,
     UNS_SHARED_GENES,
 )
 from aim.analysis.utils import to_dense
@@ -110,7 +110,9 @@ class WANNMapper(SpotStateMapper):
         self._spot_nbr_idx = self._cosine_topk(Zs, Zc, nn_max, exclude_self=False)
         self._spot_nn = self._spot_nbr_idx[:, 0]  # (S,) each spot's nearest cell
 
-        self._leiden = self.adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+        self._start_cluster = (
+            self.adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
+        )
 
     @staticmethod
     def _cosine_topk(
@@ -171,7 +173,7 @@ class WANNMapper(SpotStateMapper):
                 break
         return eta
 
-    def map(self, leiden_to_state, k) -> tuple[np.ndarray, np.ndarray]:
+    def map(self, start_cluster_to_state, k) -> tuple[np.ndarray, np.ndarray]:
         """WANN spot->state soft assignment at this K.
 
         Labels every reference cell by its state, scores each cell's reliability,
@@ -180,8 +182,8 @@ class WANNMapper(SpotStateMapper):
         Returns P (S x K, rows summing to 1) and the ``entropy_confidence`` of each
         vote row (1 = unanimous, 0 = uniform across states).
         """
-        labels = np.asarray(leiden_to_state, dtype=np.int64)
-        y = labels[self._leiden]  # (C,) state id per reference cell
+        labels = np.asarray(start_cluster_to_state, dtype=np.int64)
+        y = labels[self._start_cluster]  # (C,) state id per reference cell
 
         eta = self._reliability(y, k)  # (C,)
 

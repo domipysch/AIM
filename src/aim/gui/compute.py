@@ -40,6 +40,7 @@ class MapperRun:
         k_max: int | None,
         k_step: int,
         agglo_tree_method: str = AGGLO_TREE_METHODS[0],
+        start_from_annotation: str | None = None,
     ) -> None:
         self.mapper = mapper
         self.sc_path = Path(sc_path)
@@ -50,6 +51,7 @@ class MapperRun:
         self.k_max = k_max
         self.k_step = k_step
         self.agglo_tree_method = agglo_tree_method
+        self.start_from_annotation = start_from_annotation
         self.error: str | None = None
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -66,6 +68,7 @@ class MapperRun:
                 k_min=self.k_min,
                 k_max=self.k_max,
                 k_step=self.k_step,
+                start_from_annotation=self.start_from_annotation,
             )
             # Same entry point as the CLI. The reference scaffold is cached at the
             # pair output root and shared across all mappers of this pair: build it
@@ -89,18 +92,15 @@ class MapperRun:
         return len(data_access.list_ks(self.root))
 
     def n_expected(self) -> int | None:
-        """Total K folders this sweep will produce, once the overclustering is known.
+        """Total K folders this sweep will produce, once the start clusters are known.
 
-        Returns ``None`` until ``leiden_overclustering.h5ad`` exists (the level
-        count depends on the Leiden cluster count, which is only known then).
+        Returns ``None`` until ``start_clustering.h5ad`` exists (the level count
+        depends on the start-cluster count, which is only known then).
         """
-        overcluster = self.root / "leiden_overclustering.h5ad"
-        if not overcluster.exists():
-            return None
-        labels = data_access.load_leiden_labels(self.root)
+        labels = data_access.load_start_cluster_labels(self.root)
         if labels is None:
             return None
-        n_leiden = int(labels.max()) + 1
-        k_hi = min(n_leiden, self.k_max) if self.k_max else n_leiden
+        n_start_clusters = int(labels.max()) + 1
+        k_hi = min(n_start_clusters, self.k_max) if self.k_max else n_start_clusters
         k_lo = max(1, self.k_min) if self.k_min else 1
         return len(range(k_hi, k_lo - 1, -self.k_step))

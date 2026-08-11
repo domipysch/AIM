@@ -3,7 +3,7 @@
 Everything here is cheap and side-effect-free (reads only); the Streamlit app
 wraps the expensive ones with ``st.cache_data``. A "run root" is the folder a
 single mapper's sweep wrote into (``<output_dir>/<mapper>/``): it holds
-``config.yaml``, ``leiden_overclustering.h5ad``, ``k_comparison.{csv,png}`` and
+``config.yaml``, ``start_clustering.h5ad``, ``k_comparison.{csv,png}`` and
 one ``k_<kkk>/`` folder per swept K.
 """
 
@@ -19,6 +19,7 @@ import pandas as pd
 
 # MAPPING_CHOICES is the authoritative list of valid mapper names.
 from aim import MAPPING_CHOICES
+from aim.io import START_CLUSTERING_FILENAME
 
 _K_DIR_RE = re.compile(r"^k_(\d{3})$")
 
@@ -182,6 +183,17 @@ def ksweep_table(root: Path) -> pd.DataFrame | None:
     return df
 
 
+def list_obs_columns(sc_path: Path) -> list[str]:
+    """Column names of an h5ad's ``obs``, read in backed mode -- cheap even for a
+    multi-GB reference. Used to offer annotation columns as start clusters."""
+    adata = ad.read_h5ad(sc_path, backed="r")
+    try:
+        return [str(c) for c in adata.obs.columns]
+    finally:
+        if adata.isbacked:
+            adata.file.close()
+
+
 def load_spatial_coords(st_path: Path) -> np.ndarray | None:
     """Spatial coordinates (n_spots x 2) from the ST h5ad, or None if absent."""
     adata = ad.read_h5ad(st_path, backed="r")
@@ -194,32 +206,84 @@ def load_spatial_coords(st_path: Path) -> np.ndarray | None:
             adata.file.close()
 
 
-def load_leiden_labels(root: Path) -> np.ndarray | None:
-    """Per-cell integer Leiden labels from leiden_overclustering.h5ad at the run root.
+def start_clustering_path(root: Path) -> Path | None:
+    """The run root's start-clustering h5ad, or ``None`` if it has neither the
+    current file nor the pre-rename ``leiden_overclustering.h5ad``."""
+    root = Path(root)
+    for name in (START_CLUSTERING_FILENAME, "leiden_overclustering.h5ad"):
+        path = root / name
+        if path.exists():
+            return path
+    return None
 
-    Values are stored as the category strings ``leiden_<i>``; this returns the
-    integer ``i`` per cell, matching the ``leiden_cluster`` index in
-    ``leiden_to_state.csv``.
+
+def load_start_cluster_labels(root: Path) -> np.ndarray | None:
+    """Per-cell integer start-cluster labels from start_clustering.h5ad at the run
+    root, matching the ``start_cluster`` index in ``start_cluster_to_state.csv``.
+
+    An older run root stores them as the category strings ``leiden_<i>`` in a
+    ``leiden_cluster`` column; that layout is parsed back to ``i`` so existing
+    results keep loading.
     """
-    path = Path(root) / "leiden_overclustering.h5ad"
-    if not path.exists():
+    path = start_clustering_path(root)
+    if path is None:
         return None
-    adata = ad.read_h5ad(path)
-    names = adata.obs["leiden_cluster"].astype(str).to_numpy()
+    obs = ad.read_h5ad(path).obs
+    if "start_cluster" in obs:
+        return obs["start_cluster"].to_numpy(dtype=int)
+    names = obs["leiden_cluster"].astype(str).to_numpy()
     return np.array([int(n.split("_")[1]) for n in names], dtype=int)
+
+
+def load_start_cluster_names(root: Path) -> list[str] | None:
+    """Display name per start cluster (index-aligned), or ``None`` when the run root
+    predates them -- an older ``leiden_overclustering.h5ad`` carries no names."""
+    path = start_clustering_path(root)
+    if path is None:
+        return None
+    obs = ad.read_h5ad(path).obs
+    if "start_cluster" not in obs or "start_cluster_name" not in obs:
+        return None
+    labels = obs["start_cluster"].to_numpy(dtype=int)
+    names = obs["start_cluster_name"].astype(str).to_numpy()
+    out = [""] * (int(labels.max()) + 1)
+    for label, name in zip(labels, names):
+        out[label] = name
+    return out
+
+
+def _config_value(output_dir: Path, field: str):
+    """Best-effort read of ``field`` from any mapper's config.yaml under the output
+    dir. Returns ``None`` if no config records it (configs are advisory only)."""
+    import yaml
+
+    for cfg_path in Path(output_dir).glob("*/config.yaml"):
+        try:
+            with open(cfg_path) as f:
+                cfg = yaml.safe_load(f)
+            if isinstance(cfg, dict) and cfg.get(field) is not None:
+                return cfg[field]
+        except Exception:  # noqa: BLE001 - config is advisory only
+            continue
+    return None
 
 
 def leiden_resolution_from_config(output_dir: Path) -> float | None:
     """Best-effort read of the leiden resolution any mapper's config.yaml recorded."""
-    import yaml
+    value = _config_value(output_dir, "leiden_resolution")
+    return float(value) if value is not None else None
 
-    output_dir = Path(output_dir)
-    for cfg_path in output_dir.glob("*/config.yaml"):
-        try:
-            with open(cfg_path) as f:
-                cfg = yaml.safe_load(f)
-            if isinstance(cfg, dict) and "leiden_resolution" in cfg:
-                return float(cfg["leiden_resolution"])
-        except Exception:  # noqa: BLE001 - config is advisory only
-            continue
-    return None
+
+def start_from_annotation_from_config(output_dir: Path) -> str | None:
+    """Best-effort read of the start-cluster annotation column any mapper's
+    config.yaml recorded, so re-opening an output dir rebuilds its scaffold the way
+    the sweep built it. ``None`` means Leiden over-clustering."""
+    value = _config_value(output_dir, "start_from_annotation")
+    return str(value) if value is not None else None
+
+
+def agglo_tree_method_from_config(output_dir: Path) -> str | None:
+    """Best-effort read of the agglomeration linkage any mapper's config.yaml
+    recorded. ``None`` when no config records it (an older run root)."""
+    value = _config_value(output_dir, "agglo_tree_method")
+    return str(value) if value is not None else None

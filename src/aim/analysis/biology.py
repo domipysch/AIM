@@ -1,4 +1,5 @@
-"""Substate merge coherence and computed-state modularity for the post-mapping analysis."""
+"""Start-cluster merge coherence and computed-state modularity for the post-mapping
+analysis."""
 
 from __future__ import annotations
 
@@ -17,12 +18,12 @@ from aim.adata_schema import (
     OBS_MAPPING_HARD,
     OBSP_CONNECTIVITIES_SHARED_GENES,
     OBSP_ST_EXPR_CONNECTIVITIES,
-    UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM,
     UNS_MODULARITY_SHARED_LEIDEN,
+    UNS_START_CLUSTER_CENTROIDS_SHARED_GENES_NORM,
 )
 from aim.metrics.biology import (
     _pairwise_cosine_stats,
-    leiden_state_groups,
+    start_cluster_state_groups,
     compute_modularity,
 )
 
@@ -40,39 +41,39 @@ def analyse_substate_coherence(
     n_perm: int = N_PERM_COHERENCE,
     seed: int = 0,
 ):
-    """Coherence of the subclusters merged into each state.
+    """Coherence of the start clusters merged into each state.
 
-    For every state merging >=2 subclusters (with at least one subcluster in
+    For every state merging >=2 start clusters (with at least one start cluster in
     another state), permutation-tests the mean/median pairwise cosine similarity
-    of the merged subclusters' ``centroids`` (L x G_shared) against ``n_perm``
-    same-sized random draws of subclusters from other states. All-zero (empty)
-    centroid rows are dropped. ``labels_k`` (L,) is the subcluster->state grouping.
+    of the merged start clusters' ``centroids`` (L x G_shared) against ``n_perm``
+    same-sized random draws of start clusters from other states. All-zero (empty)
+    centroid rows are dropped. ``labels_k`` (L,) is the start-cluster->state grouping.
 
     Writes biology_metrics.json under output_data_dir.
     """
 
-    centroids = adata_sc.uns[UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM]
-    groups = leiden_state_groups(labels_k)
-    # Only subclusters with a non-zero centroid: a zero centroid has undefined
+    centroids = adata_sc.uns[UNS_START_CLUSTER_CENTROIDS_SHARED_GENES_NORM]
+    groups = start_cluster_state_groups(labels_k)
+    # Only start clusters with a non-zero centroid: a zero centroid has undefined
     # cosine similarity.
-    valid_leiden = {
+    valid_start_clusters = {
         int(l) for l in range(len(centroids)) if np.any(centroids[l] != 0.0)
     }
 
     per_state: dict[int, dict] = {}
-    for state, leiden_clusters in sorted(groups.items()):
-        targets = [l for l in leiden_clusters if l in valid_leiden]
-        others = [l for l in valid_leiden if l not in leiden_clusters]
+    for state, state_start_clusters in sorted(groups.items()):
+        targets = [l for l in state_start_clusters if l in valid_start_clusters]
+        others = [l for l in valid_start_clusters if l not in state_start_clusters]
         if len(targets) < 2:
             per_state[state] = {
-                "n_leiden_sub": len(targets),
-                "skipped_reason": "fewer than 2 non-empty merged Leiden clusters",
+                "n_start_clusters_merged": len(targets),
+                "skipped_reason": "fewer than 2 non-empty merged start clusters",
             }
             continue
         if not others:
             per_state[state] = {
-                "n_leiden_sub": len(targets),
-                "skipped_reason": "no Leiden clusters in other states to draw a null from",
+                "n_start_clusters_merged": len(targets),
+                "skipped_reason": "no start clusters in other states to draw a null from",
             }
             continue
 
@@ -90,7 +91,7 @@ def analyse_substate_coherence(
         p_mean = float((null_means >= obs_mean).mean())
         z_mean = float((obs_mean - null_means.mean()) / (null_means.std() + 1e-12))
         per_state[state] = {
-            "n_leiden_sub": len(targets),
+            "n_start_clusters_merged": len(targets),
             "mean_cossim": obs_mean,
             "median_cossim": obs_median,
             "null_mean": float(null_means.mean()),
@@ -170,7 +171,6 @@ def analyse_modularities(
 
     Requires: adata_sc.obs[OBS_COMPUTED_STATE], adata_sc.obs[OBS_LEIDEN_SHARED_GENES],
         adata_sc.obsp[OBSP_CONNECTIVITIES_SHARED_GENES],
-        adata_sc.uns[UNS_LEIDEN_RESOLUTION_ALL_GENES],
         adata_st.layers[LAYER_LOGNORM], adata_st.obs[OBS_MAPPING_HARD].
     Writes modularity_metrics.json under output_data_dir.
     """

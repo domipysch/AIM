@@ -1,5 +1,5 @@
-"""Disk outputs for the sweep: the per-cell Leiden over-clustering (once per run) and,
-per K, the spot->state mapping P (h5ad + CSV) and the subcluster->state label map.
+"""Disk outputs for the sweep: the per-cell start clustering (once per run) and,
+per K, the spot->state mapping P (h5ad + CSV) and the start-cluster->state label map.
 
 Also home to the shared reference-scaffold cache (``reference_scaffold.h5ad`` +
 ``reference_scaffold.meta.json``): the mapper-independent, prepared ``adata_sc``
@@ -17,63 +17,77 @@ import numpy as np
 import pandas as pd
 
 from aim.adata_schema import (
-    OBS_LEIDEN_ALL_GENES,
     OBS_MAPPING_CONFIDENCE,
-    UNS_LEIDEN_NUMBER_STATES_ALL_GENES,
+    OBS_START_CLUSTER,
+    UNS_N_START_CLUSTERS,
+    UNS_START_CLUSTER_NAMES,
 )
 
 logger = logging.getLogger(__name__)
 
 # Bump whenever anything in the cached scaffold build changes (preprocessing,
-# Leiden params, aggregates, UMAP), so stale caches self-invalidate.
-REFERENCE_SCAFFOLD_FORMAT_VERSION = 1
+# clustering params, aggregates, UMAP) or its stored keys are renamed, so stale
+# caches self-invalidate. v2: leiden_* -> start_cluster_* keys.
+REFERENCE_SCAFFOLD_FORMAT_VERSION = 2
 _SCAFFOLD_H5AD = "reference_scaffold.h5ad"
 _SCAFFOLD_META = "reference_scaffold.meta.json"
 
+START_CLUSTERING_FILENAME = "start_clustering.h5ad"
+START_CLUSTER_TO_STATE_FILENAME = "start_cluster_to_state.csv"
 
-def write_leiden_overclustering_all_genes(
-    output_folder: Path, adata_sc: anndata.AnnData
-) -> None:
-    """
-    Write leiden_overclustering.h5ad (obs["leiden_cluster"] per cell) to the run root.
 
-    Requires: adata_sc.uns[UNS_LEIDEN_NUMBER_STATES_ALL_GENES], adata_sc.obs[OBS_LEIDEN_ALL_GENES].
+def write_start_clustering(output_folder: Path, adata_sc: anndata.AnnData) -> None:
     """
-    leiden_names = [
-        f"leiden_{i}" for i in range(adata_sc.uns[UNS_LEIDEN_NUMBER_STATES_ALL_GENES])
-    ]
-    leiden_labels = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
-    cell_cluster_names = [leiden_names[i] for i in leiden_labels]
+    Write start_clustering.h5ad (per-cell start cluster) to the run root.
+
+    Two obs columns: ``start_cluster``, the integer label indexing
+    ``start_cluster_to_state.csv``, and ``start_cluster_name``, its display name --
+    the annotated cell type in start-from-annotation mode, ``cluster_<i>`` otherwise.
+
+    Requires: adata_sc.obs[OBS_START_CLUSTER], adata_sc.uns[UNS_N_START_CLUSTERS],
+    adata_sc.uns[UNS_START_CLUSTER_NAMES].
+    """
+    labels = adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
+    names = [str(n) for n in adata_sc.uns[UNS_START_CLUSTER_NAMES]]
+    if len(names) != int(adata_sc.uns[UNS_N_START_CLUSTERS]):
+        raise ValueError(
+            f"{UNS_START_CLUSTER_NAMES} has {len(names)} entries but "
+            f"{UNS_N_START_CLUSTERS} is {adata_sc.uns[UNS_N_START_CLUSTERS]}"
+        )
     anndata.AnnData(
-        X=np.zeros((len(cell_cluster_names), 0), dtype=np.float32),
+        X=np.zeros((len(labels), 0), dtype=np.float32),
         obs=pd.DataFrame(
-            # Store as categorical up front so anndata does not auto-convert it
-            # on write (which logs "storing 'leiden_cluster' as categorical").
-            {"leiden_cluster": pd.Categorical(cell_cluster_names)},
+            {
+                "start_cluster": labels,
+                # Categorical up front so anndata does not auto-convert on write
+                # (which logs "storing 'start_cluster_name' as categorical").
+                "start_cluster_name": pd.Categorical([names[i] for i in labels]),
+            },
             index=adata_sc.obs_names,
         ),
-    ).write_h5ad(output_folder / "leiden_overclustering.h5ad")
+    ).write_h5ad(output_folder / START_CLUSTERING_FILENAME)
 
 
 def write_run_outputs(
     run_dir: Path,
     spot_to_state: np.ndarray,
     labels_k: np.ndarray,
-    n_leiden: int,
+    n_start_clusters: int,
     k: int,
     adata_st: anndata.AnnData,
     confidence: np.ndarray | None = None,
 ) -> None:
-    """Write one K's outputs: leiden_to_state.csv and spot_to_state_mapping_soft.h5ad (P is S x K).
+    """Write one K's outputs: start_cluster_to_state.csv and
+    spot_to_state_mapping_soft.h5ad (P is S x K).
 
     ``confidence``, when the mapper defines it, is a (S,) array in [0, 1] stored
     as ``obs[OBS_MAPPING_CONFIDENCE]`` on the soft mapping h5ad; when ``None`` the
     column is simply omitted.
     """
 
-    pd.DataFrame({"leiden_cluster": np.arange(n_leiden), "state": labels_k}).to_csv(
-        run_dir / "leiden_to_state.csv", index=False
-    )
+    pd.DataFrame(
+        {"start_cluster": np.arange(n_start_clusters), "state": labels_k}
+    ).to_csv(run_dir / START_CLUSTER_TO_STATE_FILENAME, index=False)
 
     obs = pd.DataFrame(index=adata_st.obs_names)
     if confidence is not None:
@@ -96,14 +110,17 @@ def reference_scaffold_key(
     st_path: Path,
     shared_genes,
     leiden_resolution: float,
+    start_from_annotation: str | None = None,
 ) -> dict:
     """Validity key for the cached reference scaffold.
 
     Depends on the sc file content (stat, not a content hash -- references are
     multi-GB), the shared-gene set (a sha256 of the sorted intersection, the true
-    invariant the scaffold is built from), and the Leiden resolution. ``st`` is
-    keyed by stat too, but the shared-gene hash is what actually guards against an
-    ST change that shifts the gene intersection.
+    invariant the scaffold is built from), the Leiden resolution, and where the
+    start clusters came from (``None`` = Leiden over-clustering, else the annotation
+    column) -- otherwise a scaffold built one way would be reused for the other.
+    ``st`` is keyed by stat too, but the shared-gene hash is what actually guards
+    against an ST change that shifts the gene intersection.
     """
     sc_stat = Path(sc_path).stat()
     st_stat = Path(st_path).stat()
@@ -119,6 +136,7 @@ def reference_scaffold_key(
         "st_mtime_ns": st_stat.st_mtime_ns,
         "shared_genes_sha256": gene_hash,
         "leiden_resolution": float(leiden_resolution),
+        "start_from_annotation": start_from_annotation,
     }
 
 

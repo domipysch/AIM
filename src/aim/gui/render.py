@@ -23,7 +23,8 @@ from plotly.subplots import make_subplots
 
 from aim.adata_schema import (
     OBS_COMPUTED_STATE,
-    OBS_LEIDEN_ALL_GENES,
+    OBS_START_CLUSTER,
+    UNS_START_CLUSTER_NAMES,
     OBSM_PCA,
     OBSM_PCA_SHARED_GENES,
     OBSM_UMAP,
@@ -32,7 +33,7 @@ from aim.adata_schema import (
 )
 from aim.analysis.loading import (
     infer_cell_to_state_cluster,
-    load_leiden_to_state,
+    load_start_cluster_to_state,
 )
 from aim.analysis.utils import to_dense
 
@@ -141,6 +142,20 @@ def state_palette(k: int) -> dict[int, str]:
 def _hex(color: str | None) -> str:
     """Pass a hex colour through, with a grey fallback for a missing (None) state."""
     return color if color else "#b8b8b8"
+
+
+def _start_cluster_names(adata_sc: AnnData) -> list[str]:
+    """Display name per start cluster: the annotated cell types when the sweep
+    started from an annotation, else ``cluster_<i>``.
+
+    Falls back to positional names for a scaffold written before start-cluster names
+    were stored, so older result folders still render.
+    """
+    names = adata_sc.uns.get(UNS_START_CLUSTER_NAMES)
+    n = int(adata_sc.obs[OBS_START_CLUSTER].astype(int).max()) + 1
+    if names is None or len(names) < n:
+        return [f"cluster_{i}" for i in range(n)]
+    return [str(name) for name in names]
 
 
 def _mod_suffix(mod: dict | None, key: str) -> str:
@@ -305,13 +320,15 @@ def _umap_panel_data(
     underscore so ``st.cache_data`` does not try to hash it (it is the stable,
     resource-cached scaffold for this run root).
 
-    Returns picklable arrays: per-cell ``states``/``leiden``, the embedding
+    Returns picklable arrays: per-cell ``states``/``start_cluster``, the embedding
     ``coords``, and ``centroids`` = {state: (umap_x, umap_y)} (empty if unwanted
     or the PCA rep is missing).
     """
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(Path(root_str), k))
-    leiden = _adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
-    states = leiden_to_state[leiden].astype(int)
+    start_cluster_to_state = load_start_cluster_to_state(
+        data_access.k_dir(Path(root_str), k)
+    )
+    start_cluster = _adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
+    states = start_cluster_to_state[start_cluster].astype(int)
     coords = np.asarray(_adata_sc.obsm[umap_key])
 
     centroids: dict[int, tuple[float, float]] = {}
@@ -329,7 +346,7 @@ def _umap_panel_data(
             )
     return {
         "coords": coords,
-        "leiden": leiden,
+        "start_cluster": start_cluster,
         "states": states,
         "centroids": centroids,
     }
@@ -362,7 +379,7 @@ def _add_umap_traces(
     data = _umap_panel_data(adata_sc, str(root), int(k), umap_key, SHOW_STATE_CENTROIDS)
     coords = data["coords"]
     states = data["states"]
-    leiden = data["leiden"]
+    start_cluster = data["start_cluster"]
 
     for state in sorted(np.unique(states).tolist()):
         mask = states == state
@@ -377,9 +394,9 @@ def _add_umap_traces(
                 name=f"State {state}",
                 legendgroup=f"state{state}",
                 showlegend=show,
-                customdata=leiden[mask][:, None],
+                customdata=start_cluster[mask][:, None],
                 hovertemplate=(
-                    f"State {state}<br>Leiden subcluster %{{customdata[0]}}"
+                    f"State {state}<br>Start cluster %{{customdata[0]}}"
                     "<extra></extra>"
                 ),
             ),
@@ -895,39 +912,40 @@ def render_compare_fractions_figure(
 # --------------------------------------------------------------------------- #
 # Single-cell reference tab (clustering-side, mapper-independent) figures
 # --------------------------------------------------------------------------- #
-def _add_leiden_umap_traces(
+def _add_start_cluster_umap_traces(
     fig: go.Figure,
     adata_sc: AnnData,
-    leiden_to_state: np.ndarray,
+    start_cluster_to_state: np.ndarray,
     *,
     col: int,
     row: int = 1,
     dot_size: float,
     equal_aspect: bool = True,
 ) -> None:
-    """Add the Leiden-overclustering UMAP (one trace per Leiden subcluster) to
-    subplot (``row``, ``col``).
+    """Add the start-cluster UMAP (one trace per start cluster) to subplot
+    (``row``, ``col``).
 
-    Each subcluster gets a distinct qualitative colour but is tagged with the
+    Each start cluster gets a distinct qualitative colour but is tagged with the
     ``state<n>`` legendgroup of the state it merges into, so a single legend click
-    greys its cells here too; the subclusters keep out of the legend (identified
+    greys its cells here too; the start clusters keep out of the legend (identified
     via hover) to avoid duplicating the shared state legend.
     """
     coords = np.asarray(adata_sc.obsm[OBSM_UMAP])
-    leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
-    for i, lc in enumerate(sorted(np.unique(leiden).tolist())):
-        mask = leiden == lc
-        s = int(leiden_to_state[lc])
+    names = _start_cluster_names(adata_sc)
+    start_cluster = adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
+    for i, lc in enumerate(sorted(np.unique(start_cluster).tolist())):
+        mask = start_cluster == lc
+        s = int(start_cluster_to_state[lc])
         fig.add_trace(
             go.Scattergl(
                 x=coords[mask, 0],
                 y=coords[mask, 1],
                 mode="markers",
                 marker=dict(size=dot_size, color=_TAB20[i % 20], opacity=1.0),
-                name=f"Leiden {lc}",
+                name=names[lc],
                 legendgroup=f"state{s}",
                 showlegend=False,
-                hovertemplate=(f"Leiden subcluster {lc}<br>→ State {s}<extra></extra>"),
+                hovertemplate=(f"{names[lc]}<br>→ State {s}<extra></extra>"),
             ),
             row=row,
             col=col,
@@ -952,22 +970,22 @@ def render_reference_umaps_figure(
     *,
     dot_size_umap: float = 4.0,
 ) -> go.Figure:
-    """Three reference UMAPs sharing one state legend: the Leiden overclustering
+    """Three reference UMAPs sharing one state legend: the start clustering
     (left), the computed states on the all-gene UMAP (middle), and the computed
     states on the shared-gene UMAP (right, dropped if that embedding is absent).
 
     Rendered by the same client-side component as the headline plot, so one
-    legend click toggles a state across all three panels (the Leiden subclusters
+    legend click toggles a state across all three panels (the start clusters
     grey out with the state they merged into).
     """
     palette = state_palette(k)
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-    infer_cell_to_state_cluster(adata_sc, leiden_to_state)
+    start_cluster_to_state = load_start_cluster_to_state(data_access.k_dir(root, k))
+    infer_cell_to_state_cluster(adata_sc, start_cluster_to_state)
     have_shared = OBSM_UMAP_SHARED_GENES in adata_sc.obsm
 
     mod = data_access.load_data_json(root, k, "modularity_metrics.json")
     titles = [
-        "Leiden overclustering",
+        "Start clustering",
         "Computed states — reference UMAP" + _mod_suffix(mod, "modularity_all"),
     ]
     if have_shared:
@@ -983,8 +1001,8 @@ def render_reference_umaps_figure(
     )
 
     legend_shown: set[int] = set()
-    _add_leiden_umap_traces(
-        fig, adata_sc, leiden_to_state, col=1, dot_size=dot_size_umap
+    _add_start_cluster_umap_traces(
+        fig, adata_sc, start_cluster_to_state, col=1, dot_size=dot_size_umap
     )
     _add_umap_traces(
         fig,
@@ -1018,35 +1036,38 @@ def render_reference_umaps_figure(
     )
 
 
-def render_leiden_merge_figure(adata_sc: AnnData, root: Path, k: int) -> go.Figure:
+def render_start_cluster_merge_figure(
+    adata_sc: AnnData, root: Path, k: int
+) -> go.Figure:
     """Horizontal stacked bars: one bar per computed state, segmented by the
-    Leiden subclusters merged into it (segment width ∝ cell count, labelled with
-    the Leiden id)."""
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-    infer_cell_to_state_cluster(adata_sc, leiden_to_state)
-    leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+    start clusters merged into it (segment width ∝ cell count, labelled with the
+    start-cluster name)."""
+    start_cluster_to_state = load_start_cluster_to_state(data_access.k_dir(root, k))
+    infer_cell_to_state_cluster(adata_sc, start_cluster_to_state)
+    names = _start_cluster_names(adata_sc)
+    start_cluster = adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
     palette = state_palette(k)
     states = sorted(np.unique(cell_states).tolist())
 
-    # cell_states is constant within a Leiden cluster, so each maps to one state.
-    leiden_of_state: dict[int, list[tuple[int, int]]] = {s: [] for s in states}
-    for lc in np.unique(leiden):
-        mask = leiden == lc
+    # cell_states is constant within a start cluster, so each maps to one state.
+    start_clusters_of_state: dict[int, list[tuple[int, int]]] = {s: [] for s in states}
+    for lc in np.unique(start_cluster):
+        mask = start_cluster == lc
         s = int(cell_states[mask][0])
-        leiden_of_state[s].append((int(lc), int(mask.sum())))
+        start_clusters_of_state[s].append((int(lc), int(mask.sum())))
     for s in states:
-        leiden_of_state[s].sort(key=lambda t: t[1], reverse=True)
+        start_clusters_of_state[s].sort(key=lambda t: t[1], reverse=True)
 
     def _row(s: int) -> str:
-        n = len(leiden_of_state[s])
+        n = len(start_clusters_of_state[s])
         return f"State {s}  ({n} cluster{'s' if n != 1 else ''})"
 
     fig = go.Figure()
     # barmode="stack" accumulates same-row segments in trace order (largest first).
     for s in states:
         color = _hex(palette.get(s))
-        for lc, size in leiden_of_state[s]:
+        for lc, size in start_clusters_of_state[s]:
             fig.add_trace(
                 go.Bar(
                     y=[_row(s)],
@@ -1058,7 +1079,7 @@ def render_leiden_merge_figure(adata_sc: AnnData, root: Path, k: int) -> go.Figu
                     insidetextanchor="middle",
                     textfont=dict(size=9, color="black"),
                     showlegend=False,
-                    hovertemplate=f"State {s} · Leiden {lc}<br>%{{x}} cells<extra></extra>",
+                    hovertemplate=f"State {s} · {names[lc]}<br>%{{x}} cells<extra></extra>",
                 )
             )
 
@@ -1067,8 +1088,8 @@ def render_leiden_merge_figure(adata_sc: AnnData, root: Path, k: int) -> go.Figu
         fig,
         height=max(240, n_states * 46 + 120),
         barmode="stack",
-        title="Leiden overclusters merged per computed AIM state",
-        xaxis_title="cells   (segment width ∝ Leiden subcluster size)",
+        title="Start clusters merged per computed AIM state",
+        xaxis_title="cells   (segment width ∝ start-cluster size)",
         margin=dict(l=10, r=10, t=50, b=40),
         bargap=0.35,
     )
@@ -1086,8 +1107,8 @@ def render_state_profiles_figure(
     variance, z-scored per gene across states). Returns ``None`` when too few
     shared genes are present to plot.
     """
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-    infer_cell_to_state_cluster(adata_sc, leiden_to_state)
+    start_cluster_to_state = load_start_cluster_to_state(data_access.k_dir(root, k))
+    infer_cell_to_state_cluster(adata_sc, start_cluster_to_state)
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
 
     shared_genes = list(adata_sc.uns.get(UNS_SHARED_GENES, []))
@@ -1433,8 +1454,8 @@ def render_fractions_figure(
     assignment) per computed state, as one grouped-bar plot sharing a single
     y-axis. Both bars use the same per-state palette as the UMAP/spatial plots;
     the spot bars are hatched to tell them apart."""
-    leiden_to_state = load_leiden_to_state(data_access.k_dir(root, k))
-    infer_cell_to_state_cluster(adata_sc, leiden_to_state)
+    start_cluster_to_state = load_start_cluster_to_state(data_access.k_dir(root, k))
+    infer_cell_to_state_cluster(adata_sc, start_cluster_to_state)
     cell_states = adata_sc.obs[OBS_COMPUTED_STATE].astype(int).to_numpy()
     hard = np.asarray(hard).astype(int)
 

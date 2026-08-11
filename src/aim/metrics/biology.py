@@ -1,4 +1,4 @@
-"""Coherence and modularity metrics over computed states: grouping subclusters
+"""Coherence and modularity metrics over computed states: grouping start clusters
 by state, pairwise cosine statistics of their centroids, and graph modularity of
 a partition."""
 
@@ -12,12 +12,12 @@ from anndata import AnnData
 logger = logging.getLogger(__name__)
 
 
-def leiden_state_groups(labels_k: np.ndarray) -> dict[int, list[int]]:
-    """Map each computed state to the list of subclusters assigned to it, given
-    ``labels_k[l]`` = state of subcluster ``l`` (values 0..k-1)."""
+def start_cluster_state_groups(labels_k: np.ndarray) -> dict[int, list[int]]:
+    """Map each computed state to the list of start clusters assigned to it, given
+    ``labels_k[l]`` = state of start cluster ``l`` (values 0..k-1)."""
     groups: dict[int, list[int]] = {}
-    for leiden_cluster, state in enumerate(np.asarray(labels_k)):
-        groups.setdefault(int(state), []).append(int(leiden_cluster))
+    for start_cluster, state in enumerate(np.asarray(labels_k)):
+        groups.setdefault(int(state), []).append(int(start_cluster))
     return groups
 
 

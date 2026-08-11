@@ -11,7 +11,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 
-from aim.adata_schema import OBS_LEIDEN_ALL_GENES, OBSM_SPATIAL, UNS_SHARED_GENES
+from aim.adata_schema import OBS_START_CLUSTER, OBSM_SPATIAL, UNS_SHARED_GENES
 from aim.reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
 from .base import SpotStateMapper
 
@@ -67,12 +67,12 @@ class ReferenceMapper(SpotStateMapper):
         self._sc_path = self._workdir / "sc_ref.h5ad"
         self._st_path = self._workdir / "st_ref.h5ad"
 
-        # Per-cell AIM state at each K = that K's subcluster->state cut indexed by
-        # every cell's Leiden over-cluster label.
-        leiden = adata_sc.obs[OBS_LEIDEN_ALL_GENES].astype(int).to_numpy()
+        # Per-cell AIM state at each K = that K's start-cluster->state cut indexed
+        # by every cell's start-cluster label.
+        start_cluster = adata_sc.obs[OBS_START_CLUSTER].astype(int).to_numpy()
         sc_obs = pd.DataFrame(index=adata_sc.obs_names)
         for k, labels_k in labels_by_k.items():
-            cell_states = np.asarray(labels_k)[leiden]
+            cell_states = np.asarray(labels_k)[start_cluster]
             sc_obs[self._state_key(k)] = pd.Categorical(cell_states.astype(str))
 
         ad.AnnData(
@@ -112,7 +112,7 @@ class ReferenceMapper(SpotStateMapper):
             self._workdir,
         )
 
-    def map(self, leiden_to_state, k) -> tuple[np.ndarray, None]:
+    def map(self, start_cluster_to_state, k) -> tuple[np.ndarray, None]:
         """Delegate to the external aligner and return ``(P, None)`` — the
         reference aligners do not expose a per-spot confidence."""
         if not self._prepared:

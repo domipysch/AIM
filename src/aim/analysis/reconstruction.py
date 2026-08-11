@@ -13,10 +13,10 @@ from aim.adata_schema import (
     OBS_MAPPING_HARD,
     OBSM_LOGNORM_SHARED_GENES,
     OBSM_MAPPING_SOFT,
-    UNS_LEIDEN_EXPR_SUMS_SHARED_GENES,
-    UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM,
-    UNS_LEIDEN_SIZES,
     UNS_SHARED_GENES,
+    UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES,
+    UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES_NORM,
+    UNS_START_CLUSTER_SIZES,
 )
 from aim.metrics import (
     CossimResult,
@@ -37,7 +37,7 @@ N_PERM_RECONSTRUCTION = 20  # label shuffles for the reconstruction null
 def analyse_reconstruction(
     adata_sc: ad.AnnData,
     adata_st: ad.AnnData,
-    leiden_to_state: np.ndarray,
+    start_cluster_to_state: np.ndarray,
     output_data_dir: Path,
     n_perm: int = N_PERM_RECONSTRUCTION,
     seed: int = 0,
@@ -52,11 +52,12 @@ def analyse_reconstruction(
     compares against. The soft combos have no null (their assignment is a
     distribution, not a label) and come through as NaN.
 
-    ``leiden_to_state`` is this K's subcluster->state cut (L,).
+    ``start_cluster_to_state`` is this K's start-cluster->state cut (L,).
     Requires: adata_st.obsm[OBSM_MAPPING_SOFT], adata_st.obs[OBS_MAPPING_HARD],
         adata_st.obsm[OBSM_LOGNORM_SHARED_GENES], adata_sc.uns[UNS_SHARED_GENES],
-        adata_sc.uns[UNS_LEIDEN_SIZES], adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES],
-        adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM].
+        adata_sc.uns[UNS_START_CLUSTER_SIZES],
+        adata_sc.uns[UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES],
+        adata_sc.uns[UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES_NORM].
     Writes cossim_summary.csv and per-combo cossim JSONs under output_data_dir.
     """
 
@@ -65,7 +66,7 @@ def analyse_reconstruction(
     k = P.shape[1]
 
     shared_genes = list(adata_sc.uns[UNS_SHARED_GENES])
-    sizes = adata_sc.uns[UNS_LEIDEN_SIZES]
+    sizes = adata_sc.uns[UNS_START_CLUSTER_SIZES]
 
     # Measured ST expression on the shared genes: raw counts from a view, and the
     # normalize+log1p variant precomputed over the shared genes only.
@@ -77,10 +78,16 @@ def analyse_reconstruction(
     )
 
     centroids_raw = assemble_state_centroids(
-        leiden_to_state, k, adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES], sizes
+        start_cluster_to_state,
+        k,
+        adata_sc.uns[UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES],
+        sizes,
     )
     centroids_norm = assemble_state_centroids(
-        leiden_to_state, k, adata_sc.uns[UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM], sizes
+        start_cluster_to_state,
+        k,
+        adata_sc.uns[UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES_NORM],
+        sizes,
     )
 
     # "hard" combos index each spot's winning-state centroid row directly;

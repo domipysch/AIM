@@ -1,13 +1,14 @@
 """Canonical obs/var/uns/obsm/obsp/layers key names for the sc/st AnnData
 objects, each with a one-line description of what it holds. ``L`` = number of
-Leiden subclusters, ``G_shared`` = number of shared genes, ``K`` = number of
-states at the current cut.
+start clusters (the partition the agglomeration tree is built over — either the
+all-gene Leiden over-clustering or a pre-existing annotation), ``G_shared`` =
+number of shared genes, ``K`` = number of states at the current cut.
 """
 
 # ── adata_sc ───────────────────────────────────────────────────────────────
 
 # obs
-OBS_LEIDEN_ALL_GENES = "leiden"  # (n_cells,) int — Leiden label (0..L-1) from all genes
+OBS_START_CLUSTER = "start_cluster"  # (n_cells,) int — start-cluster label (0..L-1): the all-gene Leiden over-cluster, or the annotated type in start-from-annotation mode
 OBS_LEIDEN_SHARED_GENES = (
     "leiden_shared_genes"  # (n_cells,) int — Leiden label from shared genes only
 )
@@ -15,11 +16,10 @@ OBS_COMPUTED_STATE = (
     "computed_state"  # (n_cells,) str categorical — cell's state at the current K
 )
 
-# uns — Leiden run parameters
-UNS_LEIDEN_RESOLUTION_ALL_GENES = "leiden_resolution"  # float — resolution (all genes)
-UNS_LEIDEN_NUMBER_STATES_ALL_GENES = (
-    "leiden_number_states"  # int — cluster count L (all genes)
-)
+# uns — start clusters + Leiden run parameters
+UNS_N_START_CLUSTERS = "n_start_clusters"  # int — start-cluster count L
+UNS_START_CLUSTER_NAMES = "start_cluster_names"  # list[str] — display name per start cluster, index-aligned to OBS_START_CLUSTER: the annotated type names, or "cluster_<i>" in Leiden mode
+UNS_LEIDEN_RESOLUTION_ALL_GENES = "leiden_resolution"  # float — resolution of the all-gene Leiden over-clustering (absent in start-from-annotation mode)
 UNS_LEIDEN_RESOLUTION_SHARED_GENES = (
     "leiden_resolution_shared_genes"  # float — resolution (shared genes)
 )
@@ -38,15 +38,13 @@ UNS_NEIGHBORS_SHARED_GENES = (
 OBSP_DISTANCES_SHARED_GENES = "neighbors_shared_genes_distances"  # (n_cells x n_cells) sparse — neighbor distances
 OBSP_CONNECTIVITIES_SHARED_GENES = "neighbors_shared_genes_connectivities"  # (n_cells x n_cells) sparse — neighbor connectivities
 
-# uns — per-Leiden-cluster aggregates, all column-aligned to UNS_SHARED_GENES
+# uns — per-start-cluster aggregates, all column-aligned to UNS_SHARED_GENES
 UNS_SHARED_GENES = "shared_genes"  # list[str] — sc/st gene intersection; column order for every *_SHARED array
-UNS_LEIDEN_SIZES = "leiden_sizes"  # (L,) — cells per Leiden cluster
-UNS_LEIDEN_EXPR_SUMS_SHARED_GENES = (
-    "leiden_expr_sums_shared"  # (L x G_shared) — summed raw expression per cluster
-)
-UNS_LEIDEN_CENTROIDS_SHARED_GENES = "leiden_centroids_shared"  # (L x G_shared) — mean raw expression per cluster (all-zero rows set to 1e-6)
-UNS_LEIDEN_EXPR_SUMS_SHARED_GENES_NORM = "leiden_expr_sums_shared_norm"  # (L x G_shared) — summed lognorm expression per cluster
-UNS_LEIDEN_CENTROIDS_SHARED_GENES_NORM = "leiden_centroids_shared_norm"  # (L x G_shared) — mean lognorm expression per cluster
+UNS_START_CLUSTER_SIZES = "start_cluster_sizes"  # (L,) — cells per start cluster
+UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES = "start_cluster_expr_sums_shared"  # (L x G_shared) — summed raw expression per start cluster
+UNS_START_CLUSTER_CENTROIDS_SHARED_GENES = "start_cluster_centroids_shared"  # (L x G_shared) — mean raw expression per start cluster (all-zero rows set to 1e-6)
+UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES_NORM = "start_cluster_expr_sums_shared_norm"  # (L x G_shared) — summed lognorm expression per start cluster
+UNS_START_CLUSTER_CENTROIDS_SHARED_GENES_NORM = "start_cluster_centroids_shared_norm"  # (L x G_shared) — mean lognorm expression per start cluster
 
 # ── adata_st ───────────────────────────────────────────────────────────────
 

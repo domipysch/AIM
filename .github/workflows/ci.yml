@@ -103,8 +103,9 @@ jobs:
         run: pytest -m slow
 
   integration-reference:
-    # Reference-aligner path: aim_env orchestrates `aim map-annotation` (single +
-    # batch); tangram_env runs the aligner via `conda run`.
+    # Reference-aligner path: aim_env orchestrates the sweep (single + batch) with
+    # `--mapping tangram`, so ReferenceMapper drives an AlignerWorker and
+    # tangram_env runs the aligner via `conda run`, once per K.
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -126,16 +127,15 @@ jobs:
         run: |
           pip install -e . --no-deps
           conda run -n tangram_env pip install -e . --no-deps
-      - name: aim map-annotation — single pair (tangram)
+      - name: aim run — single pair (tangram)
         run: |
-          aim map-annotation --aligner tangram \
-            --scdata        sample_dataset/scRNA/sample_sc.h5ad \
-            --stdata        sample_dataset/ST/sample_st.h5ad \
-            --output_dir    sample_output/tangram/sample \
-            --cell_type_key cellType
-      - name: aim map-annotation — batch (tangram)
+          aim run --mapping tangram \
+            --scdata     sample_dataset/scRNA/sample_sc.h5ad \
+            --stdata     sample_dataset/ST/sample_st.h5ad \
+            --output_dir sample_output/tangram/sample
+      - name: aim run — batch (tangram)
         run: |
-          aim map-annotation --aligner tangram \
+          aim run --mapping tangram \
             --pairs_csv  sample_dataset/pairs.csv \
             --sc_dir     sample_dataset/scRNA \
             --st_dir     sample_dataset/ST \

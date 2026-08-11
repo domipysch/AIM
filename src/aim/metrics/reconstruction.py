@@ -10,7 +10,7 @@ from .cossim import cosine_along_axis
 
 
 def assemble_state_centroids(
-    leiden_to_state: np.ndarray,
+    start_cluster_to_state: np.ndarray,
     k: int,
     expr_sums: np.ndarray,
     sizes: np.ndarray,
@@ -19,14 +19,14 @@ def assemble_state_centroids(
     """Assemble per-state centroids (k x G) as, for each state, the summed
     subcluster expression divided by the summed subcluster sizes.
 
-    ``leiden_to_state`` (L,) maps each subcluster to a state 0..k-1, ``expr_sums``
+    ``start_cluster_to_state`` (L,) maps each start cluster to a state 0..k-1, ``expr_sums``
     is summed expression per subcluster (L x G), ``sizes`` is cells per subcluster
     (L,), and ``eps`` guards the denominator for states with no support.
     """
     state_sums = np.zeros((k, expr_sums.shape[1]), dtype=expr_sums.dtype)
-    np.add.at(state_sums, leiden_to_state, expr_sums)
+    np.add.at(state_sums, start_cluster_to_state, expr_sums)
     state_sizes = np.zeros(k, dtype=sizes.dtype)
-    np.add.at(state_sizes, leiden_to_state, sizes)
+    np.add.at(state_sizes, start_cluster_to_state, sizes)
     return state_sums / (state_sizes[:, None] + eps)
 
 

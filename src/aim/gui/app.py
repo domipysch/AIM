@@ -40,12 +40,15 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------------- #
 # Everything is configured in the sidebar — the launcher only forwards the server
 # port. The K range is fixed to the full sweep (k_min = 1, k_max = L, where L is
-# the Leiden over-cluster count discovered at runtime); only the step is
+# the start-cluster count discovered at runtime); only the step is
 # user-editable. The agglomeration linkage is chosen in the sidebar, from the same
 # AGGLO_TREE_METHODS the `--agglo_tree_method` CLI flag offers.
 _DEFAULT_K_MIN: int = 1
 _DEFAULT_K_MAX: int | None = None
 _DEFAULT_K_STEP = 1
+
+# Sidebar label for the default start clusters (no annotation column chosen).
+_LEIDEN_START_LABEL = "Leiden over-clustering"
 
 
 @st.cache_data(show_spinner=False)
@@ -72,9 +75,19 @@ def _coords(st_path_str: str):
 
 
 @st.cache_resource(show_spinner=False)
-def _scaffold_sc(sc_path_str: str, st_path_str: str, out_str: str, resolution: float):
+def _scaffold_sc(
+    sc_path_str: str,
+    st_path_str: str,
+    out_str: str,
+    resolution: float,
+    start_from_annotation: str | None,
+):
     return scaffold.load_or_build_sc(
-        Path(sc_path_str), Path(st_path_str), Path(out_str), resolution
+        Path(sc_path_str),
+        Path(st_path_str),
+        Path(out_str),
+        resolution,
+        start_from_annotation,
     )
 
 
@@ -83,6 +96,15 @@ def _resolution(output_dir: Path) -> float:
         data_access.leiden_resolution_from_config(output_dir)
         or compute.DEFAULT_LEIDEN_RESOLUTION
     )
+
+
+@st.cache_data(show_spinner=False)
+def _obs_columns(sc_path_str: str) -> list[str]:
+    """Annotation columns offered as start clusters, read cheaply (backed mode)."""
+    try:
+        return data_access.list_obs_columns(Path(sc_path_str))
+    except Exception:  # noqa: BLE001 - an unreadable/absent file just offers nothing
+        return []
 
 
 def _load_scaffold(
@@ -100,6 +122,7 @@ def _load_scaffold(
             str(args.stdata),
             str(args.output_dir),
             _resolution(args.output_dir),
+            getattr(args, "start_from_annotation", None),
         )
     except Exception as exc:  # noqa: BLE001
         if warn:
@@ -336,7 +359,14 @@ def _render_progress(mapper: str, run: "compute.MapperRun") -> None:
             min(done / expected, 1.0), text=f"Computing {mapper}: {done}/{expected} K"
         )
     else:
-        st.progress(0.0, text=f"Computing {mapper}: over-clustering…")
+        # Before the first K folder the sweep is still building the reference
+        # scaffold — which only over-clusters when the start clusters are Leiden's.
+        stage = (
+            "over-clustering…"
+            if run.start_from_annotation is None
+            else f"start clusters from {run.start_from_annotation}…"
+        )
+        st.progress(0.0, text=f"Computing {mapper}: {stage}")
     st.caption("This tab will show results when the sweep finishes.")
 
 
@@ -803,9 +833,9 @@ def _reference_tab(
     """The single-cell reference view: clustering-side plots that don't depend on
     the spot-mapping method.
 
-    The tree cut (``leiden_to_state``) and the reference expression are identical
+    The tree cut (``start_cluster_to_state``) and the reference expression are identical
     across mappers, so this reads them from any finished mapper that has the
-    currently selected K. Shows three UMAPs on top (Leiden overclustering, and the
+    currently selected K. Shows three UMAPs on top (start clustering, and the
     computed states on the all-gene and shared-gene embeddings), then the
     mapper-independent sections rendered as interactive Plotly.
     """
@@ -837,16 +867,16 @@ def _reference_tab(
         fig_umaps, key="ref_umaps_exp", stem=f"reference_umaps_k{ctrl.k:03d}"
     )
     st.caption(
-        f"K = {ctrl.k}. The over-clustering and its tree cut are shared across "
+        f"K = {ctrl.k}. The start clustering and its tree cut are shared across "
         f"methods (shown from **{ref_mapper}**)."
     )
 
     st.divider()
-    with st.expander("Leiden Overclusters Merged per AIM State", expanded=True):
+    with st.expander("Start Clusters Merged per AIM State", expanded=True):
         _plot_card(
-            render.render_leiden_merge_figure(adata_sc, ref_root, ctrl.k),
-            key="ref_leiden_merge",
-            stem=f"reference_leiden_merge_k{ctrl.k:03d}",
+            render.render_start_cluster_merge_figure(adata_sc, ref_root, ctrl.k),
+            key="ref_start_cluster_merge",
+            stem=f"reference_start_cluster_merge_k{ctrl.k:03d}",
         )
     with st.expander("AIM-State Profiles", expanded=True):
         fig_prof = render.render_state_profiles_figure(adata_sc, ref_root, ctrl.k)
@@ -941,6 +971,7 @@ def _clear_session() -> None:
     st.session_state["cfg_out"] = ""
     st.session_state["cfg_kstep"] = _DEFAULT_K_STEP
     st.session_state["cfg_agglo"] = AGGLO_TREE_METHODS[0]
+    st.session_state["cfg_start"] = _LEIDEN_START_LABEL
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
     st.session_state.pop("_run_requested", None)
@@ -953,8 +984,92 @@ def _clear_session() -> None:
             del st.session_state[k]
 
 
+_LOCKED_HELP = (
+    "Fixed by the runs already in this output folder: the cached reference scaffold "
+    "and every persisted tree cut are tied to it. Point the output directory "
+    "somewhere new to choose again."
+)
+
+
+def _run_lock(out_str: str) -> dict | None:
+    """The scaffold-defining settings an output folder's existing runs pin down, or
+    ``None`` when it holds no runs yet.
+
+    Read back from any mapper's ``config.yaml``. A value the config does not record
+    (an older run root) comes back as ``None`` and stays editable.
+    """
+    out_path = Path(out_str.strip()) if out_str.strip() else None
+    if out_path is None or not data_access.list_mappers(out_path):
+        return None
+    return {
+        "start_from_annotation": data_access.start_from_annotation_from_config(
+            out_path
+        ),
+        "agglo_tree_method": data_access.agglo_tree_method_from_config(out_path),
+    }
+
+
+def _start_cluster_row(sc_str: str, lock: dict | None) -> str | None:
+    """Sidebar picker for the start clusters; returns the annotation column or
+    ``None`` for the Leiden over-clustering.
+
+    Once an output dir holds a run, its recorded choice is shown as a disabled
+    dropdown rather than letting the two modes mix in one folder.
+    """
+    if lock is not None:
+        recorded = lock["start_from_annotation"]
+        st.sidebar.selectbox(
+            "Start clusters",
+            [recorded or _LEIDEN_START_LABEL],
+            disabled=True,
+            help=_LOCKED_HELP,
+        )
+        return recorded
+
+    sc_path = Path(sc_str.strip()) if sc_str.strip() else None
+    options = [_LEIDEN_START_LABEL]
+    if sc_path is not None and sc_path.is_file():
+        options += _obs_columns(str(sc_path))
+    choice = st.sidebar.selectbox(
+        "Start clusters",
+        options,
+        key="cfg_start",
+        help="What the agglomeration tree is built over. The default over-clusters "
+        "the reference with Leiden; picking an scRNA obs column instead uses that "
+        "annotation's cell types as the start clusters, computes no over-clustering, "
+        "and sweeps K from the number of types down. Use a separate output folder "
+        "for each choice.",
+    )
+    return None if choice == _LEIDEN_START_LABEL else str(choice)
+
+
+def _agglo_method_row(lock: dict | None) -> str:
+    """Sidebar picker for the agglomeration linkage, disabled and pinned to the
+    recorded value once the output folder holds runs."""
+    if lock is not None and lock["agglo_tree_method"]:
+        return str(
+            st.sidebar.selectbox(
+                "Agglomeration linkage",
+                [lock["agglo_tree_method"]],
+                disabled=True,
+                help=_LOCKED_HELP,
+            )
+        )
+    return str(
+        st.sidebar.selectbox(
+            "Agglomeration linkage",
+            AGGLO_TREE_METHODS,
+            key="cfg_agglo",
+            help="Linkage for the agglomeration tree over the start clusters. "
+            "'ward' carries a size term and tends to produce balanced states; "
+            "'average' (UPGMA) peels small tight groups off a dominant state.",
+        )
+    )
+
+
 def _sidebar() -> argparse.Namespace | None:
-    """Render the sidebar (data paths, K step, method selection + run queue).
+    """Render the sidebar (data paths, start clusters, K step, method selection +
+    run queue).
 
     Returns the run settings once the paths are valid, else ``None``.
     """
@@ -1000,22 +1115,20 @@ def _sidebar() -> argparse.Namespace | None:
     out_str = _path_row("Output directory", "cfg_out", "dir", "browse_out")
     if st.session_state.get("_browse_error"):
         st.sidebar.warning(st.session_state.pop("_browse_error"))
+
+    # Settings the scaffold is built from lock once this folder holds runs.
+    lock = _run_lock(out_str)
+    start_from_annotation = _start_cluster_row(sc_str, lock)
+
     k_step = st.sidebar.number_input(
         "K step",
         min_value=1,
         step=1,
         key="cfg_kstep",
         help="The K range is fixed to the full sweep (K = 1 … L, where L is the "
-        "Leiden over-cluster count); only the step is set here.",
+        "start-cluster count); only the step is set here.",
     )
-    agglo_method = st.sidebar.selectbox(
-        "Agglomeration linkage",
-        AGGLO_TREE_METHODS,
-        key="cfg_agglo",
-        help="Linkage for the agglomeration tree over the Leiden subclusters. "
-        "'ward' carries a size term and tends to produce balanced states; "
-        "'average' (UPGMA) peels small tight groups off a dominant state.",
-    )
+    agglo_method = _agglo_method_row(lock)
     st.sidebar.button(
         "Clear",
         on_click=_clear_session,
@@ -1049,6 +1162,7 @@ def _sidebar() -> argparse.Namespace | None:
         k_max=_DEFAULT_K_MAX,
         k_step=int(k_step),
         agglo_tree_method=str(agglo_method),
+        start_from_annotation=start_from_annotation,
     )
 
     # -- methods: locked (computed) + status + selectable remainder ------
@@ -1234,6 +1348,7 @@ def main() -> None:
             settings.k_max,
             settings.k_step,
             agglo_tree_method=settings.agglo_tree_method,
+            start_from_annotation=settings.start_from_annotation,
         ).start()
         running = True
         just_started = True

@@ -1,5 +1,5 @@
-"""Agglomeration tree over the Leiden-subcluster centroids: build the linkage once,
-then cut it at any K to get subcluster->state labels."""
+"""Agglomeration tree over the start-cluster centroids: build the linkage once,
+then cut it at any K to get start-cluster->state labels."""
 
 import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
@@ -13,19 +13,19 @@ def build_agglomeration_tree(
     method: str = AGGLO_TREE_METHODS[0],
     eps: float = 1e-8,
 ) -> np.ndarray:
-    """Linkage matrix over the subcluster centroids, following the tree construction of
+    """Linkage matrix over the start-cluster centroids, following the tree construction of
     Grabski et al. (2023) — the ``testClusters`` routine of their sc-SHC reference
     implementation (R/clustering.R):
 
-    1. rescale each subcluster to relative gene frequencies (rows sum to 1);
+    1. rescale each start cluster to relative gene frequencies (rows sum to 1);
     2. Euclidean distance between those profiles;
     3. agglomerate with ``method``.
 
     Step 1 pseudobulks by *summing* counts per cluster and dividing by the cluster's
     total, which normalizes sequencing depth out. Passing
-    ``UNS_LEIDEN_CENTROIDS_SHARED_GENES`` (mean counts per cell) gives an identical
+    ``UNS_START_CLUSTER_CENTROIDS_SHARED_GENES`` (mean counts per cell) gives an identical
     result, because the per-cell divisor cancels under the row normalization:
-    ``(S/n) / sum(S/n) == S / sum(S)``. Passing ``UNS_LEIDEN_EXPR_SUMS_SHARED_GENES``
+    ``(S/n) / sum(S/n) == S / sum(S)``. Passing ``UNS_START_CLUSTER_EXPR_SUMS_SHARED_GENES``
     is equally valid. Note this is *not* the "average expression" the paper's Methods
     text describes — the row totals differ, and only the normalized form is
     depth-invariant.
@@ -56,7 +56,7 @@ def build_agglomeration_tree(
     Every leaf is weighted equally regardless of how many cells it pools, so this is
     agglomeration over the profiles, not over the underlying cells. Rows that are zero
     across every gene stay zero; the all-zero centroid rows nudged to a uniform
-    ``1e-6`` by ``compute_leiden_aggregates`` become a uniform composition here.
+    ``1e-6`` by ``compute_start_cluster_aggregates`` become a uniform composition here.
     """
     if method not in AGGLO_TREE_METHODS:
         raise ValueError(f"method must be one of {AGGLO_TREE_METHODS}, got {method!r}")
@@ -64,7 +64,7 @@ def build_agglomeration_tree(
     profiles = np.asarray(centroids, dtype=np.float64)
     if profiles.shape[0] < 2:
         raise ValueError(
-            f"need at least 2 subclusters to build a tree, got {profiles.shape[0]}"
+            f"need at least 2 start clusters to build a tree, got {profiles.shape[0]}"
         )
     if not np.isfinite(profiles).all():
         raise ValueError("centroids contain non-finite values")
@@ -77,10 +77,10 @@ def build_agglomeration_tree(
     return linkage(distances, method=method)
 
 
-def labels_at_k(linkage_z: np.ndarray, k: int, n_leiden: int) -> np.ndarray:
-    """Cut the linkage tree into k clusters; returns a subcluster->state label array (0..k-1)."""
-    if k >= n_leiden:
-        return np.arange(n_leiden, dtype=int)
+def labels_at_k(linkage_z: np.ndarray, k: int, n_start_clusters: int) -> np.ndarray:
+    """Cut the linkage tree into k clusters; returns a start-cluster->state label array (0..k-1)."""
+    if k >= n_start_clusters:
+        return np.arange(n_start_clusters, dtype=int)
     raw = fcluster(linkage_z, t=k, criterion="maxclust")
     _, remapped = np.unique(raw, return_inverse=True)
     return remapped.astype(int)

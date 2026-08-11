@@ -1,5 +1,8 @@
 """The ``SpotStateMapper`` API: ``prepare`` stashes the pair's AnnData objects on
-the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut."""
+the mapper, then ``map`` produces a spot->state matrix P (S x K) for each K cut.
+
+The start clusters the cuts are over may be a Leiden over-clustering or a
+pre-existing annotation; mappers never need to know which."""
 
 from abc import ABC, abstractmethod
 import numpy as np
@@ -21,7 +24,7 @@ class SpotStateMapper(ABC):
 
         Stashes the (pre-processed) sc/st AnnData objects on the mapper so ``map``
         and the protected helpers below can reach them without re-passing them per
-        K. ``labels_by_k`` maps each swept K to its (L,) subcluster->state cut;
+        K. ``labels_by_k`` maps each swept K to its (L,) start-cluster->state cut;
         mappers that need every K's labels up front (e.g. an external reference
         aligner) use it here. Subclasses that override this **must** call
         ``super().prepare(...)`` so the AnnData refs are stored.
@@ -30,7 +33,7 @@ class SpotStateMapper(ABC):
         self.adata_st = adata_st
 
     @abstractmethod
-    def map(self, leiden_to_state, k) -> tuple[np.ndarray, np.ndarray | None]:
+    def map(self, start_cluster_to_state, k) -> tuple[np.ndarray, np.ndarray | None]:
         """Map ST spots onto the ``k`` states of the current cut.
 
         Returns ``(P, confidence)`` where ``P`` is the spot->state matrix (S x K)
@@ -38,10 +41,10 @@ class SpotStateMapper(ABC):
         decisively each spot was assigned, or ``None`` when this mapper does not
         define one (see ``confidence.py``). Higher confidence = more decisive.
 
-        ``leiden_to_state`` is the (L,) subcluster->state cut for this K and ``k``
-        the number of states. Implementations build whatever they need (spot
-        matrix, state profiles, dispersion) from the AnnData stashed by ``prepare``
-        via the protected helpers below.
+        ``start_cluster_to_state`` is the (L,) start-cluster->state cut for this K
+        and ``k`` the number of states. Implementations build whatever they need
+        (spot matrix, state profiles, dispersion) from the AnnData stashed by
+        ``prepare`` via the protected helpers below.
         """
         raise NotImplementedError
 
@@ -53,9 +56,11 @@ class SpotStateMapper(ABC):
         z_shared = to_dense(self.adata_st[:, self.adata_sc.uns[UNS_SHARED_GENES]])
         return np.asarray(z_shared, dtype=np.float32)
 
-    def _state_profiles(self, leiden_to_state, k) -> np.ndarray:
+    def _state_profiles(self, start_cluster_to_state, k) -> np.ndarray:
         """Size-weighted per-state raw expression profiles M (k x G_shared)."""
-        return assemble_state_profiles_shared_genes(leiden_to_state, k, self.adata_sc)
+        return assemble_state_profiles_shared_genes(
+            start_cluster_to_state, k, self.adata_sc
+        )
 
     def close(self) -> None:
         """Release any resources held for the sweep (e.g. a worker subprocess).
