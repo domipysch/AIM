@@ -14,7 +14,10 @@ dependencies:
   - scanpy>=1.7.0
   - statsmodels
   - anndata>=0.9.0
-  - pandas>=1.1.0
+  # pandas 3 makes copy-on-write mandatory, so DataFrame.values hands out
+  # read-only arrays and TACCO's in-place `profiles += 1e-30` raises
+  # "ValueError: output array is read-only" on every alignment.
+  - pandas>=1.1.0,<3
   - scipy>=1.6.0
   - mkl
   - mkl-service
@@ -23,6 +26,3 @@ dependencies:
   - pyamg
   - tacco
   - pytorch
-  - pip
-  - pip:
-      - typst

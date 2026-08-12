@@ -21,6 +21,3 @@ dependencies:
   - r-remotes
   - r-hdf5r
   - r-seurat
-  - pip
-  - pip:
-      - typst
