@@ -132,10 +132,16 @@ def tangram_map(
     else:
         type_names = ad_map_prob.obs_names.tolist()
 
+    # ``dtype=object`` on both indices, explicitly: with pandas' new string default
+    # (pandas 3, or ``future.infer_string``) string data is inferred to the nullable
+    # ``str`` extension dtype, which ``write_h5ad`` refuses unless
+    # ``anndata.settings.allow_write_nullable_strings`` is enabled. The inference
+    # goes by the values, so neither an object-dtype ndarray nor ``.astype(str)``
+    # avoids it - only saying ``dtype=object`` to the pandas constructor does.
     ad_map = AnnData(
         X=ad_map_prob.X.T.astype(np.float32),
-        obs=pd.DataFrame(index=adata_st.obs_names),
-        var=pd.DataFrame(index=type_names),
+        obs=pd.DataFrame(index=pd.Index(adata_st.obs_names, dtype=object)),
+        var=pd.DataFrame(index=pd.Index(type_names, dtype=object)),
     )
 
     mapping_path_h5ad = output_folder / "mapping_prob.h5ad"

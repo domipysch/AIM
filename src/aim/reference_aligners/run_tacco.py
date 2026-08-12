@@ -84,11 +84,18 @@ def tacco_map(
     fractions_prob = adata_st.obsm["align_result"]
     logging.info("Shape fractions: %s", fractions_prob.shape)
 
-    # Save mapping as AnnData (obs=spots, var=cell types)
+    # Save mapping as AnnData (obs=spots, var=cell types). ``dtype=object`` on both
+    # indices, explicitly: with pandas' new string default (pandas 3, or
+    # ``future.infer_string``) string data is inferred to the nullable ``str``
+    # extension dtype, which ``write_h5ad`` refuses unless
+    # ``anndata.settings.allow_write_nullable_strings`` is enabled. The inference
+    # goes by the values, so ``.astype(str)`` alone does not avoid it.
     ad_map = AnnData(
         X=fractions_prob.values.astype(np.float32),
-        obs=pd.DataFrame(index=fractions_prob.index),
-        var=pd.DataFrame(index=fractions_prob.columns.astype(str)),
+        obs=pd.DataFrame(index=pd.Index(fractions_prob.index, dtype=object)),
+        var=pd.DataFrame(
+            index=pd.Index(fractions_prob.columns.astype(str), dtype=object)
+        ),
     )
     ad_map.write_h5ad(output_folder / "mapping_prob.h5ad")
     logging.info("Saved mapping to %s", output_folder / "mapping_prob.h5ad")

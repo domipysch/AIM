@@ -65,10 +65,15 @@ def dot_align_data(
     # R writes weights as S x T (rows=spots, cols=cell types, already named) —
     # this is already the layout we want, no transpose needed.
     df = pd.read_csv(map_prob_csv, header=0, index_col=0)
+    # ``dtype=object`` on both indices, explicitly: with pandas' new string default
+    # (pandas 3, or ``future.infer_string``) string data is inferred to the nullable
+    # ``str`` extension dtype, which ``write_h5ad`` refuses unless
+    # ``anndata.settings.allow_write_nullable_strings`` is enabled. The inference
+    # goes by the values, so ``.astype(str)`` alone does not avoid it.
     ad_map = AnnData(
         X=np.asarray(df.values, dtype=np.float32),
-        obs=pd.DataFrame(index=df.index.astype(str)),
-        var=pd.DataFrame(index=df.columns.astype(str)),
+        obs=pd.DataFrame(index=pd.Index(df.index.astype(str), dtype=object)),
+        var=pd.DataFrame(index=pd.Index(df.columns.astype(str), dtype=object)),
     )
     ad_map.write_h5ad(output_folder / "mapping_prob.h5ad")
     map_prob_csv.unlink(missing_ok=True)
