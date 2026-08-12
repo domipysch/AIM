@@ -81,23 +81,6 @@ def dot_align_data(
     logger.info("Saved mapping to %s", output_folder / "mapping_prob.h5ad")
 
 
-def _serve(sc_path: Path, st_path: Path, control_dir: Path) -> None:
-    """Map one K per job. DOT's heavy work is in R (re-launched per job), so the
-    worker only saves the per-K conda/Python cold start, but keeps the uniform
-    AlignerWorker interface used by ReferenceMapper."""
-    from aim.reference_aligners.registry import serve_loop
-
-    def handle_job(cell_type_key: str, output_folder: Path) -> None:
-        dot_align_data(
-            sc_path,
-            st_path,
-            cell_type_key=cell_type_key,
-            output_folder=output_folder,
-        )
-
-    serve_loop(control_dir, handle_job)
-
-
 if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -113,7 +96,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output_folder",
         type=Path,
-        help="Folder where to store results (required unless --server)",
+        required=True,
+        help="Folder where to write mapping_prob.h5ad",
     )
     parser.add_argument(
         "--cell_type_key",
@@ -122,30 +106,11 @@ if __name__ == "__main__":
         default="cellType",
         help="What cell type key to load from sc data as cell type annotation to be mapped.",
     )
-    parser.add_argument(
-        "--server",
-        action="store_true",
-        help="Persistent-worker mode: map one K per job from --control_dir "
-        "(see reference_aligners.registry.AlignerWorker).",
-    )
-    parser.add_argument(
-        "--control_dir",
-        type=Path,
-        default=None,
-        help="Job-queue directory (required with --server)",
-    )
     args = parser.parse_args()
 
-    if args.server:
-        if args.control_dir is None:
-            parser.error("--server requires --control_dir")
-        _serve(args.scdata, args.stdata, args.control_dir)
-    else:
-        if args.output_folder is None:
-            parser.error("--output_folder is required")
-        dot_align_data(
-            args.scdata,
-            args.stdata,
-            cell_type_key=args.cell_type_key,
-            output_folder=args.output_folder,
-        )
+    dot_align_data(
+        args.scdata,
+        args.stdata,
+        cell_type_key=args.cell_type_key,
+        output_folder=args.output_folder,
+    )

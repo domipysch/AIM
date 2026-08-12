@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 from aim.adata_schema import OBS_START_CLUSTER, OBSM_SPATIAL, UNS_SHARED_GENES
-from aim.reference_aligners.registry import REFERENCE_ALIGNERS, AlignerWorker
+from aim.reference_aligners.registry import REFERENCE_ALIGNERS, run_aligner
 from .base import SpotStateMapper
 
 logger = logging.getLogger(__name__)
@@ -27,6 +27,10 @@ class ReferenceMapper(SpotStateMapper):
     states. Because the aligners live in their own conda environments (and DOT's
     core is in R), they run out-of-process via ``conda run`` against a shared-gene
     sc/st pair materialised once by ``prepare``.
+
+    One ``conda run`` per K: the aligner wrappers are standalone scripts that need
+    no ``spatial-aim`` in their env, so every K re-pays env activation, the
+    aligner's imports and a re-read of the prepared pair.
     """
 
     def __init__(self, reference_method: str = "tangram") -> None:
@@ -43,7 +47,6 @@ class ReferenceMapper(SpotStateMapper):
         # aligners from colliding in a single ``reference/`` directory.
         self.name = reference_method
         self._prepared = False
-        self._worker: AlignerWorker | None = None
 
     @staticmethod
     def _state_key(k: int) -> str:
@@ -95,14 +98,6 @@ class ReferenceMapper(SpotStateMapper):
 
         self._st_obs_names = [str(s) for s in adata_st.obs_names]
 
-        # One long-lived aligner process for the whole K-loop: it loads the
-        # shared-gene pair once and maps every K, instead of a fresh `conda run`
-        # (env activation + heavy imports + h5ad reload) per K.
-        self._worker = AlignerWorker(
-            self.reference_method, self._sc_path, self._st_path
-        )
-        self._worker.start()
-
         self._prepared = True
         logger.info(
             "ReferenceMapper[%s] prepared shared-gene inputs (%d genes, %d K-levels) at %s",
@@ -128,22 +123,14 @@ class ReferenceMapper(SpotStateMapper):
 
         out_dir = self._workdir / self._state_key(k)
         logger.info("ReferenceMapper[%s] K=%d", self.reference_method, k)
-        assert self._worker is not None  # set in prepare()
-        out_path = self._worker.run_job(self._state_key(k), out_dir)
+        out_path = run_aligner(
+            self.reference_method,
+            self._sc_path,
+            self._st_path,
+            out_dir,
+            self._state_key(k),
+        )
         return self._read_mapping(out_path, k), None
-
-    def close(self) -> None:
-        """Stop the persistent aligner worker (called by the sweep after the
-        K-loop; also invoked on garbage collection as a backstop)."""
-        if self._worker is not None:
-            self._worker.stop()
-            self._worker = None
-
-    def __del__(self) -> None:
-        try:
-            self.close()
-        except Exception:  # noqa: BLE001 — best-effort cleanup during GC
-            pass
 
     def _read_mapping(self, path: Path, k: int) -> np.ndarray:
         """Load the aligner's S x (states-present) mapping_prob.h5ad and reindex it

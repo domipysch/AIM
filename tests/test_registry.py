@@ -3,6 +3,8 @@
 subprocess is monkeypatched, so these run without any aligner env installed.
 """
 
+from pathlib import Path
+
 import pytest
 
 from aim.reference_aligners import registry
@@ -13,7 +15,10 @@ def test_reference_aligners_registered_and_consistent():
     for name, aligner in registry.REFERENCE_ALIGNERS.items():
         assert aligner.name == name
         assert aligner.conda_env == f"{name}_env"
-        assert aligner.module == f"aim.reference_aligners.run_{name}"
+        assert aligner.script == f"run_{name}.py"
+        # Executed by path, so the aligner env needs no spatial-aim install.
+        assert aligner.script_path.is_file()
+        assert aligner.script_path.parent == Path(registry.__file__).resolve().parent
 
 
 def test_run_aligner_unknown_name_raises(tmp_path):
@@ -116,9 +121,12 @@ def test_run_aligner_builds_conda_run_command(tmp_path, monkeypatch):
     )
 
     cmd = captured["cmd"]
-    # conda run -n tangram_env python -m aim.reference_aligners.run_tangram ...
+    # conda run -n tangram_env python <.../run_tangram.py> ...
     assert cmd[:4] == ["conda", "run", "-n", "tangram_env"]
-    assert "aim.reference_aligners.run_tangram" in cmd
+    # By path, not `python -m`: the aligner env needs no spatial-aim install.
+    assert "-m" not in cmd
+    assert cmd[4] == "python"
+    assert cmd[5] == str(registry.REFERENCE_ALIGNERS["tangram"].script_path)
     assert "--cell_type_key" in cmd and "cellType" in cmd
     assert result == out_dir / registry.MAPPING_PROB_FILENAME
 
