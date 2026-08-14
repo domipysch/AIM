@@ -58,21 +58,38 @@ read_h5ad_X <- function(h5file) {
 }
 
 # Read the obs/var index (cell IDs / gene IDs / spot IDs).
+# The index is normally a plain string dataset, but anndata writes a *group*
+# whenever the pandas index carried an extension dtype: nullable-string-array
+# (values + mask) or categorical (categories + codes). An H5Group has no $read(),
+# so reading one blindly fails with "attempt to apply non-function".
 read_h5ad_index <- function(group) {
   idx_name <- tryCatch(h5attr(group, "_index"), error = function(e) "_index")
-  group[[idx_name]]$read()
+  read_h5ad_str_array(group[[idx_name]])
 }
 
-# Read a single obs column; handles both plain string arrays and categorical encoding.
-read_obs_col <- function(h5file, col_name) {
-  obj <- h5file[[paste0("obs/", col_name)]]
-  if (inherits(obj, "H5Group")) {
-    # Categorical: codes (int, 0-indexed) + categories (string)
+# Resolve a string array that may be stored as a dataset or as an encoded group.
+read_h5ad_str_array <- function(obj) {
+  if (!inherits(obj, "H5Group")) {
+    return(obj$read())
+  }
+  members <- names(obj)
+  if ("values" %in% members) {          # nullable-string-array
+    return(as.character(obj[["values"]]$read()))
+  }
+  if ("categories" %in% members && "codes" %in% members) {   # categorical
     cats  <- obj[["categories"]]$read()
     codes <- as.integer(obj[["codes"]]$read()) + 1L
     return(cats[codes])
   }
-  obj$read()
+  stop(sprintf(
+    "unsupported h5ad string encoding: group with members [%s]",
+    paste(members, collapse = ", ")
+  ))
+}
+
+# Read a single obs column; same three encodings as the index.
+read_obs_col <- function(h5file, col_name) {
+  read_h5ad_str_array(h5file[[paste0("obs/", col_name)]])
 }
 
 # ---- Load sc.h5ad ----
