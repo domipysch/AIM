@@ -90,7 +90,7 @@ _FONT = dict(family="'Source Sans Pro', 'Segoe UI', sans-serif", size=13)
 # figures; each sets its own vertical ``y`` offset via ``{**_STATE_LEGEND, ...}``.
 _STATE_LEGEND = dict(
     itemsizing="constant",
-    title="States",
+    title="Cell types",
     orientation="h",
     yanchor="bottom",
     xanchor="left",
@@ -296,10 +296,10 @@ def _add_state_centroid_markers(
                     line=dict(width=1.5, color="black"),
                     opacity=1.0,
                 ),
-                name=f"State {state} centroid",
+                name=f"Cell type {state} centroid",
                 legendgroup=f"state{state}",
                 showlegend=False,
-                hovertemplate=f"State {state} centroid<extra></extra>",
+                hovertemplate=f"Cell type {state} centroid<extra></extra>",
             ),
             row=row,
             col=col,
@@ -391,12 +391,12 @@ def _add_umap_traces(
                 y=coords[mask, 1],
                 mode="markers",
                 marker=dict(size=dot_size, color=_hex(palette.get(state)), opacity=1.0),
-                name=f"State {state}",
+                name=f"Cell type {state}",
                 legendgroup=f"state{state}",
                 showlegend=show,
                 customdata=start_cluster[mask][:, None],
                 hovertemplate=(
-                    f"State {state}<br>Start cluster %{{customdata[0]}}"
+                    f"Cell type {state}<br>Start cluster %{{customdata[0]}}"
                     "<extra></extra>"
                 ),
             ),
@@ -492,7 +492,7 @@ def _add_spatial_traces(
                 customdata=np.column_stack([confidence, hard]),
                 hovertemplate=(
                     "confidence %{customdata[0]:.3f}<br>"
-                    "state %{customdata[1]}<br>"
+                    "cell type %{customdata[1]}<br>"
                     "x %{x:.1f}  y %{y:.1f}<extra></extra>"
                 ),
             ),
@@ -522,7 +522,7 @@ def _add_spatial_traces(
                 meta="spatial",
                 customdata=np.column_stack([hard[low], confidence[low]]),
                 hovertemplate=(
-                    "State %{customdata[0]} (below)<br>"
+                    "Cell type %{customdata[0]} (below)<br>"
                     "confidence %{customdata[1]:.3f}<br>"
                     "x %{x:.1f}  y %{y:.1f}<extra></extra>"
                 ),
@@ -538,14 +538,14 @@ def _add_spatial_traces(
         if confidence is not None:
             customdata = confidence[mask][:, None]
             hovertemplate = (
-                f"State {state}<br>"
+                f"Cell type {state}<br>"
                 "confidence %{customdata[0]:.3f}<br>"
                 "x %{x:.1f}  y %{y:.1f}<extra></extra>"
             )
         else:
             customdata = None
             hovertemplate = (
-                f"State {state}<br>x %{{x:.1f}}  y %{{y:.1f}}<extra></extra>"
+                f"Cell type {state}<br>x %{{x:.1f}}  y %{{y:.1f}}<extra></extra>"
             )
         fig.add_trace(
             go.Scattergl(
@@ -553,7 +553,7 @@ def _add_spatial_traces(
                 y=coords[mask, 1],
                 mode="markers",
                 marker=dict(size=dot_size, color=_hex(palette.get(state)), opacity=1.0),
-                name=f"State {state}",
+                name=f"Cell type {state}",
                 legendgroup=f"state{state}",
                 showlegend=show,
                 meta="spatial",
@@ -610,17 +610,18 @@ def render_headline_figure(
     titles: list[str] = []
     if have_shared:
         titles.append(
-            "Shared-gene UMAP — computed states" + _mod_suffix(mod, "modularity_shared")
+            "Shared-gene UMAP — computed cell types"
+            + _mod_suffix(mod, "modularity_shared")
         )
     if have_umap:
         titles.append(
-            "Reference UMAP — computed states" + _mod_suffix(mod, "modularity_all")
+            "Reference UMAP — computed cell types" + _mod_suffix(mod, "modularity_all")
         )
     if have_spatial:
         if conf_mode:
             spatial_title = "Spatial confidence"
         else:
-            spatial_title = "Spatial cell states"
+            spatial_title = "Spatial cell types"
             if confidence is not None and threshold > 0.0:
                 spatial_title += f" (confidence ≥ {threshold:.2f})"
         titles.append(spatial_title)
@@ -730,7 +731,7 @@ def render_compare_figure(
 
     titles: list[str] = []
     if have_umap:
-        titles.append("Reference UMAP — computed states")
+        titles.append("Reference UMAP — computed cell types")
     titles += [f"Spatial — {m}" for m in mapper_names]
 
     # Per-row pixel budgets (row_heights normalises these into proportions): the
@@ -891,7 +892,7 @@ def render_compare_fractions_figure(
     and one bar per mapper. (Cell fractions are identical across mappers, so only
     the mapping-dependent spot fractions are compared here.)"""
     states = list(range(k))
-    x = [f"State {s}" for s in states]
+    x = [f"Cell type {s}" for s in states]
     fig = go.Figure()
     for i, (m, fr) in enumerate(spot_fracs.items()):
         fig.add_trace(go.Bar(name=m, x=x, y=fr, marker_color=_mapper_color(i)))
@@ -900,7 +901,7 @@ def render_compare_fractions_figure(
         height=height,
         font=_CARD_FONT,
         barmode="group",
-        title=dict(text="Spot-state fractions", font=dict(size=13)),
+        title=dict(text="Spot cell-type fractions", font=dict(size=13)),
         yaxis_title="fraction",
         margin=dict(l=10, r=10, t=40, b=40),
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
@@ -945,7 +946,7 @@ def _add_start_cluster_umap_traces(
                 name=names[lc],
                 legendgroup=f"state{s}",
                 showlegend=False,
-                hovertemplate=(f"{names[lc]}<br>→ State {s}<extra></extra>"),
+                hovertemplate=(f"{names[lc]}<br>→ Cell type {s}<extra></extra>"),
             ),
             row=row,
             col=col,
@@ -986,11 +987,12 @@ def render_reference_umaps_figure(
     mod = data_access.load_data_json(root, k, "modularity_metrics.json")
     titles = [
         "Start clustering",
-        "Computed states — reference UMAP" + _mod_suffix(mod, "modularity_all"),
+        "Computed cell types — reference UMAP" + _mod_suffix(mod, "modularity_all"),
     ]
     if have_shared:
         titles.append(
-            "Computed states — shared-gene UMAP" + _mod_suffix(mod, "modularity_shared")
+            "Computed cell types — shared-gene UMAP"
+            + _mod_suffix(mod, "modularity_shared")
         )
     n_cols = len(titles)
     fig = make_subplots(
@@ -1061,7 +1063,7 @@ def render_start_cluster_merge_figure(
 
     def _row(s: int) -> str:
         n = len(start_clusters_of_state[s])
-        return f"State {s}  ({n} cluster{'s' if n != 1 else ''})"
+        return f"Cell type {s}  ({n} cluster{'s' if n != 1 else ''})"
 
     fig = go.Figure()
     # barmode="stack" accumulates same-row segments in trace order (largest first).
@@ -1079,7 +1081,9 @@ def render_start_cluster_merge_figure(
                     insidetextanchor="middle",
                     textfont=dict(size=9, color="black"),
                     showlegend=False,
-                    hovertemplate=f"State {s} · {names[lc]}<br>%{{x}} cells<extra></extra>",
+                    hovertemplate=(
+                        f"Cell type {s} · {names[lc]}<br>%{{x}} cells<extra></extra>"
+                    ),
                 )
             )
 
@@ -1088,7 +1092,7 @@ def render_start_cluster_merge_figure(
         fig,
         height=max(240, n_states * 46 + 120),
         barmode="stack",
-        title="Start clusters merged per computed AIM state",
+        title="Start clusters merged per computed AIM cell type",
         xaxis_title="cells   (segment width ∝ start-cluster size)",
         margin=dict(l=10, r=10, t=50, b=40),
         bargap=0.35,
@@ -1132,7 +1136,7 @@ def render_state_profiles_figure(
         go.Heatmap(
             z=mat_z,
             x=gene_names[gene_order].tolist(),
-            y=[f"State {s}" for s in unique_states],
+            y=[f"Cell type {s}" for s in unique_states],
             colorscale="Viridis",
             colorbar=dict(title="z-score", thickness=12),
             hovertemplate="%{y}<br>%{x}<br>z %{z:.2f}<extra></extra>",
@@ -1142,9 +1146,11 @@ def render_state_profiles_figure(
     _base_layout(
         fig,
         height=max(240, n_states * 42 + 160),
-        title="Cell-state profiles — shared genes (z-scored per gene across states)",
+        title=(
+            "Cell-type profiles — shared genes " "(z-scored per gene across cell types)"
+        ),
         xaxis_title="Gene  (sorted by SC variance)",
-        yaxis_title="Computed cell state",
+        yaxis_title="Computed cell type",
         margin=dict(l=10, r=10, t=50, b=80),
     )
     # State 0 on top.
@@ -1184,6 +1190,10 @@ def _card_layout(fig: go.Figure, *, height: int, **extra) -> go.Figure:
 _COMBINED_COLOR = "#aeb4bb"
 _NULL_COLOR = "#7c828a"
 _RING_COLOR = "#22262b"
+# Marks the best overall K in every criterion card: amber rather than pure yellow,
+# which is unreadable on white. Public because the GUI tints the matching ★ in the
+# "Best K" buttons with it.
+BEST_K_COLOR = "#e0a800"
 _MARKER_SIZE = 7
 _SCATTER_MARKER_SIZE = 11
 
@@ -1212,7 +1222,7 @@ def _null_text(value: float) -> str:
 
 
 def render_ksweep_criterion_figure(
-    df, criterion, *, index: int = 0, height: int = 300
+    df, criterion, *, index: int = 0, height: int = 300, best_k: int | None = None
 ) -> go.Figure:
     """The line card for one criterion: its two curves over K plus their harmonic
     mean (the score the scatter cards below plot against each other).
@@ -1221,6 +1231,11 @@ def render_ksweep_criterion_figure(
     is drawn *scaled* -- each curve divided by its own maximum over the sweep --
     so both curves and their mean share one axis; the hover still reports the raw
     value. ``index`` picks the criterion's colour pair out of the shared palette.
+
+    ``best_k`` marks one K with an amber dashed line and a star on the x-axis (the
+    best overall K, so the same K is marked in all three cards). It is drawn as a
+    shape plus an annotation, not a trace, so it stays out of the legend and out of
+    the linked-plot component's K bookkeeping.
     """
     k = df["k"].to_numpy()
     raw_a, raw_b, scaled_a, scaled_b = scores.scaled_curves(df, criterion)
@@ -1285,15 +1300,52 @@ def render_ksweep_criterion_figure(
         )
     )
 
+    extra_layout: dict = {}
+    if best_k is not None:
+        # The line stops above the star instead of running through it: a dashed
+        # line ending inside the marker reads as a smudge.
+        fig.add_shape(
+            type="line",
+            xref="x",
+            x0=float(best_k),
+            x1=float(best_k),
+            yref="paper",
+            y0=0.1,
+            y1=1.0,
+            line=dict(color=BEST_K_COLOR, dash="dash", width=2),
+            layer="below",
+        )
+        # A marker, not a text annotation: an SVG star symbol is centred exactly on
+        # its coordinate, whereas a "★" glyph is centred by the font's side
+        # bearings and drifts off the line. It rides an invisible 0..1 overlay
+        # y-axis so pinning it to the bottom cannot stretch the real y range.
+        fig.add_trace(
+            go.Scatter(
+                x=[float(best_k)],
+                y=[0.0],
+                yaxis="y2",
+                mode="markers",
+                marker=dict(symbol="star", size=13, color=BEST_K_COLOR),
+                showlegend=False,
+                cliponaxis=False,
+                hoverinfo="text",
+                hovertext=f"best overall K = {int(best_k)}",
+            )
+        )
+        extra_layout["yaxis2"] = dict(
+            overlaying="y", range=[0.0, 1.0], visible=False, fixedrange=True
+        )
+
     return _base_layout(
         fig,
         height=height,
         font=_CARD_FONT,
-        title=dict(text=criterion.label, font=dict(size=13)),
+        title=dict(text=f"{criterion.label} (higher is better)", font=dict(size=13)),
         xaxis_title="K",
         yaxis_title=criterion.unit,
         margin=dict(l=10, r=10, t=40, b=52),
         legend=dict(orientation="h", yanchor="top", y=-0.2, x=0),
+        **extra_layout,
     )
 
 
@@ -1461,7 +1513,7 @@ def render_fractions_figure(
 
     palette = state_palette(k)
     states = list(range(k))
-    x = [f"State {s}" for s in states]
+    x = [f"Cell type {s}" for s in states]
     colors = [_hex(palette.get(s)) for s in states]
     cell_frac = [float(np.mean(cell_states == s)) for s in states]
     spot_frac = [float(np.mean(hard == s)) for s in states]

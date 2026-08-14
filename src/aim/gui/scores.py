@@ -73,7 +73,7 @@ CRITERIA: tuple[Criterion, ...] = (
         short="Spatial org.",
         columns=("nhood_mean_self_zscore", "local_purity_zscore"),
         curve_labels=("nhood enrichment z", "local purity z"),
-        unit="z-score ÷ max over K",
+        unit="z-score normalized",
         scale_to_max=True,
     ),
     Criterion(
@@ -170,6 +170,21 @@ def combined_null(df: pd.DataFrame, criterion: Criterion) -> np.ndarray:
         for column, factor in zip(criterion.columns, (fa, fb))
     ]
     return harmonic_mean(values[0], values[1])
+
+
+def overall(table: pd.DataFrame, keys: tuple[str, ...] | None = None) -> np.ndarray:
+    """One score per K across all criteria: the harmonic mean of their combined
+    scores, so a K only scores high when it is good on *every* criterion.
+
+    NaN wherever any criterion is missing or non-positive for that K — such a K
+    has no defensible overall score, and 0 would rank it against the others.
+    """
+    columns = keys or tuple(c.key for c in CRITERIA)
+    n = len(table)
+    points = np.column_stack([_column(table, column, n) for column in columns])
+    good = np.all(np.isfinite(points) & (points > 0), axis=1)
+    safe = np.where(good[:, None], points, 1.0)
+    return np.where(good, points.shape[1] / np.sum(1.0 / safe, axis=1), np.nan)
 
 
 def pareto_mask(table: pd.DataFrame, keys: tuple[str, ...] | None = None) -> np.ndarray:

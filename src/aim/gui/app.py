@@ -48,7 +48,18 @@ _DEFAULT_K_MAX: int | None = None
 _DEFAULT_K_STEP = 1
 
 # Sidebar label for the default start clusters (no annotation column chosen).
-_LEIDEN_START_LABEL = "Leiden over-clustering"
+_LEIDEN_START_LABEL = "No (default, use Leiden over-clustering)"
+_NO_ANNOTATION_LABEL = "No annotations found in scRNA data"
+# Display-only labels; the raw method names go into the run config.
+_AGGLO_LABELS = {
+    "ward": "ward - more balanced cell types",
+    "average": "average - allow for outlier cell types",
+}
+# Display-only labels for the mapper checkboxes; the keys stay the raw names.
+_MAPPER_LABELS = {
+    "nearest_centroid": "nearest_centroid (default)",
+    "wann": "wann (preserve cell type fractions)",
+}
 
 
 @st.cache_data(show_spinner=False)
@@ -301,7 +312,8 @@ def _headline(
                 "Plot confidence",
                 value=False,
                 key=f"{key_prefix}_pconf",
-                help="Colour spots by confidence intensity instead of assigned state.",
+                help="Colour spots by confidence intensity instead of assigned "
+                "cell type.",
             )
 
     # One figure, all subplots (UMAP(s) + spatial) sharing a single state legend.
@@ -387,7 +399,7 @@ def _shared_controls(ks: list[int]) -> _Controls:
     c1, c2 = st.columns([3, 2], vertical_alignment="center")
     with c1:
         k = widgets.live_select_slider(
-            "K (number of cell states)", ks, ks[0], key="ctrl_k"
+            "K (number of cell types)", ks, ks[0], key="ctrl_k"
         )
     with c2:
         show_shared_umap = st.checkbox(
@@ -422,75 +434,217 @@ def _pick_k_callback(state_key: str, ks_all: list[int]):
     return _on_pick
 
 
-def _ksweep_section(mapper: str, root: Path, ks_all: list[int]) -> None:
-    """The "Comparing K" card: one line plot per criterion (its two curves plus
-    their harmonic mean) over one scatter plot per criterion pair (one dot per K).
+@st.dialog("Criterion trade-offs", width="large")
+def _ksweep_scatter_dialog(
+    mapper: str, score_table: pd.DataFrame, ks_all: list[int]
+) -> None:
+    """The three criterion-vs-criterion scatters, kept out of the card body so the
+    card itself stays short."""
+    pareto_only = st.checkbox(
+        "Show only pareto-optimal points",
+        value=True,
+        key=f"ks_pareto_{mapper}",
+        help="Keep only the K that no other K beats on all three criteria at once. "
+        "A criterion that could not be computed for a K counts as its worst "
+        "possible value.",
+    )
+    mask = scores.pareto_mask(score_table) if pareto_only else None
+    group = f"ksweep_scatter_{mapper}"
 
-    All six are linked: hovering any dot highlights the same K everywhere and
-    shows that K's shuffle-null crosshair in the scatters; clicking a dot moves
-    the shared K slider. Every number plotted here — the nulls included — is read
-    from the sweep's ``k_comparison.csv``.
+    for col, (x_key, y_key) in zip(st.columns(3), scores.SCATTER_PAIRS):
+        with col:
+            key = f"ks_scatter_{x_key}_{y_key}_{mapper}"
+            _plot_card(
+                render.render_ksweep_scatter_figure(
+                    score_table,
+                    scores.CRITERION[x_key],
+                    scores.CRITERION[y_key],
+                    mask=mask,
+                ),
+                key=key,
+                stem=f"{mapper}_ksweep_scatter_{x_key}_{y_key}",
+                link_group=group,
+                on_pick=_pick_k_callback(key, ks_all),
+            )
+
+    shown = (
+        f"Showing the {int(mask.sum())} pareto-optimal of {len(score_table)} K. "
+        if mask is not None
+        else ""
+    )
+    st.caption(
+        f"One dot per K, each criterion summarised by the harmonic mean of its two "
+        f"curves. {shown}Hover a dot to highlight that K in every panel and to show "
+        "the grey label-shuffle null crosshair; click a dot to set the K slider. The "
+        "axes span the nulls as well, so drag to zoom in on the dots."
+    )
+
+
+def _select_k_callback(k: int, ks_all: list[int]):
+    """``on_click`` for a "Best K" row: move the shared K slider onto that K."""
+
+    def _on_click() -> None:
+        if k in ks_all:
+            _set_ctrl_k(ks_all.index(k))
+            # The slider and sibling tabs live outside this tab's fragment; ask
+            # the fragment body to escalate to a full app rerun so they follow.
+            st.session_state["_ctrl_k_pick_pending"] = True
+
+    return _on_click
+
+
+def _best_k_rows(score_table: pd.DataFrame) -> list[tuple[str, int, float, str]]:
+    """``(description, k, score, slug)`` for the best overall K and the best K per
+    criterion.
+
+    Ties go to the smallest K — fewer cell types is the simpler model. A criterion
+    with no finite score anywhere is skipped rather than reported as a winner.
+    """
+    ks = score_table["k"].to_numpy()
+
+    def _best(values: np.ndarray) -> tuple[int, float] | None:
+        finite = np.isfinite(values)
+        if not finite.any():
+            return None
+        # np.nanargmax already returns the first of equal maxima, i.e. the
+        # smallest K, because the table is ordered by K.
+        index = int(np.nanargmax(np.where(finite, values, -np.inf)))
+        return int(ks[index]), float(values[index])
+
+    rows: list[tuple[str, int, float, str]] = []
+    best_overall = _best(scores.overall(score_table))
+    if best_overall is not None:
+        k, value = best_overall
+        rows.append(
+            (
+                "**Best overall** (harmonic mean across the criteria):",
+                k,
+                value,
+                "overall",
+            )
+        )
+    for criterion in scores.CRITERIA:
+        best = _best(
+            pd.to_numeric(score_table[criterion.key], errors="coerce").to_numpy(
+                dtype=float
+            )
+        )
+        if best is None:
+            continue
+        k, value = best
+        rows.append(
+            (
+                f"**Best {criterion.label.lower()}** (harmonic mean):",
+                k,
+                value,
+                criterion.key,
+            )
+        )
+    return rows
+
+
+def _ksweep_section(
+    mapper: str, root: Path, ks_all: list[int], current_k: int | None = None
+) -> None:
+    """The "Choose K" card: one line plot per criterion (its two curves plus their
+    harmonic mean), each criterion's winning K below it, the best overall K below
+    them, and the criterion-vs-criterion scatters behind a button.
+
+    The line plots are linked: hovering a dot highlights the same K in all three,
+    clicking one moves the K slider. Every number here — the nulls included — is
+    read from the sweep's ``k_comparison.csv``.
+
+    Collapsed, the card is a dead end unless its header says where things stand, so
+    the label carries the K on show and the best overall K.
     """
     df = data_access.ksweep_table(root)
     if df is None or df.empty:
         return
 
-    with st.expander("Comparing K", expanded=False):
-        score_table = scores.score_table(df)
+    score_table = scores.score_table(df)
+    best = {
+        slug: (text, k, value) for text, k, value, slug in _best_k_rows(score_table)
+    }
+    # The best overall K is marked in all three cards, so the plots and the rows
+    # below agree on one K.
+    best_overall_k = best["overall"][1] if "overall" in best else None
+
+    label = "Choose K (number of cell types)"
+    state = []
+    if current_k is not None:
+        state.append(f"showing K = {current_k}")
+    if best_overall_k is not None:
+        state.append(f"best overall K = {best_overall_k}")
+    if state:
+        label += " — " + ", ".join(state)
+
+    with st.expander(label, expanded=False):
         group = f"ksweep_{mapper}"
 
+        # Tint the starred rows' material star to the same amber the plots use.
+        # Streamlit renders the button's `icon` as an icon-font span, which it
+        # already aligns with the label — unlike a "★" text glyph, whose font
+        # bearings sat off-centre.
+        st.markdown(
+            "<style>div[class*='st-key-ks_bestkstar_'] button span"
+            "[data-testid='stIconMaterial']"
+            f"{{color:{render.BEST_K_COLOR};font-size:1.3rem;}}</style>",
+            unsafe_allow_html=True,
+        )
+
+        def _best_k_row(slug: str) -> None:
+            """One line: the label, then its K as the button. Skipped if unscored."""
+            entry = best.get(slug)
+            if entry is None:
+                return
+            text, k, value = entry
+            row = st.container(
+                horizontal=True, vertical_alignment="center", gap="small"
+            )
+            row.markdown(text)
+            # Star the K the plots mark — on every row that lands on it, not just
+            # the 'best overall' one. Starred rows get their own key prefix so the
+            # CSS above can tint just that icon.
+            starred = k == best_overall_k
+            prefix = "ks_bestkstar" if starred else "ks_bestk"
+            row.button(
+                f"K = {k}",
+                icon=":material/star:" if starred else None,
+                key=f"{prefix}_{slug}_{mapper}",
+                on_click=_select_k_callback(k, ks_all),
+                disabled=k not in ks_all,
+                help=f"Score {value:.2f}. Moves the K slider to K = {k}.",
+            )
+
+        # Each criterion's best K sits under its own plot; the overall winner —
+        # which spans all three — gets its own row below them.
         for col, (index, criterion) in zip(st.columns(3), enumerate(scores.CRITERIA)):
             with col:
                 key = f"ks_{criterion.key}_{mapper}"
                 _plot_card(
-                    render.render_ksweep_criterion_figure(df, criterion, index=index),
+                    render.render_ksweep_criterion_figure(
+                        df, criterion, index=index, best_k=best_overall_k
+                    ),
                     key=key,
                     stem=f"{mapper}_ksweep_{criterion.key}",
                     link_group=group,
                     on_pick=_pick_k_callback(key, ks_all),
                 )
+                _best_k_row(criterion.key)
 
-        pareto_only = st.checkbox(
-            "Show only pareto-optimal points",
-            value=True,
-            key=f"ks_pareto_{mapper}",
-            help="Keep only the K that no other K beats on all three criteria at "
-            "once (each K is one point in the 3-D space of the harmonic means "
-            "below). A criterion that could not be computed for a K counts as its "
-            "worst possible value.",
-        )
-        mask = scores.pareto_mask(score_table) if pareto_only else None
+        st.divider()
+        if not best:
+            st.caption("No criterion could be scored for this sweep yet.")
+        _best_k_row("overall")
 
-        for col, (x_key, y_key) in zip(st.columns(3), scores.SCATTER_PAIRS):
-            with col:
-                key = f"ks_scatter_{x_key}_{y_key}_{mapper}"
-                _plot_card(
-                    render.render_ksweep_scatter_figure(
-                        score_table,
-                        scores.CRITERION[x_key],
-                        scores.CRITERION[y_key],
-                        mask=mask,
-                    ),
-                    key=key,
-                    stem=f"{mapper}_ksweep_scatter_{x_key}_{y_key}",
-                    link_group=group,
-                    on_pick=_pick_k_callback(key, ks_all),
-                )
-
-        shown = (
-            f"Showing the {int(mask.sum())} pareto-optimal of {len(score_table)} K. "
-            if mask is not None
-            else ""
-        )
-        st.caption(
-            "Each criterion is summarised per K by the **harmonic mean** of its two "
-            "curves (the spatial z-scores are each divided by their maximum over the "
-            "sweep first, putting them on one scale). "
-            f"{shown}"
-            "Hover any dot to highlight that K in every plot and to show the grey "
-            "label-shuffle null crosshair; click a dot to set the K slider. The "
-            "scatter axes span the nulls as well, so drag to zoom in on the dots."
-        )
+        if st.button(
+            "Compare criteria against each other",
+            key=f"ks_scatter_btn_{mapper}",
+            width="stretch",
+            help="Opens the three criterion-vs-criterion scatter plots (one dot "
+            "per K) with the pareto filter.",
+        ):
+            _ksweep_scatter_dialog(mapper, score_table, ks_all)
 
 
 @st.fragment
@@ -534,9 +688,10 @@ def _mapper_tab(
         st.info("K not available for this method at the current shared setting.")
         return
 
-    _ksweep_section(mapper, root, ks_all)
+    # A little air between the tab bar and the card.
+    st.markdown("<div style='height:0.9rem'></div>", unsafe_allow_html=True)
+    _ksweep_section(mapper, root, ks_all, current_k=ctrl.k)
 
-    st.divider()
     _headline(
         mapper,
         root,
@@ -563,7 +718,8 @@ def _confidence_caption(mapper: str) -> str | None:
     if mapper == "nearest_centroid":
         dn = f"d{str(N_TOP_STATES).translate(_SUBSCRIPT)}"  # e.g. "d₄"
         return (
-            "Each spot is assigned to its most cosine-similar state centroid; its "
+            "Each spot is assigned to its most cosine-similar cell-type centroid; "
+            "its "
             f"confidence is the winner's *relative margin* over the top-"
             f"{N_TOP_STATES} rivals in cosine-distance space — for the "
             f"{N_TOP_STATES} smallest distances d₁ ≤ … ≤ {dn}, "
@@ -571,7 +727,7 @@ def _confidence_caption(mapper: str) -> str | None:
         )
     if mapper == "wann":
         return (
-            "Each spot gets a reliability-weighted soft vote over the states; its "
+            "Each spot gets a reliability-weighted soft vote over the cell types; its "
             "confidence is how one-hot that vote is — 1 (normalised Shannon entropy)."
         )
     return None
@@ -633,7 +789,7 @@ def _report_dashboard(
     if adata_sc is not None:
         cards.append(
             (
-                "Cell- & Spot-State Fractions",
+                "Cell-Type Fractions — Cells & Spots",
                 lambda: _plot_card(
                     render.render_fractions_figure(adata_sc, root, k, hard),
                     key=f"card_frac_{mapper}",
@@ -817,7 +973,7 @@ def _compare_sections(
 
     cards: list[tuple[str, "Callable[[], None]"]] = [
         ("Reconstruction Cosine Similarity", _reconstruction),
-        ("Cell- & Spot-State Fractions", _fractions),
+        ("Cell-Type Fractions — Cells & Spots", _fractions),
         ("Mapping Sharpness — How One-Hot", _sharpness),
     ]
     cards.append(("Spatial Organisation of Mapped Spots", _spatial_org))
@@ -872,23 +1028,23 @@ def _reference_tab(
     )
 
     st.divider()
-    with st.expander("Start Clusters Merged per AIM State", expanded=True):
+    with st.expander("Start Clusters Merged per AIM Cell Type", expanded=True):
         _plot_card(
             render.render_start_cluster_merge_figure(adata_sc, ref_root, ctrl.k),
             key="ref_start_cluster_merge",
             stem=f"reference_start_cluster_merge_k{ctrl.k:03d}",
         )
-    with st.expander("AIM-State Profiles", expanded=True):
+    with st.expander("AIM Cell-Type Profiles", expanded=True):
         fig_prof = render.render_state_profiles_figure(adata_sc, ref_root, ctrl.k)
         if fig_prof is None:
-            st.info("Too few shared genes to plot the state-profile heatmap.")
+            st.info("Too few shared genes to plot the cell-type-profile heatmap.")
         else:
             _plot_card(
                 fig_prof,
                 key="ref_profiles",
                 stem=f"reference_state_profiles_k{ctrl.k:03d}",
             )
-    with st.expander("Substate Merge Coherence", expanded=False):
+    with st.expander("Sub-Type Merge Coherence", expanded=False):
         metrics = data_access.load_data_json(ref_root, ctrl.k, "biology_metrics.json")
         if not metrics:
             st.info("biology_metrics.json not found for this K.")
@@ -898,8 +1054,8 @@ def _reference_tab(
             per_state = metrics.get("per_state", {})
             if per_state:
                 df = pd.DataFrame.from_dict(per_state, orient="index")
-                df.insert(0, "state", [int(s) for s in per_state.keys()])
-                df = df.sort_values("state").reset_index(drop=True).round(4)
+                df.insert(0, "cell type", [int(s) for s in per_state.keys()])
+                df = df.sort_values("cell type").reset_index(drop=True).round(4)
                 st.dataframe(df, hide_index=True, width="stretch")
             agg = metrics.get("aggregate") or {}
             parts = [f"n_perm = {metrics.get('n_perm')}"]
@@ -959,7 +1115,8 @@ def _browse(kind: str, key: str) -> None:
 
 
 def _clear_session() -> None:
-    """Reset paths, K step, method selection and the run queue for a clean restart.
+    """Reset paths, scaffold settings, method selection and the run queue for a
+    clean restart.
 
     Runs as a button ``on_click`` callback (before widgets re-instantiate), which
     is the only point Streamlit allows resetting widget-backed keys. On-disk
@@ -969,18 +1126,15 @@ def _clear_session() -> None:
     st.session_state["cfg_sc"] = ""
     st.session_state["cfg_st"] = ""
     st.session_state["cfg_out"] = ""
-    st.session_state["cfg_kstep"] = _DEFAULT_K_STEP
     st.session_state["cfg_agglo"] = AGGLO_TREE_METHODS[0]
     st.session_state["cfg_start"] = _LEIDEN_START_LABEL
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
     st.session_state.pop("_run_requested", None)
-    # Drop transient widget state: the method pills, shared controls, and every
-    # per-tab / best-K control.
+    # Drop transient widget state: the method checkboxes, shared controls, and
+    # every per-tab / best-K control.
     for k in list(st.session_state.keys()):
-        if k == "add_methods" or k.startswith(
-            ("tab_", "cmp", "ctrl_", "bestk_", "ks_")
-        ):
+        if k.startswith(("add_", "done_", "tab_", "cmp", "ctrl_", "bestk_", "ks_")):
             del st.session_state[k]
 
 
@@ -1016,29 +1170,45 @@ def _start_cluster_row(sc_str: str, lock: dict | None) -> str | None:
     Once an output dir holds a run, its recorded choice is shown as a disabled
     dropdown rather than letting the two modes mix in one folder.
     """
+    help_text = (
+        "The agglomeration tree is built over Leiden over-clusters by default; an "
+        "scRNA obs column uses that annotation's cell types instead."
+    )
+
+    def _fmt(option: str) -> str:
+        return option if option == _LEIDEN_START_LABEL else f".obs key {option}"
+
     if lock is not None:
         recorded = lock["start_from_annotation"]
         st.sidebar.selectbox(
-            "Start clusters",
+            "Override starting clusters",
             [recorded or _LEIDEN_START_LABEL],
+            format_func=_fmt,
             disabled=True,
             help=_LOCKED_HELP,
         )
         return recorded
 
     sc_path = Path(sc_str.strip()) if sc_str.strip() else None
-    options = [_LEIDEN_START_LABEL]
-    if sc_path is not None and sc_path.is_file():
-        options += _obs_columns(str(sc_path))
+    annotations = (
+        _obs_columns(str(sc_path)) if sc_path is not None and sc_path.is_file() else []
+    )
+    if not annotations:
+        # Nothing to override with: Streamlit can only grey out a whole selectbox,
+        # not a single option, so the box itself carries the message.
+        st.sidebar.selectbox(
+            "Override starting clusters",
+            [_NO_ANNOTATION_LABEL],
+            disabled=True,
+            help=help_text,
+        )
+        return None
     choice = st.sidebar.selectbox(
-        "Start clusters",
-        options,
+        "Override starting clusters",
+        [_LEIDEN_START_LABEL, *annotations],
+        format_func=_fmt,
         key="cfg_start",
-        help="What the agglomeration tree is built over. The default over-clusters "
-        "the reference with Leiden; picking an scRNA obs column instead uses that "
-        "annotation's cell types as the start clusters, computes no over-clustering, "
-        "and sweeps K from the number of types down. Use a separate output folder "
-        "for each choice.",
+        help=help_text,
     )
     return None if choice == _LEIDEN_START_LABEL else str(choice)
 
@@ -1046,39 +1216,45 @@ def _start_cluster_row(sc_str: str, lock: dict | None) -> str | None:
 def _agglo_method_row(lock: dict | None) -> str:
     """Sidebar picker for the agglomeration linkage, disabled and pinned to the
     recorded value once the output folder holds runs."""
+
+    def _fmt(method: str) -> str:
+        return _AGGLO_LABELS.get(str(method), str(method))
+
     if lock is not None and lock["agglo_tree_method"]:
         return str(
             st.sidebar.selectbox(
-                "Agglomeration linkage",
+                "Linkage method",
                 [lock["agglo_tree_method"]],
+                format_func=_fmt,
                 disabled=True,
                 help=_LOCKED_HELP,
             )
         )
     return str(
         st.sidebar.selectbox(
-            "Agglomeration linkage",
+            "Linkage method",
             AGGLO_TREE_METHODS,
+            format_func=_fmt,
             key="cfg_agglo",
             help="Linkage for the agglomeration tree over the start clusters. "
-            "'ward' carries a size term and tends to produce balanced states; "
-            "'average' (UPGMA) peels small tight groups off a dominant state.",
+            "'ward' carries a size term and tends to produce balanced cell types; "
+            "'average' (UPGMA) peels small tight groups off a dominant cell type.",
         )
     )
 
 
 def _sidebar() -> argparse.Namespace | None:
-    """Render the sidebar (data paths, start clusters, K step, method selection +
+    """Render the sidebar (data paths, start clusters, linkage, method selection +
     run queue).
 
     Returns the run settings once the paths are valid, else ``None``.
     """
     st.sidebar.title("AIM GUI")
 
-    # -- data paths + K step ---------------------------------------------
-    st.sidebar.subheader("Data")
+    # -- step 1: data paths ----------------------------------------------
     # Centre the icon inside the (stretched) Browse buttons; Streamlit left-aligns
-    # button labels by default.
+    # button labels by default. The Clear button sits on the step-1 header row and
+    # is shrunk to a compact secondary control.
     st.sidebar.markdown(
         "<style>"
         "div[class*='st-key-browse_'] button{"
@@ -1086,13 +1262,39 @@ def _sidebar() -> argparse.Namespace | None:
         "div[class*='st-key-browse_'] button>div{"
         "display:flex;justify-content:center;align-items:center;width:100%;}"
         "div[class*='st-key-browse_'] button p{margin:0;text-align:center;}"
+        "div[class*='st-key-clear_btn']{"
+        "display:flex;justify-content:flex-end;width:100%;}"
+        "div[class*='st-key-clear_btn'] button{"
+        "padding:0.1rem 0.4rem;min-height:0;width:auto;margin-right:0;}"
+        "div[class*='st-key-clear_btn'] button p{font-size:0.75rem;margin:0;}"
+        # Group label for the method list: matches a Streamlit widget label
+        # (0.875rem) so it lines up with 'Linkage method' above it.
+        ".aim-group-label{font-size:0.875rem;line-height:1.6;margin-bottom:0.25rem;}"
+        # White (theme background) like the inputs, not the grey sidebar surface.
+        "div[class*='st-key-methods_box']{padding:0.5rem 0.75rem;"
+        "background-color:var(--background-color,#fff);}"
+        "div[class*='st-key-methods_box'] label{font-size:0.875rem;}"
+        # Even rhythm inside the box: the container gap is 0, so every row's
+        # spacing comes from these margins alone.
+        "div[class*='st-key-methods_box'] label{padding:0.15rem 0;}"
+        ".aim-mapper-group{font-size:0.7rem;font-weight:600;letter-spacing:0.04em;"
+        "text-transform:uppercase;opacity:0.55;margin:0.5rem 0 1rem;}"
+        ".aim-mapper-group.aim-first{margin-top:0;}"
         "</style>",
         unsafe_allow_html=True,
+    )
+    col_hdr, col_clear = st.sidebar.columns([2, 1], vertical_alignment="center")
+    col_hdr.subheader("1. Select data")
+    col_clear.button(
+        "Clear",
+        key="clear_btn",
+        on_click=_clear_session,
+        help="Reset all inputs, the method selection and the run queue. "
+        "Computed results on disk are kept.",
     )
     st.session_state.setdefault("cfg_sc", "")
     st.session_state.setdefault("cfg_st", "")
     st.session_state.setdefault("cfg_out", "")
-    st.session_state.setdefault("cfg_kstep", _DEFAULT_K_STEP)
     st.session_state.setdefault("cfg_agglo", AGGLO_TREE_METHODS[0])
 
     def _path_row(label: str, key: str, kind: str, browse_key: str) -> str:
@@ -1116,43 +1318,34 @@ def _sidebar() -> argparse.Namespace | None:
     if st.session_state.get("_browse_error"):
         st.sidebar.warning(st.session_state.pop("_browse_error"))
 
-    # Settings the scaffold is built from lock once this folder holds runs.
-    lock = _run_lock(out_str)
-    start_from_annotation = _start_cluster_row(sc_str, lock)
-
-    k_step = st.sidebar.number_input(
-        "K step",
-        min_value=1,
-        step=1,
-        key="cfg_kstep",
-        help="The K range is fixed to the full sweep (K = 1 … L, where L is the "
-        "start-cluster count); only the step is set here.",
-    )
-    agglo_method = _agglo_method_row(lock)
-    st.sidebar.button(
-        "Clear",
-        on_click=_clear_session,
-        width="stretch",
-        help="Reset all inputs, the method selection and the run queue. "
-        "Computed results on disk are kept.",
-    )
-
     sc_path = Path(sc_str.strip()) if sc_str.strip() else None
     st_path = Path(st_str.strip()) if st_str.strip() else None
     out_path = Path(out_str.strip()) if out_str.strip() else None
 
-    problems = []
-    if sc_path is None or not sc_path.is_file():
-        problems.append("Set a valid scRNA .h5ad path.")
-    if st_path is None or not st_path.is_file():
-        problems.append("Set a valid ST .h5ad path.")
-    if out_path is None:
-        problems.append("Set an output directory.")
-    if problems:
-        for p in problems:
-            st.sidebar.warning(p)
+    incomplete = (
+        sc_path is None
+        or not sc_path.is_file()
+        or st_path is None
+        or not st_path.is_file()
+        or out_path is None
+    )
+
+    # -- step 2: scaffold knobs + methods ---------------------------------
+    # The header stays visible while step 1 is incomplete; its controls need the
+    # paths (start clusters read the scRNA obs, the rest lock against the output
+    # folder), so they are replaced by a hint until then.
+    st.sidebar.divider()
+    st.sidebar.subheader("2. Configure method")
+    if incomplete:
+        st.sidebar.caption("Select data first.")
         return None
     out_path.mkdir(parents=True, exist_ok=True)
+
+    # Settings the scaffold is built from lock once this folder holds runs.
+    lock = _run_lock(out_str)
+    start_from_annotation = _start_cluster_row(sc_str, lock)
+
+    agglo_method = _agglo_method_row(lock)
 
     settings = argparse.Namespace(
         scdata=sc_path,
@@ -1160,67 +1353,83 @@ def _sidebar() -> argparse.Namespace | None:
         output_dir=out_path,
         k_min=_DEFAULT_K_MIN,
         k_max=_DEFAULT_K_MAX,
-        k_step=int(k_step),
+        k_step=_DEFAULT_K_STEP,
         agglo_tree_method=str(agglo_method),
         start_from_annotation=start_from_annotation,
     )
 
-    # -- methods: locked (computed) + status + selectable remainder ------
+    # methods: every choice stays listed; state decides whether its row is live
     runs: dict[str, compute.MapperRun] = st.session_state.setdefault("runs", {})
     queue: list[str] = st.session_state.setdefault("queue", [])
     computed = data_access.list_mappers(out_path)
     running_mapper = next((m for m, r in runs.items() if r.is_running()), None)
 
-    st.sidebar.divider()
-    st.sidebar.subheader("Methods")
-
-    # A running mapper already has config.yaml on disk (so it is in `computed`);
-    # don't mark it done until its thread finishes.
-    finished = [m for m in computed if m != running_mapper]
-    status_lines = [f"{m}" for m in finished]
-    if running_mapper:
-        status_lines.append(f"⏳ {running_mapper} (running)")
-    status_lines += [f"🕒 {m} (queued)" for m in queue]
-    if status_lines:
-        st.sidebar.markdown("\n".join(f"- {line}" for line in status_lines))
-
+    # A method that is computed, running or queued is locked on: its row shows
+    # ticked and disabled instead of leaving the list.
     taken = set(computed) | set(queue)
     if running_mapper:
         taken.add(running_mapper)
-    selectable = _selectable_methods()
-    remaining = [m for m in selectable if m not in taken]
+    selectable = set(_selectable_methods())
 
-    # Reference aligners whose conda env is missing can't run; flag them (unless
-    # they're already computed on disk from an env that existed earlier).
-    unavailable = [
-        m for m in MAPPING_CHOICES if m not in selectable and m not in computed
-    ]
-    if unavailable:
-        st.sidebar.caption(
-            "Unavailable (conda env not found): " + ", ".join(unavailable)
-        )
+    st.sidebar.markdown(
+        "<div class='aim-group-label'>Select mapping methods to run "
+        "(1 or more)</div>",
+        unsafe_allow_html=True,
+    )
+    from aim.aim_config import _INPROCESS_METHODS
 
-    if remaining:
-        selected = st.sidebar.pills(
-            "Add methods to run",
-            remaining,
-            selection_mode="multi",
-            key="add_methods",
-            help="Pick one or more; they compute one after another. Reference "
-            "aligners appear only when their conda env is installed.",
-        )
-        if st.sidebar.button("Run selected", disabled=not selected, width="stretch"):
-            for m in selected:
-                if m not in queue:
-                    queue.append(m)
-            # Flag a pending run so the empty-state prompt never flashes before
-            # the first tab appears; cleared once any tab renders. No st.rerun()
-            # here: letting main() continue in this same run starts the method and
-            # renders its progress tab immediately, so the idle "select methods"
-            # prompt is replaced in place instead of lingering until the next run.
-            st.session_state["_run_requested"] = True
-    else:
-        st.sidebar.caption("All methods are computed or queued.")
+    # nearest_centroid is the default mapper, so it starts ticked; a manual
+    # untick sticks (setdefault only fills the key in on a fresh session).
+    st.session_state.setdefault("add_nearest_centroid", True)
+    box = st.sidebar.container(border=True, gap=0, key="methods_box")
+    selected = []
+    heading_shown: set[str] = set()
+    for m in MAPPING_CHOICES:
+        heading = "Baseline mappers" if m in _INPROCESS_METHODS else "Reference mappers"
+        if heading not in heading_shown:
+            first = "" if heading_shown else " aim-first"
+            heading_shown.add(heading)
+            box.markdown(
+                f"<div class='aim-mapper-group{first}'>{heading}</div>",
+                unsafe_allow_html=True,
+            )
+        label = _MAPPER_LABELS.get(m, m)
+        if m in taken:
+            # A running mapper already has config.yaml on disk (so it is in
+            # `computed`); don't call it done until its thread finishes.
+            if m == running_mapper:
+                state = "⏳ running"
+            elif m in computed:
+                state = "computed"
+            else:
+                state = "🕒 queued"
+            # Own key namespace: `add_<m>` may already hold the user's tick.
+            box.checkbox(
+                f"{label} — {state}", value=True, disabled=True, key=f"done_{m}"
+            )
+        elif m in selectable:
+            if box.checkbox(label, key=f"add_{m}"):
+                selected.append(m)
+        else:
+            box.checkbox(
+                f"{label} — conda env not found", disabled=True, key=f"add_{m}"
+            )
+    st.sidebar.divider()
+    if st.sidebar.button(
+        "Run",
+        disabled=not selected,
+        width="stretch",
+        help="The selected methods compute one after another.",
+    ):
+        for m in selected:
+            if m not in queue:
+                queue.append(m)
+        # Flag a pending run so the empty-state prompt never flashes before the
+        # first tab appears; cleared once any tab renders. No st.rerun() here:
+        # letting main() continue in this same run starts the method and renders
+        # its progress tab immediately, so the idle "select methods" prompt is
+        # replaced in place instead of lingering until the next run.
+        st.session_state["_run_requested"] = True
 
     # Surface failures.
     for m, r in list(runs.items()):
@@ -1327,7 +1536,8 @@ def main() -> None:
     if settings is None:
         st.title("AIM results explorer")
         st.info(
-            "Set the scRNA path, ST path, and output directory in the sidebar to begin."
+            "Set the scRNA path (.h5ad format), ST path (.h5ad format), and "
+            "output directory in the sidebar to begin."
         )
         return
 
