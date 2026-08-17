@@ -37,7 +37,9 @@ from aim.analysis.loading import (
 )
 from aim.analysis.utils import to_dense
 
-from . import data_access, scores
+from aim.metrics import kselection as scores
+
+from . import data_access
 
 logger = logging.getLogger(__name__)
 
@@ -1177,7 +1179,7 @@ def _card_layout(fig: go.Figure, *, height: int, **extra) -> go.Figure:
 # --------------------------------------------------------------------------- #
 # Two rows of three cards, all linked client-side by ``widgets.linked_plot``: one
 # line card per criterion (its two measured curves plus their harmonic mean, see
-# gui/scores.py) and one scatter card per criterion pair (one dot per K, at its
+# aim/metrics/kselection.py) and one scatter card per criterion pair (one dot per K, at its
 # two harmonic means). Every K-indexed trace carries ``customdata[i][0] = K`` --
 # that is what the linked-plot component keys hovering, highlighting and clicking
 # on; the scatter cards additionally stash their null-crosshair coordinates and

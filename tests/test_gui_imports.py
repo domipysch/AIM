@@ -18,7 +18,6 @@ GUI_SUBMODULES = [
     "data_access",
     "render",
     "scaffold",
-    "scores",
     "widgets",
 ]
 

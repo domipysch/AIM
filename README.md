@@ -166,6 +166,11 @@ Each pair is written to `<out_dir>/<PairID>_<scName>__<stName>/`.
 	- `spot_to_state_mapping.csv` — `P` as CSV (for eyeballing).
 	- `start_cluster_to_state.csv` — the start-cluster→state tree cut.
 	- `analysis/data/` — machine-readable metrics for that `K` (no figures; the GUI renders them).
+- `k_comparison.csv` — one row per `K`: the measured metrics, plus each criterion's combined
+    score (harmonic mean of its two curves), the overall score across criteria, and a
+    `pareto` flag.
+- `k_selection.json` — the proposal: the Pareto-optimal `K`, and the best `K` per criterion
+    and overall, each with its score. Same computation the GUI's "Choose K" card shows.
 
 **Sample-dataset example:**
 

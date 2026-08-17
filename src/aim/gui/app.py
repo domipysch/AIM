@@ -28,9 +28,9 @@ from aim.gui import (
     data_access,
     render,
     scaffold,
-    scores,
     widgets,
 )
+from aim.metrics import kselection as scores
 
 if TYPE_CHECKING:
     from anndata import AnnData
@@ -497,50 +497,20 @@ def _best_k_rows(score_table: pd.DataFrame) -> list[tuple[str, int, float, str]]
     """``(description, k, score, slug)`` for the best overall K and the best K per
     criterion.
 
-    Ties go to the smallest K — fewer cell types is the simpler model. A criterion
-    with no finite score anywhere is skipped rather than reported as a winner.
+    Presentation wrapper around :func:`aim.metrics.kselection.best_ks`, which the
+    sweep also writes to ``k_selection.json`` — the card and the file therefore
+    always agree. A criterion with no finite score anywhere is skipped rather than
+    reported as a winner.
     """
-    ks = score_table["k"].to_numpy()
-
-    def _best(values: np.ndarray) -> tuple[int, float] | None:
-        finite = np.isfinite(values)
-        if not finite.any():
-            return None
-        # np.nanargmax already returns the first of equal maxima, i.e. the
-        # smallest K, because the table is ordered by K.
-        index = int(np.nanargmax(np.where(finite, values, -np.inf)))
-        return int(ks[index]), float(values[index])
-
-    rows: list[tuple[str, int, float, str]] = []
-    best_overall = _best(scores.overall(score_table))
-    if best_overall is not None:
-        k, value = best_overall
-        rows.append(
-            (
-                "**Best overall** (harmonic mean across the criteria):",
-                k,
-                value,
-                "overall",
-            )
-        )
-    for criterion in scores.CRITERIA:
-        best = _best(
-            pd.to_numeric(score_table[criterion.key], errors="coerce").to_numpy(
-                dtype=float
-            )
-        )
-        if best is None:
-            continue
-        k, value = best
-        rows.append(
-            (
-                f"**Best {criterion.label.lower()}** (harmonic mean):",
-                k,
-                value,
-                criterion.key,
-            )
-        )
-    return rows
+    best = scores.best_ks(score_table)
+    labels = {"overall": "**Best overall** (harmonic mean across the criteria):"} | {
+        c.key: f"**Best {c.label.lower()}** (harmonic mean):" for c in scores.CRITERIA
+    }
+    return [
+        (labels[slug], hit[0], hit[1], slug)
+        for slug, hit in best.items()
+        if hit is not None
+    ]
 
 
 def _ksweep_section(

@@ -1,4 +1,11 @@
-"""Combined per-K scores for the "Comparing K" card.
+"""Combined per-K scores and the K they select.
+
+Pure computation over the sweep table (``k_comparison.csv``): it reduces each
+criterion's two measured curves to one score per K, ranks the K, and names the
+best one overall and per criterion. Both consumers use it — the sweep writes the
+scores back into ``k_comparison.csv`` and the winning K into ``k_selection.json``
+(see :mod:`aim.analysis.ksweep`), and the GUI's "Comparing K" card renders the
+same numbers on demand.
 
 Each of the three K-sweep criteria is measured by *two* curves over K:
 
@@ -228,4 +235,38 @@ def score_table(df: pd.DataFrame) -> pd.DataFrame:
     for criterion in CRITERIA:
         out[criterion.key] = combined(df, criterion)
         out[f"{criterion.key}{NULL_SUFFIX}"] = combined_null(df, criterion)
+    return out
+
+
+def best_k(table: pd.DataFrame, values: np.ndarray) -> tuple[int, float] | None:
+    """The K with the highest ``values``, or ``None`` if none is finite.
+
+    Ties go to the smallest K — fewer cell types is the simpler model. The table
+    is ordered by K, and ``nanargmax`` returns the first of equal maxima, so that
+    falls out on its own.
+    """
+    ks = table["k"].to_numpy(dtype=int)
+    finite = np.isfinite(values)
+    if not finite.any():
+        return None
+    index = int(np.nanargmax(np.where(finite, values, -np.inf)))
+    return int(ks[index]), float(values[index])
+
+
+def best_ks(table: pd.DataFrame) -> dict[str, tuple[int, float] | None]:
+    """``{"overall": (k, score), "<criterion key>": (k, score), ...}``.
+
+    ``overall`` maximises the harmonic mean across all criteria, so it only
+    favours a K that is good on every one of them; each criterion key maximises
+    that criterion alone. A criterion with no finite score anywhere maps to
+    ``None`` rather than being reported as a winner.
+    """
+    out: dict[str, tuple[int, float] | None] = {
+        "overall": best_k(table, overall(table))
+    }
+    for criterion in CRITERIA:
+        values = pd.to_numeric(table[criterion.key], errors="coerce").to_numpy(
+            dtype=float
+        )
+        out[criterion.key] = best_k(table, values)
     return out

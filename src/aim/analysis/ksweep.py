@@ -1,11 +1,16 @@
 """Cross-K comparison: gather each K's key analysis metrics from its per-K
-``analysis/data`` outputs into one table (``k_comparison.csv``) at the run root.
+``analysis/data`` outputs into one table at the run root (``k_comparison.csv``),
+score them, and record which K each criterion selects (``k_selection.json``).
 
-Reads the files each K's post-mapping analysis already writes (``cossim_summary.csv``,
-``topology_metrics.json``, ``modularity_metrics.json``), so it runs after the K-loop
-with no recomputation — including the label-shuffle nulls those steps measured, which
-the GUI needs alongside the observed values. Metrics missing for a given K come
-through as NaN.
+``k_comparison.csv`` holds the measured metrics *and* what they reduce to: one
+combined score per criterion, the overall score across criteria, and a ``pareto``
+flag. Reads the files each K's post-mapping analysis already writes
+(``cossim_summary.csv``, ``topology_metrics.json``, ``modularity_metrics.json``),
+so it runs after the K-loop with no recomputation — including the label-shuffle
+nulls those steps measured, which the GUI needs alongside the observed values.
+Metrics missing for a given K come through as NaN. The scoring itself lives in
+:mod:`aim.metrics.kselection`, so a CLI run and the GUI's "Comparing K" card
+report the same numbers.
 """
 
 from __future__ import annotations
@@ -16,6 +21,8 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+from aim.metrics import kselection
 
 logger = logging.getLogger(__name__)
 
@@ -115,12 +122,63 @@ def collect_k_metrics(output_folder: Path, ks: list[int]) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("k").reset_index(drop=True)
 
 
+def score_k_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """``df`` with the K-selection columns appended: one combined score per
+    criterion, the ``overall`` score across them, and a ``pareto`` flag.
+
+    The combined scores' own label-shuffle nulls are not carried here — only
+    reconstruction has one, and the GUI recomputes it in memory for the chance
+    crosshair; the measured nulls it is derived from are already columns of
+    ``df``.
+    """
+    table = kselection.score_table(df)
+    out = df.copy()
+    for criterion in kselection.CRITERIA:
+        out[criterion.key] = table[criterion.key].to_numpy()
+    out["overall"] = kselection.overall(table)
+    out["pareto"] = kselection.pareto_mask(table)
+    return out
+
+
+def select_k(output_folder: Path, df: pd.DataFrame) -> dict:
+    """Write ``k_selection.json``: which K wins, per criterion and overall.
+
+    The proposal is the Pareto-optimal K plus the best K for each criterion and
+    for the harmonic mean across all of them, each with its score. Same
+    computation the GUI's "Comparing K" card performs, so the CLI no longer
+    hides it. Returns the proposal dict.
+    """
+    table = kselection.score_table(df)
+    best = kselection.best_ks(table)
+    best_json: dict[str, dict[str, float] | None] = {
+        name: (None if hit is None else {"k": hit[0], "score": hit[1]})
+        for name, hit in best.items()
+    }
+    proposal = {
+        "pareto_ks": [int(k) for k in table.loc[kselection.pareto_mask(table), "k"]],
+        "best": best_json,
+        "criteria": {c.key: c.label for c in kselection.CRITERIA},
+    }
+    json_path = output_folder / "k_selection.json"
+    with open(json_path, "w", encoding="utf-8") as fh:
+        json.dump(proposal, fh, indent=2)
+
+    chosen = ", ".join(
+        f"{name}={hit[0]}" for name, hit in best.items() if hit is not None
+    )
+    logger.info("K selection written to %s (%s)", json_path, chosen)
+    return proposal
+
+
 def compare_k_runs(output_folder: Path, ks: list[int]) -> None:
     """Write ``k_comparison.csv`` at the run root: the swept K-runs' reconstruction
-    cosine similarity, spatial organisation, and mapping modularity gathered into
-    one table (the GUI renders the comparison plots from it on demand)."""
+    cosine similarity, spatial organisation and mapping modularity, together with
+    the criterion scores those reduce to, the overall score and the Pareto flag
+    (the GUI renders the comparison plots from it on demand). The winning K per
+    criterion and overall goes to ``k_selection.json`` (see :func:`select_k`)."""
     output_folder = Path(output_folder)
     df = collect_k_metrics(output_folder, ks)
     csv_path = output_folder / "k_comparison.csv"
-    df.to_csv(csv_path, index=False)
+    score_k_metrics(df).to_csv(csv_path, index=False)
     logger.info("K-sweep comparison written to %s", csv_path)
+    select_k(output_folder, df)
