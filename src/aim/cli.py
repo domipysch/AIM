@@ -272,8 +272,8 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
         choices=list(AGGLO_TREE_METHODS),
         default=AGGLO_TREE_METHODS[0],
         help="Linkage for the agglomeration tree over the start clusters: "
-        "'ward' (default) carries a size term and tends to produce balanced "
-        "states; 'average' (UPGMA) peels small tight groups off a dominant state.",
+        "'average' (default, UPGMA) peels small tight groups off a dominant "
+        "state; 'ward' carries a size term and tends to produce balanced states.",
     )
     p.add_argument("--k_min", type=int, default=None)
     p.add_argument("--k_max", type=int, default=None)

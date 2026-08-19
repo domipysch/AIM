@@ -40,18 +40,18 @@ def build_agglomeration_tree(
     ``method`` is one of ``AGGLO_TREE_METHODS`` (``aim_config``), i.e. the same set
     the ``--agglo_tree_method`` CLI flag and the GUI sidebar offer:
 
-    - ``"ward"`` (default): Ward's criterion, reproducing the paper's
+    - ``"average"`` (default): UPGMA — average pairwise distance. No squaring
+      convention applies (average linkage has no ward.D/ward.D2 distinction and does
+      not square internally), so it runs on the plain Euclidean distances ``d``; this
+      also keeps both methods operating on the same ``d``, so they are directly
+      comparable. Average linkage has no size term and tends to peel small tight
+      groups off a growing dominant state.
+    - ``"ward"``: Ward's criterion, reproducing the paper's
       ``hclust(dist(...), method="ward.D")``. scipy's ``method="ward"`` is R's
       *ward.D2* (it squares the input internally), so the unsquared Euclidean
       distances are passed as ``sqrt(d)`` to recover ward.D, using the identity
       ``ward.D(d) == ward.D2(sqrt(d))``. Ward carries a size term and tends to
       produce balanced states.
-    - ``"average"``: UPGMA — average pairwise distance. No squaring convention
-      applies (average linkage has no ward.D/ward.D2 distinction and does not square
-      internally), so it runs on the plain Euclidean distances ``d``; this also keeps
-      both methods operating on the same ``d``, so they are directly comparable.
-      Average linkage has no size term and tends to peel small tight groups off a
-      growing dominant state.
 
     Every leaf is weighted equally regardless of how many cells it pools, so this is
     agglomeration over the profiles, not over the underlying cells. Rows that are zero

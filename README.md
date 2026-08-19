@@ -117,8 +117,8 @@ The spot→state mapper is chosen with argument `--mapping`:
 
 The linkage of the agglomeration tree over the start clusters is chosen with `--agglo_tree_method`:
 
-- **`ward`** (default): Ward's criterion (R's `ward.D`); carries a size term and tends to produce balanced states.
-- **`average`**: UPGMA — average pairwise distance; no size term, tends to peel small tight groups off a growing dominant state.
+- **`average`** (default): UPGMA — average pairwise distance; no size term, tends to peel small tight groups off a growing dominant state.
+- **`ward`**: Ward's criterion (R's `ward.D`); carries a size term and tends to produce balanced states.
 
 The **start clusters** the tree is built over come from the Leiden over-clustering by default.
 Pass `--start_from_annotation <obs_column>` to use a pre-existing annotation instead: its cell types become the start clusters, no over-clustering is computed at all,
@@ -132,7 +132,7 @@ aim run --scdata path/to/sc.h5ad \
 		--stdata path/to/st.h5ad \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
-		[--agglo_tree_method ward|average] \
+		[--agglo_tree_method average|ward] \
 		[--start_from_annotation <obs_column>] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \
@@ -147,7 +147,7 @@ aim run --pairs_csv path/to/pairs.csv \
 		--st_dir path/to/ST \
 		--output_dir path/to/out_dir \
 		[--mapping nearest_centroid|wann|tangram|tacco|dot] \
-		[--agglo_tree_method ward|average] \
+		[--agglo_tree_method average|ward] \
 		[--start_from_annotation <obs_column>] \
 		[--leiden_resolution 3.0] \
 		[--k_min 1] [--k_max <L>] [--k_step 1] \

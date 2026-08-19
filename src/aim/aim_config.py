@@ -25,7 +25,7 @@ MAPPING_CHOICES = _INPROCESS_METHODS + _REFERENCE_METHODS
 # Linkage choices for the agglomeration tree over the start clusters, first
 # entry being the default. Single source of truth: the CLI parser and the GUI
 # sidebar offer these, and ``tree.build_agglomeration_tree`` validates against them.
-AGGLO_TREE_METHODS = ("ward", "average")
+AGGLO_TREE_METHODS = ("average", "ward")
 
 
 @dataclass
@@ -35,7 +35,7 @@ class AIMConfig:
 
     mapping: str = "nearest_centroid"
     leiden_resolution: float = 3.0
-    # Agglomeration-tree linkage: "ward" (balanced states) or "average" (UPGMA).
+    # Agglomeration-tree linkage: "average" (UPGMA) or "ward" (balanced states).
     agglo_tree_method: str = AGGLO_TREE_METHODS[0]
     # Start clusters (what the agglomeration tree is built over): None = Leiden
     # over-clustering; an obs column name = use that annotation instead, in which

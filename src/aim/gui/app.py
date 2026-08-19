@@ -52,8 +52,8 @@ _LEIDEN_START_LABEL = "No (default, use Leiden over-clustering)"
 _NO_ANNOTATION_LABEL = "No annotations found in scRNA data"
 # Display-only labels; the raw method names go into the run config.
 _AGGLO_LABELS = {
-    "ward": "ward - more balanced cell types",
     "average": "average - allow for outlier cell types",
+    "ward": "ward - more balanced cell types",
 }
 # Display-only labels for the mapper checkboxes; the keys stay the raw names.
 _MAPPER_LABELS = {
@@ -511,6 +511,16 @@ def _best_k_rows(score_table: pd.DataFrame) -> list[tuple[str, int, float, str]]
         for slug, hit in best.items()
         if hit is not None
     ]
+
+
+def _best_overall_k(root: Path) -> int | None:
+    """One mapper's best overall K, or ``None`` while its sweep table is missing
+    or nothing in it could be scored yet. Same source as the "Choose K" card."""
+    df = data_access.ksweep_table(root)
+    if df is None or df.empty:
+        return None
+    hit = scores.best_ks(scores.score_table(df)).get("overall")
+    return None if hit is None else int(hit[0])
 
 
 def _ksweep_section(
@@ -1207,8 +1217,8 @@ def _agglo_method_row(lock: dict | None) -> str:
             format_func=_fmt,
             key="cfg_agglo",
             help="Linkage for the agglomeration tree over the start clusters. "
-            "'ward' carries a size term and tends to produce balanced cell types; "
-            "'average' (UPGMA) peels small tight groups off a dominant cell type.",
+            "'average' (UPGMA) peels small tight groups off a dominant cell type; "
+            "'ward' carries a size term and tends to produce balanced cell types.",
         )
     )
 
@@ -1412,6 +1422,34 @@ def _sidebar() -> argparse.Namespace | None:
 # --------------------------------------------------------------------------- #
 # Main
 # --------------------------------------------------------------------------- #
+# Session-state key of the tab bar; holds the active tab's label.
+_TABS_KEY = "result_tabs"
+
+
+def _tab_change_callback(
+    output_dir: Path, tab_mappers: list[str], ks_all: list[int]
+) -> Callable[[], None]:
+    """``on_change`` for the tab bar: opening a mapper's tab moves the shared K
+    slider onto that mapper's best overall K, so each tab lands on the K its own
+    sweep proposes instead of on whatever the previous tab was showing.
+
+    Runs as a widget callback, i.e. before the script body re-instantiates the
+    slider, so writing its session-state key is allowed. Nothing happens on the
+    reference and Compare tabs, or while a mapper has no scored K yet — the K on
+    show then simply carries over.
+    """
+
+    def _on_change() -> None:
+        mapper = st.session_state.get(_TABS_KEY)
+        if mapper not in tab_mappers:
+            return
+        k = _best_overall_k(data_access.run_root(output_dir, str(mapper)))
+        if k is not None and k in ks_all:
+            _set_ctrl_k(ks_all.index(k))
+
+    return _on_change
+
+
 def _render_body(
     settings: argparse.Namespace,
     runs: dict,
@@ -1479,12 +1517,16 @@ def _render_body(
 
     labels: list[str] = []
     if ref_available:
-        labels.append("🧬 Single-cell reference")
+        labels.append("Single-cell reference")
     labels += list(tab_mappers)
     if compare_available:
         labels.append("⇄ Compare")
 
-    tabs = st.tabs(labels)
+    tabs = st.tabs(
+        labels,
+        key=_TABS_KEY,
+        on_change=_tab_change_callback(settings.output_dir, tab_mappers, ks_all),
+    )
     idx = 0
     if ref_available:
         with tabs[idx]:
