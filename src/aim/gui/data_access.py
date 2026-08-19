@@ -282,8 +282,11 @@ def start_from_annotation_from_config(output_dir: Path) -> str | None:
     return str(value) if value is not None else None
 
 
-def agglo_tree_method_from_config(output_dir: Path) -> str | None:
+def linkage_method_from_config(output_dir: Path) -> str | None:
     """Best-effort read of the agglomeration linkage any mapper's config.yaml
-    recorded. ``None`` when no config records it (an older run root)."""
-    value = _config_value(output_dir, "agglo_tree_method")
+    recorded. ``None`` when no config records it (an older run root). Falls back to
+    ``agglo_tree_method``, the key's name before it was renamed."""
+    value = _config_value(output_dir, "linkage_method")
+    if value is None:
+        value = _config_value(output_dir, "agglo_tree_method")
     return str(value) if value is not None else None

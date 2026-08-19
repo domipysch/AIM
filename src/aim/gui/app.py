@@ -19,7 +19,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from aim import AGGLO_TREE_METHODS, MAPPING_CHOICES
+from aim import LINKAGE_METHODS, MAPPING_CHOICES
 from aim.adata_schema import OBSM_UMAP_SHARED_GENES
 from aim.mapping.confidence import N_TOP_STATES
 
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 # port. The K range is fixed to the full sweep (k_min = 1, k_max = L, where L is
 # the start-cluster count discovered at runtime); only the step is
 # user-editable. The agglomeration linkage is chosen in the sidebar, from the same
-# AGGLO_TREE_METHODS the `--agglo_tree_method` CLI flag offers.
+# LINKAGE_METHODS the `--linkage_method` CLI flag offers.
 _DEFAULT_K_MIN: int = 1
 _DEFAULT_K_MAX: int | None = None
 _DEFAULT_K_STEP = 1
@@ -51,7 +51,7 @@ _DEFAULT_K_STEP = 1
 _LEIDEN_START_LABEL = "No (default, use Leiden over-clustering)"
 _NO_ANNOTATION_LABEL = "No annotations found in scRNA data"
 # Display-only labels; the raw method names go into the run config.
-_AGGLO_LABELS = {
+_LINKAGE_LABELS = {
     "average": "average - allow for outlier cell types",
     "ward": "ward - more balanced cell types",
 }
@@ -1106,7 +1106,7 @@ def _clear_session() -> None:
     st.session_state["cfg_sc"] = ""
     st.session_state["cfg_st"] = ""
     st.session_state["cfg_out"] = ""
-    st.session_state["cfg_agglo"] = AGGLO_TREE_METHODS[0]
+    st.session_state["cfg_linkage"] = LINKAGE_METHODS[0]
     st.session_state["cfg_start"] = _LEIDEN_START_LABEL
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
@@ -1139,7 +1139,7 @@ def _run_lock(out_str: str) -> dict | None:
         "start_from_annotation": data_access.start_from_annotation_from_config(
             out_path
         ),
-        "agglo_tree_method": data_access.agglo_tree_method_from_config(out_path),
+        "linkage_method": data_access.linkage_method_from_config(out_path),
     }
 
 
@@ -1193,18 +1193,18 @@ def _start_cluster_row(sc_str: str, lock: dict | None) -> str | None:
     return None if choice == _LEIDEN_START_LABEL else str(choice)
 
 
-def _agglo_method_row(lock: dict | None) -> str:
+def _linkage_method_row(lock: dict | None) -> str:
     """Sidebar picker for the agglomeration linkage, disabled and pinned to the
     recorded value once the output folder holds runs."""
 
     def _fmt(method: str) -> str:
-        return _AGGLO_LABELS.get(str(method), str(method))
+        return _LINKAGE_LABELS.get(str(method), str(method))
 
-    if lock is not None and lock["agglo_tree_method"]:
+    if lock is not None and lock["linkage_method"]:
         return str(
             st.sidebar.selectbox(
                 "Linkage method",
-                [lock["agglo_tree_method"]],
+                [lock["linkage_method"]],
                 format_func=_fmt,
                 disabled=True,
                 help=_LOCKED_HELP,
@@ -1213,9 +1213,9 @@ def _agglo_method_row(lock: dict | None) -> str:
     return str(
         st.sidebar.selectbox(
             "Linkage method",
-            AGGLO_TREE_METHODS,
+            LINKAGE_METHODS,
             format_func=_fmt,
-            key="cfg_agglo",
+            key="cfg_linkage",
             help="Linkage for the agglomeration tree over the start clusters. "
             "'average' (UPGMA) peels small tight groups off a dominant cell type; "
             "'ward' carries a size term and tends to produce balanced cell types.",
@@ -1275,7 +1275,7 @@ def _sidebar() -> argparse.Namespace | None:
     st.session_state.setdefault("cfg_sc", "")
     st.session_state.setdefault("cfg_st", "")
     st.session_state.setdefault("cfg_out", "")
-    st.session_state.setdefault("cfg_agglo", AGGLO_TREE_METHODS[0])
+    st.session_state.setdefault("cfg_linkage", LINKAGE_METHODS[0])
 
     def _path_row(label: str, key: str, kind: str, browse_key: str) -> str:
         # Text field with an icon-only Browse button to its right (bottom-aligned
@@ -1325,7 +1325,7 @@ def _sidebar() -> argparse.Namespace | None:
     lock = _run_lock(out_str)
     start_from_annotation = _start_cluster_row(sc_str, lock)
 
-    agglo_method = _agglo_method_row(lock)
+    linkage_method = _linkage_method_row(lock)
 
     settings = argparse.Namespace(
         scdata=sc_path,
@@ -1334,7 +1334,7 @@ def _sidebar() -> argparse.Namespace | None:
         k_min=_DEFAULT_K_MIN,
         k_max=_DEFAULT_K_MAX,
         k_step=_DEFAULT_K_STEP,
-        agglo_tree_method=str(agglo_method),
+        linkage_method=str(linkage_method),
         start_from_annotation=start_from_annotation,
     )
 
@@ -1569,7 +1569,7 @@ def main() -> None:
             settings.k_min,
             settings.k_max,
             settings.k_step,
-            agglo_tree_method=settings.agglo_tree_method,
+            linkage_method=settings.linkage_method,
             start_from_annotation=settings.start_from_annotation,
         ).start()
         running = True

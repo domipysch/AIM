@@ -43,7 +43,7 @@ warnings.filterwarnings(
 )
 
 # Light imports only - both are scanpy-free and just feed the parser.
-from aim.aim_config import AGGLO_TREE_METHODS, MAPPING_CHOICES
+from aim.aim_config import LINKAGE_METHODS, MAPPING_CHOICES
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -104,7 +104,7 @@ def run_one_pair(
         st_path=st_path,
         root_output_folder=root_output_folder,
         mapper=config.build_mapper(),
-        agglo_tree_method=config.agglo_tree_method,
+        linkage_method=config.linkage_method,
         leiden_resolution=config.leiden_resolution,
         k_min=config.k_min,
         k_max=config.k_max,
@@ -167,7 +167,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
     config = AIMConfig(
         mapping=args.mapping,
         leiden_resolution=args.leiden_resolution,
-        agglo_tree_method=args.agglo_tree_method,
+        linkage_method=args.linkage_method,
         k_min=args.k_min,
         k_max=args.k_max,
         k_step=args.k_step,
@@ -268,9 +268,9 @@ def _add_run_parser(sub: "argparse._SubParsersAction") -> None:
     )
     p.add_argument("--leiden_resolution", type=float, default=3.0)
     p.add_argument(
-        "--agglo_tree_method",
-        choices=list(AGGLO_TREE_METHODS),
-        default=AGGLO_TREE_METHODS[0],
+        "--linkage_method",
+        choices=list(LINKAGE_METHODS),
+        default=LINKAGE_METHODS[0],
         help="Linkage for the agglomeration tree over the start clusters: "
         "'average' (default, UPGMA) peels small tight groups off a dominant "
         "state; 'ward' carries a size term and tends to produce balanced states.",

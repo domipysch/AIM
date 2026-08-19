@@ -15,7 +15,7 @@ import threading
 import traceback
 from pathlib import Path
 
-from aim import AGGLO_TREE_METHODS, AIMConfig
+from aim import AIMConfig, LINKAGE_METHODS
 from aim.cli import run_one_pair
 
 from . import data_access
@@ -39,7 +39,7 @@ class MapperRun:
         k_min: int | None,
         k_max: int | None,
         k_step: int,
-        agglo_tree_method: str = AGGLO_TREE_METHODS[0],
+        linkage_method: str = LINKAGE_METHODS[0],
         start_from_annotation: str | None = None,
     ) -> None:
         self.mapper = mapper
@@ -50,7 +50,7 @@ class MapperRun:
         self.k_min = k_min
         self.k_max = k_max
         self.k_step = k_step
-        self.agglo_tree_method = agglo_tree_method
+        self.linkage_method = linkage_method
         self.start_from_annotation = start_from_annotation
         self.error: str | None = None
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -64,7 +64,7 @@ class MapperRun:
             cfg = AIMConfig(
                 mapping=self.mapper,
                 leiden_resolution=DEFAULT_LEIDEN_RESOLUTION,
-                agglo_tree_method=self.agglo_tree_method,
+                linkage_method=self.linkage_method,
                 k_min=self.k_min,
                 k_max=self.k_max,
                 k_step=self.k_step,

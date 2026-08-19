@@ -5,12 +5,12 @@ import numpy as np
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.spatial.distance import pdist
 
-from aim.aim_config import AGGLO_TREE_METHODS
+from aim.aim_config import LINKAGE_METHODS
 
 
 def build_agglomeration_tree(
     centroids: np.ndarray,
-    method: str = AGGLO_TREE_METHODS[0],
+    method: str = LINKAGE_METHODS[0],
     eps: float = 1e-8,
 ) -> np.ndarray:
     """Linkage matrix over the start-cluster centroids, following the tree construction of
@@ -37,8 +37,8 @@ def build_agglomeration_tree(
     genes) is also omitted — the tree is built on whatever genes ``centroids``
     carries, i.e. all shared genes in the AIM sweep.
 
-    ``method`` is one of ``AGGLO_TREE_METHODS`` (``aim_config``), i.e. the same set
-    the ``--agglo_tree_method`` CLI flag and the GUI sidebar offer:
+    ``method`` is one of ``LINKAGE_METHODS`` (``aim_config``), i.e. the same set
+    the ``--linkage_method`` CLI flag and the GUI sidebar offer:
 
     - ``"average"`` (default): UPGMA — average pairwise distance. No squaring
       convention applies (average linkage has no ward.D/ward.D2 distinction and does
@@ -58,8 +58,8 @@ def build_agglomeration_tree(
     across every gene stay zero; the all-zero centroid rows nudged to a uniform
     ``1e-6`` by ``compute_start_cluster_aggregates`` become a uniform composition here.
     """
-    if method not in AGGLO_TREE_METHODS:
-        raise ValueError(f"method must be one of {AGGLO_TREE_METHODS}, got {method!r}")
+    if method not in LINKAGE_METHODS:
+        raise ValueError(f"method must be one of {LINKAGE_METHODS}, got {method!r}")
 
     profiles = np.asarray(centroids, dtype=np.float64)
     if profiles.shape[0] < 2:

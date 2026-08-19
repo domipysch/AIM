@@ -22,7 +22,7 @@ from aim.adata_schema import (
     OBSM_UMAP_SHARED_GENES,
     UNS_START_CLUSTER_CENTROIDS_SHARED_GENES,
 )
-from aim.aim_config import AGGLO_TREE_METHODS
+from aim.aim_config import LINKAGE_METHODS
 from aim.analysis.analysis import run_analysis
 from aim.analysis.ksweep import compare_k_runs
 from .aggregation import compute_start_cluster_aggregates
@@ -147,7 +147,7 @@ def run(
     st_path: Path,
     root_output_folder: Path,
     mapper: SpotStateMapper,
-    agglo_tree_method: str = AGGLO_TREE_METHODS[0],
+    linkage_method: str = LINKAGE_METHODS[0],
     leiden_resolution: float = 3.0,
     k_min: int | None = None,
     k_max: int | None = None,
@@ -206,7 +206,7 @@ def run(
 
     agglomerative_clustering = build_agglomeration_tree(
         adata_sc.uns[UNS_START_CLUSTER_CENTROIDS_SHARED_GENES],
-        method=agglo_tree_method,
+        method=linkage_method,
     )
 
     n_start_clusters = adata_sc.uns[UNS_N_START_CLUSTERS]

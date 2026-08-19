@@ -13,16 +13,16 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 _LAZY = {
-    "AGGLO_TREE_METHODS": ("aim.aim_config", "AGGLO_TREE_METHODS"),
     "AIMConfig": ("aim.aim_config", "AIMConfig"),
+    "LINKAGE_METHODS": ("aim.aim_config", "LINKAGE_METHODS"),
     "MAPPING_CHOICES": ("aim.aim_config", "MAPPING_CHOICES"),
     "SpotStateMapper": ("aim.mapping", "SpotStateMapper"),
     "run": ("aim.sweep", "run"),
 }
 
 __all__ = [
-    "AGGLO_TREE_METHODS",
     "AIMConfig",
+    "LINKAGE_METHODS",
     "MAPPING_CHOICES",
     "run",
     "SpotStateMapper",
@@ -42,6 +42,6 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:  # let type checkers and IDEs see the real symbols
-    from aim.aim_config import AGGLO_TREE_METHODS, MAPPING_CHOICES, AIMConfig
+    from aim.aim_config import LINKAGE_METHODS, MAPPING_CHOICES, AIMConfig
     from aim.mapping import SpotStateMapper
     from aim.sweep import run
