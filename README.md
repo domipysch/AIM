@@ -1,5 +1,15 @@
 # AIM — Annotation-Independent Mapping
 
+**Quick install**
+
+```bash
+# Install from PyPi
+pip install spatial-aim
+# Run GUI
+aim gui
+```
+
+---
 
 **AIM** maps an **unannotated** scRNA-seq reference (scRNA) onto single-cell-resolution spatial transcriptomics (ST) in a **GUI** or **CLI**. For a scRNA/ST pair it:
 
