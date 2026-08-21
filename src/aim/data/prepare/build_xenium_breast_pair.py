@@ -59,13 +59,13 @@ EXPERIMENT_MATCH = "same_paper"
 SCFFPE_SHEET = "scFFPE-Seq"
 XENIUM_SHEET = "Xenium R1 Fig1-5 (supervised)"
 
-DEFAULT_DATA_ROOT = Path(r"C:/Users/zi69hebi/Dev/10_Alignment/Data/01_Datasets")
+DEFAULT_DATA_ROOT = Path(r"/01_Datasets")
 
 
 def _uppercase_and_collapse(adata: ad.AnnData) -> ad.AnnData:
     """Uppercase var_names, then sum counts of any genes that collide into one column.
 
-    Keeps var_names unique + uppercase so validate_database passes and shared-gene
+    Keeps var_names unique + uppercase so `aim validate` passes and shared-gene
     intersection with the ST panel is exact.
     """
     names = pd.Index([g.upper() for g in adata.var_names])
@@ -302,7 +302,7 @@ def main() -> None:
     )
 
     logger.info(
-        "Done. Next: python -m data_preparation.validate_database -d %s", args.data_root
+        "Done. Next: aim validate --pairs_csv %s", Path(args.data_root) / "pairs.csv"
     )
 
 

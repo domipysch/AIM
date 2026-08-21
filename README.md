@@ -68,7 +68,7 @@ DATA/
 └── pairs.csv              # links scRNA ↔ ST: PairID, scName, stName, …
 ```
 
-See [`sample_dataset/`](sample_dataset) for a minimal example, and validate your own layout with [`aim data validate`](#validate-a-dataset-aim-data-validate).
+See [`sample_dataset/`](sample_dataset) for a minimal example, and validate your own layout with [`aim validate`](#validate-a-dataset-pair-aim-validate).
 
 ## For users
 
@@ -96,14 +96,33 @@ Please install the corresponding conda environments on your computer.
 > Either set the environment variable `CONDA_EXE` or add your path to your conda installation to `PATH`.
 > Make sure `exe = os.environ.get("CONDA_EXE") or shutil.which("conda")` returns the path to your conda.
 
-### Validate a dataset pair (`aim data validate`)
+### Validate a dataset pair (`aim validate`)
 
-If you have structured your data as shown in section [Batch Processing](#batch-processing), you can check whether the main requirements are met.
-It checks every scRNA and ST `.h5ad` against its `index.csv` row and validates all count matrices (raw counts, uppercase gene names, shapes, ST spatial coords present). Exits non-zero on any error.
+Check whether your data meets the main requirements.
 
 ```bash
-aim data validate --data-root path/to/DATA
+aim validate --scdata path/to/sc.h5ad --stdata path/to/st.h5ad
 ```
+
+or for every pair of a `pairs.csv` laid out as in [Batch Processing](#batch-processing):
+
+```bash
+aim validate --pairs_csv path/to/DATA/pairs.csv
+```
+
+Validations per dataset:
+
+- scRNA reference data alone
+  - raw count matrices (no NaN values, np negative values, integer-looking, not library-size normalized or log1p'd)
+  - unique uppercase gene names
+- ST data alone
+  - raw count matrices (no NaN values, np negative values, integer-looking, not library-size normalized or log1p'd)
+  - unique uppercase gene names
+  - `obsm["spatial"]` of shape `(n_spots, 2)`.
+- Per pair
+  - the size of the shared-gene intersection
+  - whether any ST spot is left all-zero by it.
+- If an `index.csv` sits next to the `.h5ad` files, its recorded counts and cell-type keys are cross-checked as well.
 
 ### Run via GUI (`aim gui`)
 

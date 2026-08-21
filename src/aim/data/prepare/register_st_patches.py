@@ -30,7 +30,7 @@ import anndata as ad
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DATA_ROOT = Path(r"C:/Users/zi69hebi/Dev/10_Alignment/Data/01_Datasets")
+DEFAULT_DATA_ROOT = Path(r"/01_Datasets")
 _PATCH_RE = re.compile(r"^patch_(\d+)_(\d+)$")
 
 
@@ -171,8 +171,8 @@ def main() -> None:
         base_name,
     )
     logger.info(
-        "Done. Validate with: python -m data_preparation.validate_database -d %s",
-        args.data_root,
+        "Done. Validate with: aim validate --pairs_csv %s",
+        Path(args.data_root) / "pairs.csv",
     )
 
 

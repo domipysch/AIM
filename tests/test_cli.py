@@ -22,10 +22,12 @@ def test_build_parser_lists_all_subcommands():
     ]
     assert subactions, "no subparsers found on the aim parser"
     choices = set(subactions[0].choices)
-    assert {"run", "gui", "data"} <= choices
+    assert {"run", "gui", "validate"} <= choices
     # `aim map-annotation` was removed: `aim run --start_from_annotation` is the
     # annotation path now.
     assert "map-annotation" not in choices
+    # `aim data validate` became the top-level `aim validate`; the `data` group is gone.
+    assert "data" not in choices
 
 
 def test_building_the_parser_loads_no_heavy_modules():
@@ -106,7 +108,34 @@ def test_run_accepts_every_mapper():
     assert exc.value.code == 2
 
 
-def test_data_validate_requires_data_root():
+def test_validate_without_paths_errors():
+    # Neither single-pair nor pairs.csv mode -> usage error, exit 2.
     with pytest.raises(SystemExit) as exc:
-        cli.main(["data", "validate"])
+        cli.main(["validate"])
     assert exc.value.code == 2
+
+
+def test_validate_rejects_mixed_modes():
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["validate", "--pairs_csv", "p.csv", "--scdata", "a.h5ad"])
+    assert exc.value.code == 2
+    # --sc_dir/--st_dir belong to the pairs.csv mode only.
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            ["validate", "--scdata", "a.h5ad", "--stdata", "b.h5ad", "--sc_dir", "d"]
+        )
+    assert exc.value.code == 2
+
+
+def test_validate_parses_both_modes():
+    from pathlib import Path
+
+    parser = cli._build_parser()
+    single = parser.parse_args(["validate", "--scdata", "a.h5ad", "--stdata", "b.h5ad"])
+    assert (single.scdata, single.stdata) == (Path("a.h5ad"), Path("b.h5ad"))
+    assert single.pairs_csv is None
+
+    batch = parser.parse_args(["validate", "--pairs_csv", "DATA/pairs.csv"])
+    assert batch.pairs_csv == Path("DATA/pairs.csv")
+    # sc_dir/st_dir default to scRNA/ and ST/ next to the CSV, resolved by the runner.
+    assert batch.sc_dir is None and batch.st_dir is None

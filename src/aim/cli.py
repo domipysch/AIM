@@ -7,11 +7,12 @@ Subcommands:
                            it from a pre-existing annotation instead of a Leiden
                            over-clustering.
 * ``aim gui``            - launch the interactive Streamlit results GUI.
-* ``aim data validate``  - validate a dataset directory against its index CSVs.
+* ``aim validate``       - validate a single sc/st pair, or every pair of a
+                           ``pairs.csv``, against the h5ad contract.
 
 The method itself lives in the ``aim`` package (see ``aim/__init__.py`` for the
 module map). Heavy imports (scanpy / squidpy) are deferred into the individual
-command handlers so that light commands - ``aim gui``, ``aim data validate``,
+command handlers so that light commands - ``aim gui``, ``aim validate``,
 ``aim --help`` - start without loading the full sweep stack.
 """
 
@@ -190,7 +191,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# aim gui / aim data validate
+# aim gui / aim validate
 # ---------------------------------------------------------------------------
 
 
@@ -200,11 +201,22 @@ def _cmd_gui(args: argparse.Namespace) -> int:
     return launch(server_port=args.server_port)
 
 
-def _cmd_data_validate(args: argparse.Namespace) -> int:
-    from aim.data_preparation import validate_database
+def _cmd_validate(args: argparse.Namespace) -> int:
+    from aim.data.validate import validate_pairs_csv, validate_single_pair
 
-    validate_database.main(["--data-root", str(args.data_root)])
-    return 0
+    if args.pairs_csv is not None:
+        if args.scdata is not None or args.stdata is not None:
+            _fail("--pairs_csv cannot be combined with --scdata/--stdata")
+        return validate_pairs_csv(args.pairs_csv, args.sc_dir, args.st_dir)
+
+    if args.scdata is None or args.stdata is None:
+        _fail(
+            "Provide either --scdata and --stdata (single pair) "
+            "or --pairs_csv (every pair of a pairs.csv)"
+        )
+    if args.sc_dir is not None or args.st_dir is not None:
+        _fail("--sc_dir/--st_dir only apply to --pairs_csv")
+    return validate_single_pair(args.scdata, args.stdata)
 
 
 # ---------------------------------------------------------------------------
@@ -297,24 +309,40 @@ def _add_gui_parser(sub: "argparse._SubParsersAction") -> None:
     p.set_defaults(func=_cmd_gui)
 
 
-def _add_data_parser(sub: "argparse._SubParsersAction") -> None:
-    p = sub.add_parser("data", help="Dataset utilities.")
-    data_sub = p.add_subparsers(dest="data_command", required=True)
-
-    validate = data_sub.add_parser(
+def _add_validate_parser(sub: "argparse._SubParsersAction") -> None:
+    p = sub.add_parser(
         "validate",
-        help="Validate a dataset directory against its index CSVs.",
-        description="Validate every scRNA and ST h5ad against its index.csv row, "
-        "then validate all pairs. Exits non-zero if any errors are found.",
+        help="Validate a single sc/st pair or every pair of a pairs.csv.",
+        description="Check the scRNA and ST h5ads against the AIM contract (raw "
+        "counts, unique uppercase gene names, ST obsm['spatial']) and the pair "
+        "against its shared-gene intersection. With --pairs_csv, an index.csv next "
+        "to the h5ads additionally cross-checks the recorded counts. Exits "
+        "non-zero if any errors are found.",
     )
-    validate.add_argument(
-        "--data-root",
-        "-d",
+    # Single-pair mode
+    p.add_argument("--scdata", type=Path, default=None, help="Single-pair: sc .h5ad")
+    p.add_argument("--stdata", type=Path, default=None, help="Single-pair: ST .h5ad")
+    # Batch mode
+    p.add_argument(
+        "--pairs_csv",
         type=Path,
-        required=True,
-        help="Root folder containing scRNA/, ST/, pairs.csv, and the index CSVs.",
+        default=None,
+        help="Batch: pairs.csv - validates every pair it lists and each dataset "
+        "it references.",
     )
-    validate.set_defaults(func=_cmd_data_validate)
+    p.add_argument(
+        "--sc_dir",
+        type=Path,
+        default=None,
+        help="Batch: folder of scRNA .h5ad (default: scRNA/ next to the pairs.csv)",
+    )
+    p.add_argument(
+        "--st_dir",
+        type=Path,
+        default=None,
+        help="Batch: folder of ST .h5ad (default: ST/ next to the pairs.csv)",
+    )
+    p.set_defaults(func=_cmd_validate)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -329,7 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     _add_run_parser(sub)
     _add_gui_parser(sub)
-    _add_data_parser(sub)
+    _add_validate_parser(sub)
     return parser
 
 

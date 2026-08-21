@@ -40,7 +40,7 @@ from aim.data_preparation.build_xenium_breast_pair import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DATA_ROOT = Path(r"C:/Users/zi69hebi/Dev/10_Alignment/Data/01_Datasets")
+DEFAULT_DATA_ROOT = Path(r"/01_Datasets")
 
 META = {
     "ob": dict(
