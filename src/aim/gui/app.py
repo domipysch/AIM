@@ -35,6 +35,8 @@ from aim.metrics import kselection as scores
 if TYPE_CHECKING:
     from anndata import AnnData
 
+    from aim.data.validate import PairFindings
+
 # --------------------------------------------------------------------------- #
 # Args & cached loaders
 # --------------------------------------------------------------------------- #
@@ -1111,6 +1113,10 @@ def _clear_session() -> None:
     st.session_state["runs"] = {}
     st.session_state["queue"] = []
     st.session_state.pop("_run_requested", None)
+    # Forget which pair was validated, so the next selection reports again.
+    st.session_state.pop("_validation_seen", None)
+    st.session_state.pop("_validation_reopen", None)
+    st.session_state.pop("_show_data_help", None)
     # Drop transient widget state: the method checkboxes, shared controls, and
     # every per-tab / best-K control.
     for k in list(st.session_state.keys()):
@@ -1223,6 +1229,145 @@ def _linkage_method_row(lock: dict | None) -> str:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Dataset validation (the checks behind `aim validate`, reused as-is)
+# --------------------------------------------------------------------------- #
+
+
+@st.cache_data(show_spinner="Validating dataset pair…")
+def _validate_pair(sc_path_str: str, st_path_str: str) -> "PairFindings":
+    """Findings for the selected sc/ST pair, from ``aim.data.validate``.
+
+    Cached per path pair: the checks read both count matrices, so they run once
+    per selection rather than on every rerun.
+    """
+    from aim.data.validate import check_pair
+
+    return check_pair(Path(sc_path_str), Path(st_path_str))
+
+
+def _subject_heading(key: str) -> str:
+    kind, _, name = key.partition(":")
+    return {
+        "sc": f"scRNA reference — {name}",
+        "st": f"ST slice — {name}",
+    }.get(kind, "Pair (shared genes)")
+
+
+@st.dialog("Dataset validation", width="large")
+def _validation_dialog(findings: "PairFindings") -> None:
+    """Modal listing what the validators found. Purely informative — closing it
+    leaves the pair selected and the run configurable."""
+    if findings.errors:
+        st.markdown(
+            "The selected pair violates the AIM input contract. You can continue, "
+            "but the sweep is likely to fail or to produce meaningless results."
+        )
+    else:
+        st.markdown(
+            "The selected pair is usable, but the checks flagged the following."
+        )
+
+    for subject in findings.subjects:
+        if not (subject.errors or subject.warns):
+            continue
+        kind = subject.key.partition(":")[0]
+        st.markdown(f"**{_subject_heading(subject.key)}**")
+        for msg in subject.errors:
+            st.error(msg.removeprefix(f"{kind}: "), icon="❌")
+        for msg in subject.warns:
+            st.warning(msg.removeprefix(f"{kind}: "), icon="⚠️")
+
+    st.caption("Same checks as `aim validate --scdata <sc.h5ad> --stdata <st.h5ad>`.")
+    if st.button("Continue", type="primary", key="validation_close"):
+        st.rerun()
+
+
+def _reopen_validation() -> None:
+    st.session_state["_validation_reopen"] = True
+
+
+def _request_data_help() -> None:
+    st.session_state["_show_data_help"] = True
+
+
+@st.dialog("What AIM expects as input", width="large")
+def _data_requirements_dialog() -> None:
+    """Reference card for the two input files and the pair they form.
+
+    States the contract the validators enforce - keep the two in step when a
+    check in ``aim.data.validate`` changes.
+    """
+    st.markdown(
+        "AIM maps **scRNA-seq reference data** onto **high-resolution spatial transcriptomics data (e.g. MERFISH / Xenium / seqFISH / osmFISH)**. "
+        "Both are expected as `.h5ad` (AnnData) files holding **raw counts**."
+    )
+
+    st.markdown("""
+| | scRNA reference | ST slice |
+|---|---|---|
+| **`X`** | raw counts, cells × genes | raw counts, "cells" × genes |
+| **`var_names`** | gene symbols, **UPPERCASE** and unique | gene symbols, **UPPERCASE** and unique |
+| additional **`obs`** | annotation columns optional | - |
+| **`obsm["spatial"]`** | - | `(n_spots, 2)` x/y coordinates |
+""")
+
+    st.markdown(
+        "As a pair genes are matched **by name**, so both files must use the same "
+        "symbol convention — the uppercase rule is what makes the intersection "
+        "work.\n"
+    )
+
+    st.markdown("**Annotations are optional**")
+    st.markdown(
+        "In default settings AIM does not need one — it over-clusters the reference itself. An scRNA `obs` "
+        "column with cell types can still be chosen under *Override starting "
+        "clusters* to build the tree over that annotation instead."
+    )
+
+    if st.button("Got it", key="data_help_close"):
+        st.rerun()
+
+
+def _validation_row(sc_path: Path, st_path: Path, *, allow_dialog: bool = True) -> None:
+    """Validate the selected pair and report the verdict above the step-2 divider.
+
+    Clean pairs get a one-line tick; anything else opens the modal once per pair
+    (re-openable via *Details*). Findings never block: the user closes the modal
+    and configures the run as before. ``allow_dialog=False`` keeps the status line
+    but suppresses the modal for this rerun, when another dialog already owns it.
+    """
+    key = f"{sc_path}||{st_path}"
+    try:
+        findings = _validate_pair(str(sc_path), str(st_path))
+    except Exception as exc:  # noqa: BLE001 - a failed check must not kill the app
+        st.sidebar.caption(f"⚠️ Could not validate the dataset pair: {exc}")
+        return
+
+    if findings.ok:
+        st.sidebar.caption("✅ Dataset pair matches requirements")
+        return
+
+    n_err, n_warn = len(findings.errors), len(findings.warns)
+    counts = [f"{n_err} error(s)"] if n_err else []
+    counts += [f"{n_warn} warning(s)"] if n_warn else []
+    col_txt, col_btn = st.sidebar.columns([3, 1], vertical_alignment="center")
+    col_txt.caption(f"{'❌' if n_err else '⚠️'} Validation: {', '.join(counts)}")
+    col_btn.button(
+        "Details",
+        key="validation_details",
+        on_click=_reopen_validation,
+        width="stretch",
+    )
+
+    # Auto-open once per pair; afterwards only on demand.
+    seen = st.session_state.get("_validation_seen")
+    wanted = st.session_state.pop("_validation_reopen", False) or seen != key
+    if wanted and allow_dialog:
+        st.session_state["_validation_seen"] = key
+        _validation_dialog(findings)
+
+
 def _sidebar() -> argparse.Namespace | None:
     """Render the sidebar (data paths, start clusters, linkage, method selection +
     run queue).
@@ -1242,11 +1387,15 @@ def _sidebar() -> argparse.Namespace | None:
         "div[class*='st-key-browse_'] button>div{"
         "display:flex;justify-content:center;align-items:center;width:100%;}"
         "div[class*='st-key-browse_'] button p{margin:0;text-align:center;}"
-        "div[class*='st-key-clear_btn']{"
-        "display:flex;justify-content:flex-end;width:100%;}"
-        "div[class*='st-key-clear_btn'] button{"
-        "padding:0.1rem 0.4rem;min-height:0;width:auto;margin-right:0;}"
-        "div[class*='st-key-clear_btn'] button p{font-size:0.75rem;margin:0;}"
+        # Info + Clear share one container so nothing (no column gap, no leftover
+        # column width) can wedge itself between them: a right-aligned flex row
+        # whose items keep their natural width.
+        "div[class*='st-key-hdr_btns']{display:flex;flex-direction:row;"
+        "justify-content:flex-end;align-items:center;gap:0.25rem;width:100%;}"
+        "div[class*='st-key-hdr_btns']>div{width:auto;flex:0 0 auto;}"
+        "div[class*='st-key-hdr_btns'] button{"
+        "padding:0.1rem 0.4rem;min-height:0;width:auto;white-space:nowrap;}"
+        "div[class*='st-key-hdr_btns'] button p{font-size:0.75rem;margin:0;}"
         # Group label for the method list: matches a Streamlit widget label
         # (0.875rem) so it lines up with 'Linkage method' above it.
         ".aim-group-label{font-size:0.875rem;line-height:1.6;margin-bottom:0.25rem;}"
@@ -1263,15 +1412,28 @@ def _sidebar() -> argparse.Namespace | None:
         "</style>",
         unsafe_allow_html=True,
     )
-    col_hdr, col_clear = st.sidebar.columns([2, 1], vertical_alignment="center")
+    col_hdr, col_btns = st.sidebar.columns([3, 2], vertical_alignment="center")
     col_hdr.subheader("1. Select data")
-    col_clear.button(
+    with col_btns:
+        btns = st.container(key="hdr_btns")
+    btns.button(
+        "Info",
+        key="info_btn",
+        on_click=_request_data_help,
+        help="Expected input data",
+    )
+    btns.button(
         "Clear",
         key="clear_btn",
         on_click=_clear_session,
         help="Reset all inputs, the method selection and the run queue. "
         "Computed results on disk are kept.",
     )
+    # Opening the requirements card takes precedence over the validation modal:
+    # Streamlit allows one dialog per rerun.
+    show_data_help = st.session_state.pop("_show_data_help", False)
+    if show_data_help:
+        _data_requirements_dialog()
     st.session_state.setdefault("cfg_sc", "")
     st.session_state.setdefault("cfg_st", "")
     st.session_state.setdefault("cfg_out", "")
@@ -1309,6 +1471,11 @@ def _sidebar() -> argparse.Namespace | None:
         or not st_path.is_file()
         or out_path is None
     )
+
+    # Both paths point at real files: validate the pair before anything is
+    # configured, so contract violations surface here and not deep in a sweep.
+    if not incomplete:
+        _validation_row(sc_path, st_path, allow_dialog=not show_data_help)
 
     # -- step 2: scaffold knobs + methods ---------------------------------
     # The header stays visible while step 1 is incomplete; its controls need the

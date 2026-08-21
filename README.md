@@ -133,6 +133,7 @@ aim gui [--server_port 8501]
 ```
 
 Open the printed URL (default http://localhost:8501), set the inputs, pick one or multiple mapper(s), and click **Run**.
+As soon as both `.h5ad` paths are set, the GUI runs the same checks as [`aim validate`](#validate-a-dataset-pair-aim-validate) on that pair: a clean pair is confirmed with a tick in the sidebar, any error or warning is shown in a dialog you can close to continue anyway.
 The GUI writes each mapper's sweep to  `<output_dir>/<mapper>/`. The results using each mapper are visualized in different tabs. When having run multiple mappers, also a "Compare" tab appears.
 
 ### Run via CLI (`aim run`)

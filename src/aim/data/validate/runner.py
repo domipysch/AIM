@@ -9,7 +9,9 @@ Two entry points, one per CLI mode:
   up next to the h5ad folders when they exist.
 
 Both return a process exit code (0 = no errors) and print a color-coded line per
-dataset / pair plus a grouped summary of all findings.
+dataset / pair plus a grouped summary of all findings. :func:`check_pair` is the
+same single-pair check without any printing: it returns the findings as data, so
+the GUI can show them in its sidebar without re-implementing a single check.
 
 Datasets are loaded lazily and at most one per side is kept in memory: a
 ``pairs.csv`` with hundreds of ST slices must never hold them all at once.
@@ -18,7 +20,9 @@ Datasets are loaded lazily and at most one per side is kept in memory: a
 from __future__ import annotations
 
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import anndata as ad
 import pandas as pd
@@ -28,7 +32,13 @@ from .validate_pair import validate_pair
 from .validate_sc import validate_sc
 from .validate_st import validate_st
 
-__all__ = ["validate_single_pair", "validate_pairs_csv"]
+__all__ = [
+    "SubjectFindings",
+    "PairFindings",
+    "check_pair",
+    "validate_single_pair",
+    "validate_pairs_csv",
+]
 
 SC_DIR_NAME = "scRNA"
 ST_DIR_NAME = "ST"
@@ -85,29 +95,91 @@ class _Report:
 # ---------------------------------------------------------------------------
 
 
-def validate_single_pair(sc_path: Path, st_path: Path) -> int:
-    """Validate one sc/st pair given as two explicit ``.h5ad`` paths."""
-    sc_path, st_path = Path(sc_path), Path(st_path)
-    report = _Report()
+@dataclass(frozen=True)
+class SubjectFindings:
+    """What the checks found for one subject (the scRNA, the ST, or the pair)."""
 
-    print(f"=== {sc_path.stem} x {st_path.stem} ===")
+    key: str  # stable id, e.g. "sc:<stem>" / "st:<stem>" / "pair"
+    title: str  # display title, e.g. "sc <stem>"
+    errors: list[str]
+    warns: list[str]
+
+    @property
+    def status(self) -> str:
+        return status_of(self.errors, self.warns)
+
+
+@dataclass(frozen=True)
+class PairFindings:
+    """Every finding for one sc/st pair, in check order (sc, st, pair)."""
+
+    subjects: list[SubjectFindings]
+
+    @property
+    def errors(self) -> list[str]:
+        return [m for s in self.subjects for m in s.errors]
+
+    @property
+    def warns(self) -> list[str]:
+        return [m for s in self.subjects for m in s.warns]
+
+    @property
+    def status(self) -> str:
+        return status_of(self.errors, self.warns)
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "OK"
+
+
+def check_pair(
+    sc_path: Path,
+    st_path: Path,
+    on_subject: "Callable[[SubjectFindings], None] | None" = None,
+) -> PairFindings:
+    """Run every check on one sc/st pair and return the findings; prints nothing.
+
+    The programmatic entry point behind ``aim validate --scdata/--stdata`` - the
+    GUI calls this so its sidebar check and the CLI apply the very same checks.
+    ``on_subject`` is called as each subject finishes, so a caller can report the
+    scRNA verdict while the (possibly large) ST file is still being read.
+    """
+    sc_path, st_path = Path(sc_path), Path(st_path)
+    subjects: list[SubjectFindings] = []
+
+    def _add(key: str, title: str, errors: list[str], warns: list[str]) -> None:
+        subject = SubjectFindings(key, title, errors, warns)
+        subjects.append(subject)
+        if on_subject is not None:
+            on_subject(subject)
+
     sc_errs, sc_warns, adata_sc = validate_sc(sc_path)
-    report.add(f"sc:{sc_path.stem}", f"sc {sc_path.stem}", sc_errs, sc_warns)
+    _add(f"sc:{sc_path.stem}", f"sc {sc_path.stem}", sc_errs, sc_warns)
     st_errs, st_warns, adata_st = validate_st(st_path)
-    report.add(f"st:{st_path.stem}", f"st {st_path.stem}", st_errs, st_warns)
+    _add(f"st:{st_path.stem}", f"st {st_path.stem}", st_errs, st_warns)
 
     if adata_sc is None or adata_st is None:
         missing = "scRNA" if adata_sc is None else "ST"
-        report.add(
-            "pair",
-            "pair",
-            [f"pair: {missing} dataset could not be loaded - see errors above"],
-            [],
-        )
+        pair_errs = [f"pair: {missing} dataset could not be loaded - see above"]
+        pair_warns: list[str] = []
     else:
-        errs, warns = validate_pair(adata_sc, adata_st)
-        report.add("pair", "pair", errs, warns)
+        pair_errs, pair_warns = validate_pair(adata_sc, adata_st)
+    _add("pair", "pair", pair_errs, pair_warns)
 
+    return PairFindings(subjects)
+
+
+def validate_single_pair(sc_path: Path, st_path: Path) -> int:
+    """Validate one sc/st pair given as two explicit ``.h5ad`` paths."""
+    sc_path, st_path = Path(sc_path), Path(st_path)
+
+    print(f"=== {sc_path.stem} x {st_path.stem} ===")
+    report = _Report()
+    check_pair(
+        sc_path,
+        st_path,
+        on_subject=lambda s: report.add(s.key, s.title, s.errors, s.warns),
+    )
     return report.finish()
 
 
